@@ -7,7 +7,8 @@ Last updated: 2026-07-15
 
 This document is the canonical relational model for the production MVP. It
 defines ownership, names, relationships, indexes, foreign keys, and database
-constraints. No migrations currently exist; the tables below are planned.
+constraints. Account/session migrations and the organization foundation exist;
+the remaining tables below are planned in the execution order documented here.
 
 Behavioral interpretation is defined in
 [Authorization Model](authorization_model.md) and
@@ -137,51 +138,80 @@ the state transition requires a CSRF-protected `PATCH`.
 
 ### 5.3 `Organization` / `organizations`
 
-- `name`: non-blank text.
+- `public_id`: UUID with a PostgreSQL `gen_random_uuid()` default for external
+  references, not null.
+- `name`: trimmed, non-blank text, at most 100 characters.
 - `slug`: lowercase ASCII slug, immutable in the MVP.
+- `status`: `active` or `suspended`, not null, default `active`.
 
 Constraints and indexes:
 
+- unique index on `public_id`;
 - unique index on `slug`;
-- slug check such as `^[a-z0-9]+(?:-[a-z0-9]+)*$` with a bounded length;
-- name length and non-blank checks.
+- slug check `^[a-z0-9]+(?:-[a-z0-9]+)*$` with length from 1 through 63;
+- name trimmed/non-blank/maximum-length check;
+- check that `status` is in the allowlist and an index on `status`.
+
+An active organization may establish ordinary tenant context once path bootstrap
+is enabled. A suspended organization authorizes no tenant access. Suspending an
+organization and organization archive/hard deletion remain separate lifecycle
+operations; neither is exposed by the initial tenant-foundation change.
 
 There is no `owner_id` column. Ownership has one source:
 `organization_memberships.role = 'owner'`.
+
+For verified and authenticated onboarding, `Organizations::Create` inserts the
+active organization and first active owner membership in one database
+transaction after locking and validating the authoritative user row. It assigns
+`Current.organization` and `Current.organization_membership` only after the
+outermost database transaction commits.
+Registration and email verification do not invoke this command automatically.
 
 ### 5.4 `OrganizationMembership` / `organization_memberships`
 
 - `organization_id`: not-null foreign key to `organizations`.
 - `user_id`: not-null foreign key to `users`.
 - `role`: `owner`, `admin`, `billing`, or `member`.
-- `status`: `active` or `inactive`.
-- `activated_at`, `deactivated_at`: lifecycle timestamps.
+- `status`: `active` or `suspended`, not null, default `active`.
+- `joined_at`: not-null timestamp recording the first successful join.
 
 Constraints and indexes:
 
 - unique `(organization_id, user_id)`;
 - check allowed `role` and `status`;
-- check active/inactive timestamp consistency;
 - unique supporting tuples `(id, organization_id)` and
   `(id, user_id, organization_id)` for composite child/locator foreign keys;
 - indexes on `user_id` and `(organization_id, status, role)`.
+- a deferred PostgreSQL constraint trigger locks the organization root at commit
+  and rejects organization creation, membership deletion, demotion, suspension,
+  or reassignment when the committed state would contain no active owner.
 
-Memberships are deactivated rather than deleted so actor history and billing
-attempt relationships remain stable. Deactivation atomically removes the global
-access locator and destroys that membership's product memberships (whose role
-joins cascade); reactivation never resurrects product assignments. A locked
-service transition prevents demoting/deactivating the final **eligible** owner,
-defined as an active owner membership whose user is not disabled. Disabling a
-user locks affected organizations in stable ID order and is rejected if that
-user is the final eligible owner of any organization. Multiple eligible owners
-are valid. The global disable service enumerates only the
-user's access-locator candidates, then sets `Current.organization` and reloads
-membership/owner state through each root; it never queries memberships globally.
+The deferred trigger permits `Organizations::Create` to insert the organization
+before its first owner inside one transaction while still enforcing the
+cross-row invariant at commit. The primary database uses `db/structure.sql` so
+fresh schema loads preserve the function and triggers.
+
+`Organizations::Memberships::Remove` soft-suspends a membership rather than
+deleting it, so actor history and billing-attempt relationships remain stable.
+Once product assignments and the global access locator exist, suspension also
+removes them atomically; reactivation never resurrects product assignments and
+does not change `joined_at`. `Organizations::Memberships::ChangeRole` and
+`Organizations::Memberships::Remove` resolve the target through
+`Current.organization.organization_memberships`, lock the organization, and
+prevent demoting or suspending the final **active** owner. Multiple active owners
+are valid. A separate access-eligible owner is an active owner membership whose
+user is not disabled. The global account-disable guard is added with the
+locator/path bootstrap follow-up: it enumerates only access-locator candidates,
+establishes each `Current.organization`, and locks roots in stable ID order before
+allowing a disable transition that would leave no access-eligible owner.
 
 ### 5.5 `OrganizationAccessLocator` / `organization_access_locators`
 
 A global, non-authoritative discovery index for authenticated organization
-switching and path bootstrap.
+switching and path bootstrap. This table is intentionally introduced in the
+path-bootstrap follow-up, not the initial organization-foundation change. That
+follow-up backfills all existing active memberships and completes successfully
+before any ordinary tenant path is enabled.
 
 - `organization_membership_id`, `user_id`, `organization_id`: not null.
 
@@ -194,7 +224,7 @@ Constraints and indexes:
 - indexes supporting `user_id` plus organization slug lookup.
 
 The locator exists only for an active membership and is created/deleted in the
-same locked transaction as membership activation/deactivation. Account disable
+same locked transaction as membership activation/suspension. Account disable
 leaves this non-authoritative discovery row in place so a cross-organization
 ownership check and any future controlled recovery can find the same roots;
 disabled-user authentication and the tenant membership reload still deny. It is
@@ -671,6 +701,8 @@ project the provider resource.
 
 An append-only, tenant-owned security/business audit record for the sensitive
 transitions listed in [Authorization Model](authorization_model.md#10-audit-requirements).
+It is introduced by the audit/membership-administration follow-up rather than the
+initial organization-foundation change; no retroactive events are fabricated.
 
 - `organization_id`: not-null foreign key, delete restricted.
 - `actor_user_id`: nullable user foreign key, delete restricted; null represents
@@ -711,7 +743,7 @@ unlimited.
 | --- | --- |
 | User | Disable; hard deletion requires a separate privacy workflow |
 | Organization | Retain; organization archive and hard deletion are outside the MVP |
-| Membership | Deactivate; audited service deletes product memberships/role joins and the global access locator atomically |
+| Membership | Soft-suspend; service deletes product memberships/role joins and the global access locator atomically once those records exist |
 | Invitation | Revoke/expire; retain minimal audit metadata for a bounded period |
 | Product/feature/role/permission | Retire; restrict deletion when referenced |
 | Published plan/entitlements | Immutable; restrict deletion |
@@ -722,7 +754,7 @@ cascades are limited to:
 
 - sessions when a separately approved user hard-deletion workflow deletes a
   user;
-- `product_membership_roles` when the audited deactivation/assignment service
+- `product_membership_roles` when the audited suspension/assignment service
   deletes a product membership.
 
 PostgreSQL cascades cannot be conditional on parent lifecycle. Draft-plan
@@ -734,7 +766,7 @@ published/retired or referenced parent cannot silently cascade.
 Published catalog/plan data, organizations, memberships, invitations, audit
 events, billing attempts/subscriptions/locators/webhook events, and provider
 history are delete-restricted or explicitly retained. Application lifecycle/
-deactivation services perform allowed child transitions before changing the
+suspension services perform allowed child transitions before changing the
 parent state; there is no broad organization cascade.
 
 ## 12. Migration rules
@@ -767,8 +799,9 @@ columns as non-null from the start.
 - One checkout attempt cannot activate two subscriptions, and an organization
   cannot have two current subscriptions or concurrent pending checkouts.
 - Published plan data cannot be modified through application write paths.
-- Concurrent membership/user-disable mutations cannot remove the last eligible
-  (active and enabled) owner.
-- Deactivate/reactivate never restores prior product assignments.
+- Sequential, concurrent, and direct database membership transitions cannot
+  remove the last active owner; the account-disable follow-up separately
+  prevents disabling the last access-eligible owner across organizations.
+- Suspend/reactivate never restores prior product assignments.
 - Global access/provider locators can select only a candidate tenant; stale or
   mismatched locators fail the tenant reload and authorize nothing.

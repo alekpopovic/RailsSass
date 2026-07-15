@@ -1,0 +1,46 @@
+class Organizations::Create
+  def initialize(user:, name:, slug:)
+    @user = user
+    @name = name
+    @slug = slug
+  end
+
+  def call
+    authorize_identity!
+
+    organization = Organization.new(name: @name, slug: @slug)
+    membership = nil
+
+    Organization.transaction do
+      user = User.lock.find_by(id: @user.id)
+      authorize_user!(user)
+      organization.save!
+      membership = organization.organization_memberships.create!(
+        user: user,
+        role: :owner,
+        status: :active,
+        joined_at: Time.current
+      )
+    end
+
+    ActiveRecord.after_all_transactions_commit do
+      Current.organization = organization
+      Current.organization_membership = membership
+    end
+
+    organization
+  end
+
+  private
+    def authorize_identity!
+      authorized = @user&.persisted? && Current.user&.id == @user.id
+
+      raise Pundit::NotAuthorizedError, "verified authentication is required" unless authorized
+    end
+
+    def authorize_user!(user)
+      authorized = user&.authentication_allowed?
+
+      raise Pundit::NotAuthorizedError, "verified authentication is required" unless authorized
+    end
+end

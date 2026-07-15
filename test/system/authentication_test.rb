@@ -57,9 +57,18 @@ class AuthenticationTest < ApplicationSystemTestCase
     fill_in "Password", with: REGISTRATION_PASSWORD
     click_button "Sign in"
 
+    assert_current_path new_organization_path
+    fill_in "Name", with: "System Organization"
+    fill_in "Slug", with: "system-organization"
+    click_button "Create organization"
+
     assert_current_path root_path
+    assert_text "Your organization has been created."
     assert_text user.name
     assert_equal 1, user.sessions.reload.count
+    membership = Organization.find_by!(slug: "system-organization").organization_memberships.sole
+    assert_equal user, membership.user
+    assert_predicate membership, :owner?
 
     click_button "Sign out"
 

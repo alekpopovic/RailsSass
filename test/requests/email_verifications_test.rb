@@ -83,6 +83,31 @@ class EmailVerificationsTest < ActionDispatch::IntegrationTest
     assert_nil user.reload.email_verified_at
   end
 
+  test "successful verification preserves onboarding through failed and successful login" do
+    user = create_user
+    token = user.email_verification_token
+
+    assert_no_difference [ -> { Organization.count }, -> { OrganizationMembership.count } ] do
+      patch email_verification_path, params: { token: token }
+    end
+
+    assert_redirected_to new_session_path
+    assert_no_difference [ -> { Organization.count }, -> { OrganizationMembership.count } ] do
+      post session_path, params: {
+        email_address: user.email_address,
+        password: "incorrect password"
+      }
+    end
+    assert_redirected_to new_session_path
+
+    post session_path, params: {
+      email_address: user.email_address,
+      password: PASSWORD
+    }
+
+    assert_redirected_to new_organization_path
+  end
+
   private
     def create_user
       User.create!(

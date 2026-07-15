@@ -4,9 +4,11 @@ This repository is the executable foundation for a modular-monolith SaaS built
 with Rails 8.1, PostgreSQL, Hotwire, Tailwind CSS, Pundit, Solid Queue, Propshaft,
 Faraday, and Minitest.
 
-The current slice contains global email/password authentication but intentionally
-has no organization, tenant-owned domain models, or live Lemon Squeezy integration.
-Registration never creates an organization. The target behavior and delivery sequence are in
+The current slice contains global email/password authentication and the initial
+organization/onboarding foundation, but intentionally has no tenant path
+bootstrap, product-access domain, or live Lemon Squeezy integration. Registration
+never creates an organization; verified users explicitly complete onboarding.
+The target behavior and delivery sequence are in
 [`docs/`](docs/), beginning with the
 [product requirements](docs/product_requirements.md),
 [architecture](docs/architecture.md), and
@@ -15,7 +17,8 @@ Registration never creates an organization. The target behavior and delivery seq
 ## Prerequisites
 
 - Docker with Docker Compose v2 for the default development PostgreSQL
-- For host Rails: Ruby 4.0.5, Bundler 4.0.14, and Google Chrome or Chromium
+- For host Rails: Ruby 4.0.5, Bundler 4.0.14, PostgreSQL 17 client tools
+  (`pg_dump`), and Google Chrome or Chromium
 
 The application uses gem-provided Importmap and Tailwind binaries, so Node.js is
 not required for this foundation. See the complete host and container workflows
@@ -130,7 +133,8 @@ workers; the safe default is one worker until CI database isolation is proven.
 
 - `app/` — Rails controllers, views, policies, jobs, and future namespaced modules
 - `config/` — Rails, PostgreSQL, Solid Queue, assets, and deployment configuration
-- `db/` — primary schema plus Rails-managed Solid Cache/Queue/Cable schemas
+- `db/` — primary PostgreSQL `structure.sql` plus Rails-managed Solid
+  Cache/Queue/Cable schemas
 - `test/` — request, policy, configuration, architecture, and system Minitests
 - `docs/` — requirements, architecture, security, billing, ADRs, and execution plan
 - `public/` — static health-independent error pages and public assets

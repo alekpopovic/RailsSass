@@ -53,7 +53,12 @@ module Authentication
     def store_authentication_location
       return unless request.get? || request.head?
 
-      session[:return_to_after_authenticating] = request.fullpath if safe_internal_path(request.fullpath)
+      store_authentication_destination(request.fullpath)
+    end
+
+    def store_authentication_destination(destination)
+      safe_destination = safe_internal_path(destination)
+      session[:return_to_after_authenticating] = safe_destination if safe_destination
     end
 
     def after_authentication_path

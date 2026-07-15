@@ -53,7 +53,8 @@ For a tenant request:
 2. Normalize `params[:organization_slug]`.
 3. Resolve a candidate organization through the authenticated
    user's global `OrganizationAccessLocator` and the normalized slug.
-4. Set `Current.organization` to that candidate.
+4. Continue only if the candidate organization is active, then set
+   `Current.organization` to it.
 5. Reload the authoritative active membership through
    `Current.organization.organization_memberships` for `Current.user`, then set
    `Current.organization_membership`.
@@ -98,15 +99,26 @@ role matrix is:
 
 Additional rules:
 
+- A suspended organization authorizes no tenant access.
 - An admin cannot alter an owner or billing membership.
-- Membership or account-disable actions cannot leave zero eligible owners
-  (active owner membership plus enabled user).
+- Membership role/status actions cannot leave zero active owner memberships.
+- Account disablement cannot leave zero access-eligible owners (an active owner
+  membership plus an enabled user).
 - A user cannot accept an invitation for a different normalized email.
-- An inactive membership authorizes nothing.
+- A suspended membership authorizes nothing.
 - A disabled user authorizes nothing even if membership rows remain active.
-- Membership deactivation atomically removes its access locator and product
+- Membership suspension atomically removes its access locator and product
   memberships/roles; later reactivation requires explicit product reassignment.
 - Product usage for every role proceeds through the product gate below.
+
+The Tenancy module exposes the commands as `Organizations::Create`,
+`Organizations::Memberships::ChangeRole`, and
+`Organizations::Memberships::Remove`. `Remove` is a soft transition to
+`suspended`, never row deletion. Both membership commands require
+`Current.organization`, reload their target through its membership association,
+authorize the actor according to the matrix above, and lock the organization in
+the same transaction as the transition. Billing and member actors therefore
+cannot manage memberships through a direct service call.
 
 ## 5. Product authorization decision
 
@@ -133,14 +145,15 @@ applicable step succeeds:
 
 ```text
 1. authenticated, enabled Current.user
-2. active Current.organization_membership for Current.organization
-3. current local Billing::Subscription is synchronized and access-granting now
-4. subscription's exact Plan has PlanProductEntitlement for the product
-5. when feature is required:
+2. active Current.organization
+3. active Current.organization_membership for Current.organization
+4. current local Billing::Subscription is synchronized and access-granting now
+5. subscription's exact Plan has PlanProductEntitlement for the product
+6. when feature is required:
    a. PlanFeatureEntitlement exists for that product feature
    b. boolean value is true, or numeric limit is present
-6. ProductMembership exists for current organization membership and product
-7. union of assigned ProductRoles includes the required ProductPermission
+7. ProductMembership exists for current organization membership and product
+8. union of assigned ProductRoles includes the required ProductPermission
 ```
 
 Any false, null, unknown, malformed, or exceptional result denies. The decision
@@ -150,7 +163,7 @@ measure usage, or mutate product data.
 
 Final server authorization composes three owned layers:
 
-1. `Access::Decision` performs steps 1-7.
+1. `Access::Decision` performs steps 1-8.
 2. The product Pundit policy loads the record through `Current.organization`,
    requires the common grant, and applies product-owned record rules.
 3. For a consuming action, the product command repeats/revalidates the common
@@ -163,7 +176,7 @@ without a module dependency cycle.
 
 ### 5.3 Base product actions
 
-An action that is not feature-specific still requires common steps 1-4 and 6-7,
+An action that is not feature-specific still requires common steps 1-5 and 7-8,
 then its product policy. A plan product row does not imply every feature, and a
 feature row is not required for the base product shell.
 
@@ -217,11 +230,19 @@ non-authoritative locator tables defined in the data model.
 
 ### 7.1 New organization creation
 
-Authenticated `POST /organizations` is global because the tenant does not exist
-yet. One transaction inserts the organization, first eligible owner membership,
-and global access locator. It does not query an existing tenant child outside
-`Current.organization`; the response redirects to the new tenant path, whose
-next request uses ordinary bootstrap.
+Verified and authenticated `POST /organizations` is global because the tenant
+does not exist yet. `Organizations::Create` uses one database transaction to
+insert an active organization and its first active owner membership. After a
+successful commit, and never before, it sets `Current.organization` and
+`Current.organization_membership`. Registration and email verification do not
+implicitly invoke the command.
+
+The initial foundation does not create an `OrganizationAccessLocator` or expose
+the new tenant path. The path-bootstrap follow-up backfills locators for existing
+active memberships, begins creating/removing them in the same transaction as
+membership activation/suspension, and only then enables redirects and ordinary
+tenant routes. Until that rollout completes, request-local `Current` after
+onboarding is not a persistent authorization mechanism.
 
 ### 7.2 Authenticated tenant path and switcher
 
@@ -270,12 +291,14 @@ controllers and product services.
 
 ### 7.6 Global account disablement
 
-Account disablement may affect several tenants. It enumerates candidate
-organization roots only through the user's global access locators, locks those
-roots in stable ID order, and for each root sets `Current.organization` before
-reloading memberships/eligible-owner state through that organization. The
-service aborts the entire transaction if any tenant would lose its last eligible
-owner, then clears context. It never queries memberships globally.
+Account disablement remains unavailable in the initial organization-foundation
+change. The locator/path-bootstrap follow-up adds its cross-organization guard:
+it enumerates candidate organization roots only through the user's global access
+locators, locks those roots in stable ID order, and for each root sets
+`Current.organization` before reloading memberships/access-eligible-owner state
+through that organization. The service aborts the entire transaction if any
+tenant would lose its last access-eligible owner, then clears context. It never
+queries memberships globally.
 
 ## 8. Background jobs
 
@@ -301,12 +324,12 @@ product, action, feature, and the relevant records' versions/timestamps.
 
 Product membership rows may survive loss of entitlement. They become effective
 again only when a later verified webhook restores an access-granting local plan.
-They do **not** survive organization-membership deactivation; that service
+They do **not** survive organization-membership suspension; that service
 removes them, so reactivation requires explicit reassignment.
 
 ## 10. Audit requirements
 
-At minimum, structured audit events are emitted for:
+Once the audit-ledger follow-up lands, structured audit events are emitted for:
 
 - organization creation;
 - invitation creation/revocation/acceptance;
@@ -331,9 +354,11 @@ provider-locator resolution and tenant reload.
 
 ### 11.1 Organization role table
 
-Table-driven policy tests cover every action/role cell, inactive membership,
-disabled user, admin attempts against owner/billing members, and concurrent
-last-eligible-owner/user-disable changes.
+Table-driven policy tests cover every action/role cell, suspended organization
+and membership, disabled user, admin attempts against owner/billing members, and
+concurrent last-active-owner membership changes. Account-disable concurrency
+cases for the last access-eligible owner land with the locator/path-bootstrap
+guard.
 
 ### 11.2 Product gate truth table
 
@@ -341,15 +366,16 @@ Start from one allowed composed request/command, then independently remove or
 invalidate:
 
 1. authentication;
-2. organization membership or active status;
-3. synchronized/access-granting subscription;
-4. plan-product entitlement;
-5. feature entitlement/value;
-6. product membership;
-7. product role;
-8. required permission;
-9. product-policy tenant record ownership;
-10. product-command numeric capacity.
+2. organization active status;
+3. organization membership or active status;
+4. synchronized/access-granting subscription;
+5. plan-product entitlement;
+6. feature entitlement/value;
+7. product membership;
+8. product role;
+9. required permission;
+10. product-policy tenant record ownership;
+11. product-command numeric capacity.
 
 Every variation must deny. Additional positive/negative cases cover multiple
 role permission union, identical keys in another product, owner/admin no-bypass,

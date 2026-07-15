@@ -9,6 +9,8 @@ class User < ApplicationRecord
   has_secure_password reset_token: { expires_in: 15.minutes }
 
   has_many :sessions, dependent: :destroy
+  has_many :organization_memberships, dependent: :restrict_with_exception, inverse_of: :user
+  has_many :organizations, through: :organization_memberships
 
   enum :system_role, { user: "user", platform_admin: "platform_admin" },
     default: :user,

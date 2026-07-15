@@ -8,7 +8,8 @@ synthetic and development-only; captured email never leaves the workstation.
 ## Prerequisites
 
 - Docker with Docker Compose v2
-- Ruby 4.0.5 and Bundler 4.0.14 for the host-Rails workflow
+- Ruby 4.0.5, Bundler 4.0.14, and PostgreSQL 17 client tools (`pg_dump`) for the
+  host-Rails workflow
 - Chrome or Chromium for host system tests
 
 Node.js is not required. Importmap and Tailwind are provided by gems.
@@ -104,7 +105,9 @@ clear diagnostics.
 
 The CI workflow runs `bin/ci` against a disposable PostgreSQL service with
 synthetic credentials. `ruby/setup-ruby` caches only the lockfile-resolved gem
-bundle; database state and environment files are never cached. On failure, the
+bundle. It installs the PostgreSQL 17 client from the official PostgreSQL Apt
+repository so `psql`/`pg_dump` match the service major version; database state
+and environment files are never cached. On failure, the
 workflow retains `log/test.log` and any Capybara/system-test screenshots when
 they exist.
 
@@ -115,6 +118,11 @@ starts it with a dummy secret-key base and no deployment credentials, and checks
 Dependabot checks Bundler, GitHub Actions, and Docker dependencies weekly.
 
 ## Database lifecycle and troubleshooting
+
+The primary PostgreSQL database uses `db/structure.sql` so a clean schema load
+preserves database functions and deferred constraint triggers. Generate it only
+through Rails migration/schema tasks; do not edit it by hand. Solid
+Cache/Queue/Cable continue to use their Rails-managed Ruby schema files.
 
 Inspect service health and logs with:
 

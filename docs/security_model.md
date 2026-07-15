@@ -66,7 +66,7 @@ are never stored.
 | --- | --- | --- | --- |
 | Tenant IDOR | Member of A guesses B's slug or record ID | Account locator selects candidate only; authoritative membership and records reload through `Current.organization`; Pundit scope/policy; composite tenant FKs | Cross-tenant request/model tests for every controller family |
 | Stale tenant context | Reused thread/job retains prior organization | Establish context explicitly; reset in `ensure`; fail closed without context | Sequential request/job tests including exceptions |
-| Organization privilege escalation | Admin grants owner/billing, user disable or reactivation orphans/resurrects access, or UI-hidden POST succeeds | Exact role matrix; eligible-owner locks across membership/user disable; deactivation removes locators/product assignments; server authorization | Table-driven policy, reactivation, direct request, and concurrency tests |
+| Organization privilege escalation | Admin grants owner/billing, concurrent removal leaves no owner, user disable or reactivation orphans/resurrects access, or UI-hidden POST succeeds | Exact role matrix; organization-row locking in `Organizations::Memberships::ChangeRole`/`Remove`; soft suspension removes locators/product assignments once present; server authorization; cross-organization account-disable guard added with locator/bootstrap | Table-driven service/policy, reactivation, direct request, and concurrency tests |
 | Product privilege escalation | Owner assumes implicit product access or cross-product role is attached | Entitlement AND product membership AND permission; no role bypass; composite product FKs | Central truth table and invalid database-write tests |
 | Numeric-limit race/bypass | Two concurrent creates consume the final unit, or client omits feature/delta | Server-owned action registry; product command revalidates common grant and locks/conditionally mutates usage in one transaction | Parameter-tamper plus concurrency test proving at most one commit |
 | Webhook forgery/tampering | Attacker posts active status or modifies one byte | HMAC-SHA256 exact raw body, constant-time compare, credential separation | Official-style fixture, mutation, bad/missing signature tests |
@@ -94,8 +94,9 @@ are never stored.
 Tenant isolation is layered:
 
 1. **Routing:** all ordinary tenant routes use `/o/:organization_slug/`.
-2. **Bootstrap:** a global access locator selects a candidate; the authoritative
-   active membership is reloaded through that organization.
+2. **Bootstrap:** after the locator/path rollout, a global access locator selects
+   an active candidate organization; the authoritative active membership is
+   reloaded through that organization.
 3. **Query ownership:** every tenant-owned child query begins from
    `Current.organization`.
 4. **Policy:** Pundit policy scope and record policy re-check organization and
@@ -130,8 +131,10 @@ controllers.
   browser/server session state on authentication. Revoke applicable sessions
   on logout, password reset, account disablement, and other security-sensitive
   changes.
-- Account disablement locks affected organizations and is rejected if it would
-  leave any organization without another enabled active owner.
+- Account disablement is not exposed by the initial organization-foundation
+  change. The locator/path-bootstrap follow-up locks affected organizations and
+  rejects a disable operation if it would leave any organization without another
+  enabled active owner.
 - Cookies are `HttpOnly`, `Secure` in production, and an appropriate `SameSite`
   setting. All production traffic uses HTTPS.
 - Password reset uses a purpose-scoped Rails signed token that expires after 15
@@ -163,9 +166,13 @@ The normative decision flow is in
   untrusted and re-resolve it through owned associations/catalog allowlists.
 - Do not use organization role as a product permission shortcut.
 - Do not cache authorization across requests in the MVP.
-- Put eligible-owner, role-change, product-assignment removal, and numeric
-  consumption checks in locked service/product-command transactions, not view
-  helpers or preflight requests.
+- Put active-owner role/status checks, access-eligible-owner account-disable
+  checks, product-assignment removal, and numeric consumption checks in locked
+  service/product-command transactions, not view helpers or preflight requests.
+  The Tenancy-owned commands are exposed as
+  `Organizations::Memberships::ChangeRole` and
+  `Organizations::Memberships::Remove`; `Remove` soft-suspends and never deletes
+  the membership row.
 - Resolve permission/feature/consumption behavior from a server-owned action
   registry; never accept those security semantics as optional client input.
 - Audit both successful sensitive changes and denied high-risk attempts without
@@ -334,7 +341,8 @@ Deployment requirements:
 - Organization role and product decision truth tables.
 - Direct POST/Turbo request tests proving UI absence is irrelevant.
 - Database constraint and invalid composite-association tests.
-- Last-owner and numeric-limit concurrency tests.
+- Last-owner role-change/removal and numeric-limit concurrency tests; add
+  account-disable races with the locator/bootstrap follow-up.
 - HMAC, replay, ordering, variant/environment mismatch, redirect-no-grant, and
   status matrix billing tests.
 - CSRF, open redirect, log redaction, body limit, and rate-limit tests.

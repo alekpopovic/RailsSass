@@ -23,8 +23,9 @@ Use path-based tenancy for ordinary tenant UI and application routes:
 /o/:organization_slug/...
 ```
 
-- Organization slugs are globally unique, normalized lowercase ASCII, and
-  immutable in the MVP.
+- Organizations have a database-generated unique public UUID, globally unique
+  normalized lowercase-ASCII immutable slug, and `active`/`suspended` status.
+  Suspended organizations cannot establish ordinary tenant context.
 - Authenticate first, then use the current user's global, non-authoritative
   `OrganizationAccessLocator` to select a candidate organization
   for the slug.
@@ -42,19 +43,27 @@ Use path-based tenancy for ordinary tenant UI and application routes:
 
 Context establishment is explicit:
 
-1. organization creation inserts a new root, first owner membership, and locator
-   in one transaction, then redirects to the ordinary path;
-2. ordinary tenant entry/switching uses the account locator only to select a
+1. verified-and-authenticated onboarding explicitly invokes
+   `Organizations::Create`; registration and email verification never invoke it
+   automatically. The initial foundation transaction inserts the active root and
+   first active owner membership, then sets request-local `Current` only after
+   commit;
+2. before any ordinary tenant path is enabled, the path-bootstrap migration adds
+   and backfills locators for all active memberships. It then extends new
+   organization creation to insert the locator atomically and may redirect to the
+   ordinary path;
+3. ordinary tenant entry/switching uses the account locator only to select a
    candidate, then reloads membership through `Current.organization`;
-3. invitation acceptance sets a tentative organization root from the public
+4. invitation acceptance sets a tentative organization root from the public
    slug and may query only that organization's invitation until digest/email
    validation creates the membership/locator;
-4. a tenant job loads the root by its trusted argument, sets `Current`, then
+5. a tenant job loads the root by its trusted argument, sets `Current`, then
    queries tenant children;
-5. verified webhook processing may query only the global
+6. verified webhook processing may query only the global
    `Billing::ProviderLocator` by provider subscription ID or checkout-token
    digest, then reload all tenant state through `Current.organization`;
-6. global account disablement enumerates only account locators, locks candidate
+7. global account disablement is enabled with the locator/path-bootstrap
+   follow-up; it enumerates only account locators, locks candidate
    roots in stable order, and reloads each tenant's ownership state through
    `Current.organization` before committing.
 
@@ -65,7 +74,7 @@ queried globally.
 Ordinary tenant jobs carry `organization_id`, establish tenant context
 explicitly, and never assume request-local `Current` survives enqueueing. A
 pre-tenant webhook job carries only its verified event ID and uses the locator
-boundary in item 5.
+boundary in item 6.
 
 ## Consequences
 
@@ -93,8 +102,10 @@ boundary in item 5.
 ## Required implementation guardrails
 
 - Tenant loader runs before tenant record loaders.
-- Global locator creation/removal occurs atomically with the authoritative
-  membership/provider transition and is always revalidated tenant-side.
+- No tenant path is enabled until the initial active-membership locator backfill
+  is complete. Thereafter global locator creation/removal occurs atomically with
+  the authoritative membership activation/soft-suspension or provider transition
+  and is always revalidated tenant-side.
 - `verify_authorized` and `verify_policy_scoped` cover authenticated tenant
   controllers.
 - Shared query/service APIs require or read explicit current organization and

@@ -1,0 +1,34 @@
+<% content_for :title, "Create organization" %>
+
+<section class="mx-auto max-w-lg py-12 sm:py-16" aria-labelledby="organization-title">
+  <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+    <h1 id="organization-title" class="text-2xl font-bold tracking-tight text-slate-950">Create your organization</h1>
+    <p class="mt-2 text-sm text-slate-600">You will become the first owner. The URL slug cannot be changed later.</p>
+
+    <% if @organization.errors.any? %>
+      <div class="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
+        <p class="font-semibold">Please correct the following:</p>
+        <ul class="mt-2 list-disc space-y-1 pl-5">
+          <% @organization.errors.full_messages.each do |message| %>
+            <li><%= message %></li>
+          <% end %>
+        </ul>
+      </div>
+    <% end %>
+
+    <%= form_with model: @organization, class: "mt-6 space-y-5" do |form| %>
+      <div>
+        <%= form.label :name, class: "block text-sm font-medium text-slate-700" %>
+        <%= form.text_field :name, required: true, autofocus: true, maxlength: Organization::NAME_MAX_LENGTH, autocomplete: "organization", class: "mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+      </div>
+
+      <div>
+        <%= form.label :slug, class: "block text-sm font-medium text-slate-700" %>
+        <p class="mt-1 text-xs text-slate-500">Lowercase letters, numbers, and hyphens. This becomes part of the organization URL.</p>
+        <%= form.text_field :slug, required: true, maxlength: Organization::SLUG_MAX_LENGTH, pattern: "[a-z0-9]+(?:-[a-z0-9]+)*", autocomplete: "off", class: "mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+      </div>
+
+      <%= form.submit "Create organization", class: "w-full cursor-pointer rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+    <% end %>
+  </div>
+</section>

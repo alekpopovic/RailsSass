@@ -17,19 +17,15 @@ product-domain workflows are deliberately separate from the platform contract.
 
 ## 2. Repository baseline
 
-The repository is currently a greenfield Rails 8.1.3 skeleton:
+The repository is a Rails 8.1.3 application with PostgreSQL, Hotwire, Tailwind,
+Pundit, Solid Queue/Cache/Cable, Docker/Kamal scaffolding, Minitest, and a
+PostgreSQL-backed CI quality gate. Email/password authentication and the initial
+organization/onboarding foundation exist. Tenant path bootstrap, catalog,
+product access, Lemon Squeezy billing, audit, and deployment hardening remain
+separate execution-plan milestones.
 
-- PostgreSQL, Hotwire, Tailwind, Solid Queue, Solid Cache, Solid Cable, Docker,
-  and Kamal scaffolding exist.
-- No domain models, primary migrations, tenant routes, authentication,
-  authorization, billing integration, or tests exist.
-- Pundit is not installed and `rails/test_unit/railtie` is disabled.
-- CI runs lint and security scans but does not run a PostgreSQL-backed test
-  suite.
-- Deployment configuration still contains generator placeholders.
-
-The execution plan must not treat any requested domain behavior as already
-implemented.
+Each milestone must inspect and test existing behavior rather than assume an
+earlier prompt was implemented perfectly.
 
 ## 3. Product statement
 
@@ -70,9 +66,16 @@ An `OrganizationMembership` has exactly one organization role:
 | Use an entitled product | Product gate | Product gate | Product gate | Product gate |
 
 Multiple owners are allowed, but every organization must retain at least one
-eligible owner: an active owner membership whose user is enabled. No
-organization role bypasses product membership, product permission, or plan
-entitlement.
+active owner membership. Runtime tenant access additionally requires that the
+owner's global user account is enabled; the account-disable command must not
+leave an organization without such an access-eligible owner. No organization
+role bypasses product membership, product permission, or plan entitlement.
+
+Organization membership administration is performed by the Tenancy-owned
+`Organizations::Memberships::ChangeRole` and
+`Organizations::Memberships::Remove` commands. `Remove` soft-suspends the
+membership and does not delete its history. Billing and member roles cannot use
+either command successfully; admins remain limited to member/admin memberships.
 
 ### 4.3 Product roles
 
@@ -85,8 +88,8 @@ has no explicit deny permission and no tenant-defined custom roles.
 1. Every ordinary tenant URL is under `/o/:organization_slug/`, except global
    account/organization creation, health, authentication, and provider webhook
    routes.
-2. Ordinary tenant context selects a candidate through a non-authoritative
-   account locator, then verifies the active membership through
+2. Ordinary tenant context selects an active candidate organization through a
+   non-authoritative account locator, then verifies the active membership through
    `Current.organization`; a slug/locator alone never authorizes.
 3. After a candidate root is set, every tenant-owned child query is rooted at
    `Current.organization`.
@@ -121,15 +124,19 @@ has no explicit deny permission and no tenant-defined custom roles.
 - Sessions are server-side, rotate on authentication, expire after 30 days,
   and store only a SHA-256 digest of the opaque cookie token. Redirects after
   authentication accept only validated internal application locations.
-- Organization creation with a globally unique, normalized, immutable slug.
+- Explicit onboarding for a verified and authenticated user; registration and
+  email verification never create an organization automatically.
+- Organization creation with a database-generated unique public UUID for
+  external references, a globally unique normalized immutable slug, and an
+  `active`/`suspended` status that defaults to `active`.
 - Organization switcher for users with multiple active memberships.
 - Email invitation flow with an expiring, single-use token. An invitation does
   not authorize access before acceptance.
 - Organization membership management according to the role matrix.
 - Safe owner transfer/demotion/removal that cannot leave an organization
-  without an eligible owner, including concurrent membership/account-disable
-  requests.
-- Membership deactivation revokes its product assignments; later reactivation
+  without an active owner, including concurrent membership requests; account
+  disablement separately cannot remove the last access-eligible owner.
+- Membership soft suspension revokes its product assignments; later reactivation
   requires explicit product reassignment.
 
 ### 6.2 Catalog and plans
@@ -155,7 +162,7 @@ has no explicit deny permission and no tenant-defined custom roles.
   non-entitled product and assign one or more system product roles.
 - Assignments may remain dormant after a downgrade or subscription loss; they
   do not grant access until the entitlement gate is true again.
-- Dormancy does not apply to membership removal: deactivation destroys the
+- Dormancy does not apply to membership removal: soft suspension destroys the
   member's product assignments.
 - Product policies use one central decision service for the shared
   entitlement-and-permission gate, then apply record-specific rules.
@@ -208,11 +215,18 @@ has no explicit deny permission and no tenant-defined custom roles.
 
 ### 7.1 Create and enter an organization
 
-1. An authenticated user creates an organization and becomes its first owner.
-2. The application normalizes and reserves its immutable slug.
-3. The user enters `/o/:organization_slug/`; tenant context is established
-   through the new active membership.
-4. Without an access-granting subscription, organization administration and
+1. After email verification and authentication, a user explicitly completes
+   onboarding; registration itself still creates only the global account.
+2. `Organizations::Create` atomically creates an active organization and its
+   first active owner membership, then sets the request-local current
+   organization and membership only after the outermost transaction commits.
+3. The application generates its public UUID and normalizes and reserves its
+   immutable slug.
+4. After the locator/path-bootstrap milestone has backfilled the new active
+   membership, the user enters `/o/:organization_slug/`; tenant context is
+   established through that membership. No tenant path is enabled before that
+   backfill is complete.
+5. Without an access-granting subscription, organization administration and
    billing remain available, but product actions deny.
 
 ### 7.2 Invite and assign a member
@@ -291,11 +305,12 @@ has no explicit deny permission and no tenant-defined custom roles.
 The MVP is acceptable when all of the following are demonstrated:
 
 1. A user can register without implicitly creating an organization, verify the
-   email, authenticate, join multiple organizations, and switch tenants.
+   email, authenticate, explicitly create an organization through onboarding,
+   join multiple organizations, and switch tenants.
 2. A guessed organization slug or tenant record ID cannot cross tenant
    boundaries.
-3. The organization role matrix is server-enforced, including the last-owner
-   invariant.
+3. Active/suspended organization and membership state plus the organization role
+   matrix are server-enforced, including the last-owner invariant.
 4. A user with an organization role but no product membership/permission is
    denied product access, including owner/admin.
 5. A product member with permission but no plan entitlement is denied.

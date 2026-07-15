@@ -25,10 +25,14 @@ class CurrentTest < ActiveSupport::TestCase
 
   test "reset clears both session and delegated user" do
     Current.session = @session
+    Current.organization = Organization.new(name: "Current Organization", slug: "current-organization")
+    Current.organization_membership = OrganizationMembership.new(role: :owner, joined_at: Time.current)
 
     Current.reset
 
     assert_nil Current.session
     assert_nil Current.user
+    assert_nil Current.organization
+    assert_nil Current.organization_membership
   end
 end

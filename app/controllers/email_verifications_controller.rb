@@ -25,6 +25,7 @@ class EmailVerificationsController < ApplicationController
 
   def update
     @user.verify_email!
+    store_authentication_destination(new_organization_path)
     redirect_to new_session_path, notice: "Your email address has been verified. You can now sign in."
   end
 

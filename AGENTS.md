@@ -31,7 +31,8 @@ to discard changes that are not yours.
 - `app/jobs/` — asynchronous entrypoints that re-establish required context.
 - `app/views/` and `app/javascript/` — Hotwire/Tailwind UI and Stimulus behavior.
 - `config/` — Rails/application/infrastructure configuration.
-- `db/` — migrations, primary schema, and Solid Cache/Queue/Cable schemas.
+- `db/` — migrations, primary PostgreSQL `structure.sql`, and Solid
+  Cache/Queue/Cable schemas.
 - `test/` — Minitest suites mirroring application boundaries.
 - `docs/` — normative product, architecture, security, billing, ADR, and plan
   documents. Update them when an implementation changes a documented contract.
@@ -172,6 +173,9 @@ passing.
   uniqueness in the database.
 - Use reversible, backward-compatible expand/contract migrations. Separate
   destructive cleanup from the code release that stops using old data.
+- The primary database uses the SQL schema format because PostgreSQL functions
+  and deferred constraint triggers are part of its integrity contract. Keep
+  auxiliary Solid Cache/Queue/Cable schema formats unchanged unless required.
 - Do not edit generated schema files by hand. Run migrations and inspect schema
   changes before handoff.
 - Avoid callbacks for cross-aggregate workflow or external side effects; use an

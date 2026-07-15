@@ -4,6 +4,7 @@ Rails.application.routes.draw do
   resources :active_sessions, only: %i[ index destroy ]
   resource :password, only: %i[ new create edit update ]
   resource :email_verification, only: %i[ new create edit update ]
+  resources :organizations, only: %i[ new create ]
 
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
 

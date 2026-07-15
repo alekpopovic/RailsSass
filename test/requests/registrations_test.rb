@@ -13,7 +13,11 @@ class RegistrationsRequestTest < ActionDispatch::IntegrationTest
   end
 
   test "registration creates only an unverified user and queues verification" do
-    assert_no_difference -> { Session.count } do
+    assert_no_difference [
+      -> { Session.count },
+      -> { Organization.count },
+      -> { OrganizationMembership.count }
+    ] do
       assert_difference -> { User.count }, 1 do
         post registration_path, params: {
           user: {

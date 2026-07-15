@@ -11,4 +11,15 @@ class ApplicationConfigurationTest < ActiveSupport::TestCase
 
     assert_equal :forbidden, rescue_responses.fetch("Pundit::NotAuthorizedError")
   end
+
+  test "uses SQL schema only for the primary PostgreSQL database" do
+    schema_formats = ActiveRecord::Base.configurations
+      .configs_for(env_name: "production")
+      .to_h { |configuration| [ configuration.name, configuration.schema_format ] }
+
+    assert_equal :sql, schema_formats.fetch("primary")
+    assert_equal :ruby, schema_formats.fetch("cache")
+    assert_equal :ruby, schema_formats.fetch("queue")
+    assert_equal :ruby, schema_formats.fetch("cable")
+  end
 end

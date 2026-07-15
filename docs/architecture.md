@@ -9,8 +9,11 @@ The target system is a production SaaS platform on Rails 8.1, PostgreSQL,
 Hotwire, Tailwind, Pundit, Solid Queue, and Minitest. It is deployed as one
 codebase and one application release, with separate web and worker processes.
 
-The repository currently contains only Rails generator scaffolding. This
-document describes the target architecture, not existing behavior.
+The repository contains the Rails application foundation, PostgreSQL-backed CI,
+email/password authentication, and the initial organization foundation. This
+document describes both those established boundaries and the remaining target
+architecture; catalog, product access, billing, and deployment hardening remain
+incremental milestones.
 
 Related contracts:
 
@@ -68,7 +71,7 @@ network boundary.
 | Module | Owns | May depend on | Must not own |
 | --- | --- | --- | --- |
 | Accounts | `User`, sessions, password reset | Rails security primitives | Organizations, plans, billing |
-| Tenancy | `Organization`, memberships, invitations, global access locators, `Current`, tenant loader | Accounts | Product permission logic, provider calls |
+| Tenancy | `Organization`, memberships, `Organizations::*` commands, invitations, global access locators, `Current`, tenant loader | Accounts | Product permission logic, provider calls |
 | Catalog | Products, features, immutable plan versions and entitlements | None of the tenant modules | Organization state, usage, billing lifecycle |
 | Billing | Prices, checkout attempts, subscriptions, global provider locators, webhook ledger, Lemon adapter | Tenancy, Catalog | Product RBAC or product resource data |
 | Access Control | Product memberships, roles, permissions, Pundit base integration, central common gate | Tenancy, Catalog, Billing | Provider HTTP, product-specific record/usage mutations |
@@ -144,6 +147,10 @@ app/
     billing/webhook_event.rb
   policies/
   services/
+    organizations/
+      create.rb
+      memberships/change_role.rb
+      memberships/remove.rb
     tenancy/...
     catalog/...
     access/decision.rb
@@ -169,14 +176,25 @@ violations become recurrent.
 
 ### 6.1 Global requests
 
-Authentication, password reset, authenticated `POST /organizations`, the root
+Authentication, password reset, verified-and-authenticated onboarding at
+`POST /organizations`, the root
 landing page, `/up`, readiness, and `POST /webhooks/lemon_squeezy` are outside
 ordinary tenant routes. Global application controllers still authenticate and
-authorize where appropriate. Organization creation atomically inserts the new
-tenant, first owner membership, and access locator before redirecting to its
-path. Global account disablement enumerates only account locator candidates,
-then checks each tenant's eligible-owner state through `Current.organization`
-under stable-order locks.
+authorize where appropriate. `Organizations::Create`, which is owned by the
+Tenancy module despite its public namespace, atomically inserts the active
+organization and first active owner membership. It sets
+`Current.organization` and `Current.organization_membership` only after the
+outermost transaction commits, so rollback cannot leave request-local context
+pointing at uncommitted records. Registration and email verification never
+create an organization automatically.
+
+The initial organization foundation does not expose an ordinary tenant path.
+The path-bootstrap follow-up adds and backfills the non-authoritative access
+locator before enabling any `/o/:organization_slug/` route. From that point,
+successful onboarding can redirect to the new tenant path. The same follow-up
+adds the global account-disable ownership guard, which enumerates only locator
+candidates and checks each tenant's access-eligible-owner state through
+`Current.organization` under stable-order locks.
 
 ### 6.2 Tenant requests
 
@@ -193,7 +211,8 @@ The request lifecycle is:
 1. Authenticate the user.
 2. Normalize the slug and select a candidate organization through
    the authenticated user's global, non-authoritative access locator.
-3. Set `Current.organization`, then reload the active membership through
+3. Require an active organization, set `Current.organization`, then reload the
+   active membership through
    `Current.organization.organization_memberships` and set
    `Current.organization_membership`.
 4. Load tenant records from a `Current.organization` association and a Pundit
@@ -231,7 +250,8 @@ Pundit is the controller/policy integration layer, not the full decision model.
 A central, pure `Access::Decision` composes:
 
 ```text
-active organization membership
+active organization
+AND active organization membership
 AND locally access-granting synchronized subscription
 AND plan product entitlement
 AND optional typed feature entitlement/limit
@@ -271,6 +291,10 @@ controls but never replace request authorization.
 - Published plan versions and their entitlement graph are immutable.
 - Service objects own multi-row state transitions. Authorization-sensitive
   invariants do not depend on uncontrolled Active Record callbacks.
+- `Organizations::Memberships::ChangeRole` and
+  `Organizations::Memberships::Remove` are the Tenancy-owned, locked command
+  boundaries for role changes and soft suspension; billing and member actors
+  cannot invoke a successful membership-management transition.
 - A webhook projection, subscription update, and event completion marker commit
   atomically under row locks.
 - Numeric consuming operations lock or conditionally update authoritative usage
@@ -368,7 +392,8 @@ configuration.
 
 Minitest is enabled before domain work. Test layers are:
 
-- database/model tests for constraints, normalization, and lifecycle rules;
+- database/model tests for UUID identities, constraints, normalization, and
+  active/suspended lifecycle rules;
 - policy and service truth tables for organization roles and product access;
 - request tests for authentication, tenant routing, IDOR, CSRF, and direct POST
   authorization;

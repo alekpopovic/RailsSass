@@ -23,6 +23,7 @@ default: &default
 development:
   <<: *default
   database: rails_sass_development
+  schema_format: sql
 
   # The specified database role being used to connect to PostgreSQL.
   # To create additional roles in PostgreSQL see `$ createuser --help`.
@@ -57,6 +58,7 @@ development:
 test:
   <<: *default
   database: rails_sass_test
+  schema_format: sql
 
 # As with config/credentials.yml, you never want to store sensitive information,
 # like your database password, in your source code. If your source code is
@@ -88,17 +90,21 @@ production:
   primary: &primary_production
     <<: *default
     database: rails_sass_production
+    schema_format: sql
     username: rails_sass
     password: <%= ENV["RAILS_SASS_DATABASE_PASSWORD"] %>
   cache:
     <<: *primary_production
     database: rails_sass_production_cache
     migrations_paths: db/cache_migrate
+    schema_format: ruby
   queue:
     <<: *primary_production
     database: rails_sass_production_queue
     migrations_paths: db/queue_migrate
+    schema_format: ruby
   cable:
     <<: *primary_production
     database: rails_sass_production_cable
     migrations_paths: db/cable_migrate
+    schema_format: ruby

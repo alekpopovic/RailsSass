@@ -36,6 +36,7 @@
         <div class="flex items-center gap-3 text-sm">
           <% if authenticated? %>
             <span class="hidden text-slate-600 sm:inline"><%= Current.user.name %></span>
+            <%= link_to "Create organization", new_organization_path, class: "font-semibold text-slate-700 hover:text-slate-950" %>
             <%= link_to "Sessions", active_sessions_path, class: "font-semibold text-slate-700 hover:text-slate-950" %>
             <%= button_to "Sign out", session_path, method: :delete, class: "cursor-pointer rounded-lg border border-slate-300 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
           <% else %>

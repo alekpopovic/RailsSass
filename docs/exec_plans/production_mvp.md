@@ -34,7 +34,13 @@ Implementation PRs may not silently change these decisions:
 - All tenant-owned child queries explicitly rooted in `Current.organization`;
   global locator infrastructure selects only a candidate root and never
   authorizes.
+- Organizations have database-generated public UUIDs, immutable normalized
+  slugs, and `active`/`suspended` status; memberships use
+  `active`/`suspended` status and retain their original `joined_at`.
 - Organization roles: owner/admin/billing/member with the canonical matrix.
+- Tenancy owns `Organizations::Create` and
+  `Organizations::Memberships::{ChangeRole,Remove}`; `Remove` soft-suspends and
+  never deletes a membership row.
 - Owner/admin have no product-access bypass.
 - Product access requires local subscription eligibility AND plan entitlement
   AND product membership/permission.
@@ -251,8 +257,8 @@ Scope:
 - Ship responsive Tailwind authentication/reset forms with semantic labels,
   keyboard operation, focus handling, and clear inline/error-summary feedback.
 - Add concrete nullable `disabled_at` and deny disabled authentication. Do not
-  expose account disable mutation until PR-04 adds the cross-organization
-  eligible-owner guard.
+  expose account disable mutation until PR-05 adds the cross-organization
+  access-eligible-owner guard.
 
 Migrations:
 
@@ -289,42 +295,57 @@ Depends on: PR-03.
 
 Scope:
 
-- Add `Organization`, `OrganizationMembership`, global non-authoritative
-  `OrganizationAccessLocator`, and the `Current` attributes needed by existing
-  tenant services.
-- Add transactional global organization creation that creates the first eligible
-  owner and its locator atomically.
-- Add locked role/status and account-disable services. Reject any transition
-  that leaves an organization without another enabled active owner;
-  enumerate candidates only through account locators, then reload each tenant's
-  memberships through `Current.organization` and lock affected organizations in
-  stable ID order.
-- Create/remove locators atomically with membership activation/deactivation.
-  Account disable retains the non-authoritative locator but revokes sessions and
-  fails the enabled-user check; locator presence never replaces a tenant-owned
-  membership reload.
-- Keep slug immutable. Organization archive/hard deletion is outside the MVP;
-  add no endpoint or lifecycle column.
-- Add the concrete append-only `AuditEvent` table/service now so organization
-  and membership security transitions have durable audit from their first PR.
+- Add `Organization`, `OrganizationMembership`, and the `Current` organization
+  attributes needed by tenant services. Organization has a database-generated
+  unique `public_id` UUID, name, immutable normalized slug, and
+  `active`/`suspended` status defaulting to active. Membership has one role,
+  `active`/`suspended` status, and non-null `joined_at`.
+- Add the Tenancy-owned `Organizations::Create`,
+  `Organizations::Memberships::ChangeRole`, and
+  `Organizations::Memberships::Remove` commands. `Remove` is soft suspension;
+  role changes and removal do not delete membership history.
+- Add verified-and-authenticated global onboarding. Registration and email
+  verification continue to create no organization automatically.
+- In one database transaction, `Organizations::Create` creates the organization
+  and its first active owner membership. Set `Current.organization` and
+  `Current.organization_membership` only after the outermost commit; a rollback
+  must preserve the previous context.
+- Require membership mutations to resolve targets through
+  `Current.organization.organization_memberships`, enforce the complete role
+  matrix (including billing/member denial), lock the organization, and reject
+  sequential or concurrent changes that would leave no active owner membership.
+- Enforce the same active-owner invariant for direct database writes with a
+  deferred constraint trigger that locks the organization root at commit. Use
+  the SQL primary schema dump so clean schema loads retain the trigger.
+- Keep slug immutable. Organization suspension is represented, but no suspension
+  endpoint is added here; archive/hard deletion remains outside the MVP.
+- Do not add `OrganizationAccessLocator`, tenant paths, account disablement, or
+  `AuditEvent` in this change. They are explicit follow-ups below, not behavior
+  that may be claimed by PR-04.
 
-Migrations: organization, membership, access-locator, and audit-event tables;
-organization/user/composite locator FKs, unique slug and org/user/locator
-identities, role/status/slug/timestamp/metadata checks, explicit delete behavior.
+Migrations: organization and membership tables; organization/user FKs, unique
+public UUID, slug, and organization/user identities, role/status/slug/nonblank
+checks, non-null `joined_at`, lookup indexes, explicit delete behavior, and the
+deferred active-owner constraint trigger.
 
 Tests:
 
 - model/database constraint suite;
 - multiple owners allowed;
-- final eligible owner cannot be deactivated/demoted or account-disabled by
-  sequential/concurrent calls across one or multiple organizations;
-- successful account disable revokes every server-side session and an old
-  cookie cannot authenticate, while retained locators still authorize nothing;
-- stale/missing locator authorizes nothing and locator transitions are atomic;
-- organization creation and initial audit are atomic.
+- final active owner cannot be demoted, soft-suspended, or deleted by sequential,
+  concurrent, service, or direct database transitions;
+- owner/admin/billing/member service matrix, including admin denial for
+  owner/billing targets and billing denial for all membership management;
+- cross-tenant target IDs cannot escape `Current.organization`;
+- organization and first owner creation are atomic, UUID/slug normalization is
+  database-backed, and `Current` is assigned only after a successful commit;
+- verified/authenticated onboarding succeeds while unverified, unauthenticated,
+  and duplicate-slug attempts create no tenant state.
 
-Acceptance: services can create and safely administer tenant roots, but there is
-still no URL tenant context until PR-05.
+Acceptance: verified authenticated users can explicitly onboard and services can
+create and safely administer tenant roots. Request-local `Current` is available
+after successful creation, but no `/o/:organization_slug/` URL is accessible
+until PR-05 has installed and backfilled locator/bootstrap state.
 
 ### PR-05: Add path tenant context, organization shell, and Pundit enforcement
 
@@ -334,26 +355,45 @@ Depends on: PR-04.
 
 Scope:
 
-- Add request reset lifecycle for the PR-04 `Current` attributes.
-- Add global authenticated organization-create endpoint plus path-scoped
-  show/update routes, organization switcher, and base Pundit policies.
+- Add `OrganizationAccessLocator`, then backfill one locator for every existing
+  active membership before enabling any tenant path. Deploy ordering must make
+  partial backfill fail closed and must not expose `/o/:organization_slug/`
+  until the backfill and constraints complete.
+- Extend membership activation/suspension transactions to create/remove locators
+  atomically. Locator presence remains discovery only.
+- Add request reset lifecycle for the PR-04 `Current` attributes and change
+  successful onboarding to redirect to the ordinary tenant path.
+- Add path-scoped show/update routes, organization switcher, and base Pundit
+  policies.
 - Build the organization shell/switcher with responsive Tailwind layout,
   keyboard-visible focus, semantic navigation, and clear 403/404 states.
 - Resolve a candidate through the authenticated user's global access locator,
-  set `Current.organization`, then reload the active membership through that
-  organization before any tenant child query.
+  require an active organization, set `Current.organization`, then reload the
+  active membership through that organization before any tenant child query.
+- Add the global account-disable ownership guard now that locator discovery is
+  available: enumerate only locator candidates, lock organization roots in
+  stable ID order, reload access-eligible-owner state through each
+  `Current.organization`, abort globally if one tenant would lose its last
+  access-eligible owner, and revoke sessions only on success.
 - Enable `verify_authorized`/`verify_policy_scoped` with reviewed global-route
   exclusions.
 - Add a reusable tenant job context wrapper.
 
-Migrations: none unless an implementation-discovered index is justified and
-added with query evidence.
+Migrations: access-locator table with organization/user/composite membership FKs,
+unique locator identities, supporting lookup indexes, explicit delete behavior,
+and a reversible/backward-compatible active-membership backfill. Add no tenant
+route until this migration/backfill has completed successfully.
 
 Tests:
 
 - two users/two organizations: non-member slug 404 and no cross-tenant leakage;
-- organization role matrix for create/shell/update;
+- organization role matrix for shell/update and suspended organization denial;
 - stale/mismatched locator and global-switcher candidate cannot authorize;
+- active membership backfill is complete/idempotent and locator transitions are
+  atomic with later membership activation/suspension;
+- final access-eligible owner cannot be account-disabled by
+  sequential/concurrent calls across one or multiple organizations; successful
+  disable revokes sessions and retained locators still authorize nothing;
 - direct POST denied regardless of hidden UI;
 - `Current` reset after success, exception, and sequential job execution;
 - route helpers always carry explicit slug.
@@ -370,6 +410,10 @@ Depends on: PR-05 and email-provider choice for production configuration.
 
 Scope:
 
+- Add the append-only `AuditEvent` table/service before exposing invitation and
+  membership-administration mutations. Begin auditing organization creation and
+  membership transitions from this rollout; do not fabricate retroactive audit
+  rows for PR-04 operations.
 - Add `OrganizationInvitation`, creation/revocation/acceptance services, mailer,
   and responsive, keyboard-operable Hotwire/Tailwind administration UI with
   accessible validation/status messages.
@@ -383,9 +427,9 @@ Scope:
 - Acceptance creates or reactivates the unique membership and access locator
   atomically. Enforce invitation-create and acceptance rate limits in this PR.
 
-Migrations: invitation table with organization/inviter composite FKs, unique
-token digest, status-based pending-email uniqueness, role/status/timestamp
-checks.
+Migrations: audit-event and invitation tables with tenant/actor/inviter composite
+FKs, append-only audit shape constraints, unique invitation token digest,
+status-based pending-email uniqueness, and role/status/timestamp checks.
 
 Tests:
 
@@ -505,7 +549,7 @@ Scope:
 - Allow assignments to exist without a current plan entitlement; label them
   dormant rather than deleting on downgrade.
 - A role-less product membership grants no action.
-- Extend the PR-04 membership-deactivation transaction to delete that
+- Extend the PR-04 membership-suspension transaction to delete that
   membership's product memberships/role joins and audit it; reactivation never
   resurrects product access.
 
@@ -517,8 +561,8 @@ Tests:
 - owner/admin allowed; billing/member denied;
 - cross-tenant member ID and cross-product role rejected by request and DB;
 - duplicate assignments fail;
-- inactive organization membership grants nothing;
-- deactivate then re-invite/reactivate requires explicit product reassignment;
+- suspended organization membership grants nothing;
+- suspend then re-invite/reactivate requires explicit product reassignment;
 - UI-hidden direct POST remains denied;
 - keyboard/narrow-viewport assignment and dormant-state system flow.
 
@@ -839,7 +883,7 @@ header work.
 
 Scope:
 
-- Extend the PR-04 append-only `AuditEvent` service to every required
+- Extend the PR-06 append-only `AuditEvent` service to every required
   organization, invitation, assignment, checkout, tenant-resolved webhook
   projection, and subscription transition. Keep pre-tenant ingress evidence in
   bounded security metrics/redacted logs and the global verified-event ledger;
@@ -855,7 +899,7 @@ Scope:
   evidence and tenant/provider idempotency keys as required. Configure 30-day
   request-log retention; backup retention remains PR-19 infrastructure scope.
 
-Migrations: focused additive audit indexes/constraints only if PR-04 evidence
+Migrations: focused additive audit indexes/constraints only if PR-06 evidence
 shows they are needed; the sink choice is already fixed to PostgreSQL.
 
 Tests: event coverage, actor/system shapes, update prohibition, metadata/log
