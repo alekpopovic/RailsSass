@@ -1,9 +1,9 @@
 # Development and CI
 
 This guide is the executable setup contract for a clean checkout. It supports
-Rails on the host with PostgreSQL in Docker Compose, or both Rails and
-PostgreSQL in containers. All checked-in database credentials are synthetic and
-development-only.
+Rails on the host with PostgreSQL and MailCatcher in Docker Compose, or the full
+development stack in containers. All checked-in database credentials are
+synthetic and development-only; captured email never leaves the workstation.
 
 ## Prerequisites
 
@@ -18,16 +18,19 @@ Node.js is not required. Importmap and Tailwind are provided by gems.
 This is the shortest feedback loop and the recommended default:
 
 ```bash
-docker compose up --detach --wait postgres
+docker compose up --detach --wait postgres mailcatcher
 bin/setup --skip-server
 bin/dev
 ```
 
-`docker compose --wait` does not return until PostgreSQL passes its healthcheck.
+`docker compose --wait` does not return until PostgreSQL and MailCatcher pass
+their healthchecks.
 `bin/setup` installs the locked bundle when necessary, copies `.env.example` to
 the ignored `.env` only when it is absent, prepares the development database,
 and clears stale temporary files. Open <http://localhost:3000> after `bin/dev`
-starts Puma and the Tailwind watcher.
+starts Puma and the Tailwind watcher. Rails delivers every development email to
+MailCatcher at `127.0.0.1:1025`; open <http://localhost:1080> to inspect HTML,
+plain-text, and source versions without contacting a real mail provider.
 
 Run the complete local quality gate from another terminal:
 
@@ -40,7 +43,7 @@ with synthetic `rails_sass` credentials. If port 5432 is occupied, choose a host
 port in the ignored `.env`, then use the same value when starting PostgreSQL:
 
 ```bash
-PGPORT=55432 docker compose up --detach --wait postgres
+PGPORT=55432 docker compose up --detach --wait postgres mailcatcher
 PGPORT=55432 bin/setup --skip-server
 ```
 
@@ -55,15 +58,16 @@ The development image includes the locked Ruby toolchain, build dependencies,
 Chromium, and ChromeDriver, so it can run both the application and `bin/ci`:
 
 ```bash
-docker compose up --detach --wait postgres
+docker compose up --detach --wait postgres mailcatcher
 docker compose build app
 docker compose run --rm app bin/setup --skip-server
 docker compose up app
 ```
 
 Open <http://localhost:3000>. The app container uses the internal hostname
-`postgres`; Compose overrides the host-oriented PG settings without changing
-the tracked example or the ignored `.env`.
+`postgres` for PostgreSQL and `mailcatcher:1025` for SMTP. Compose overrides the
+host-oriented settings without changing the tracked example or the ignored
+`.env`; the inbox remains available at <http://localhost:1080>.
 
 Run the same quality gate inside the development image with:
 
@@ -117,7 +121,30 @@ Inspect service health and logs with:
 ```bash
 docker compose ps
 docker compose logs postgres
+docker compose logs mailcatcher
 docker compose exec postgres pg_isready -U rails_sass -d rails_sass_development
+```
+
+If ports 1025 or 1080 are already occupied, set `SMTP_PORT` or
+`MAILCATCHER_HTTP_PORT` in the ignored `.env`, then restart MailCatcher. The web
+UI is intentionally bound to `127.0.0.1` because it has no authentication.
+
+Authentication mail is enqueued with `deliver_later` and runs through the
+in-process development async queue. Rails reads SMTP and queue configuration at
+boot, so recreate an already-running app container after changing `.env`,
+`compose.yaml`, or the development mailer configuration:
+
+```bash
+docker compose up --detach --wait mailcatcher
+docker compose up --detach --force-recreate app
+```
+
+Action Mailer body logging is disabled because authentication messages contain
+signed tokens. Delivery exceptions still surface through Active Job. If the
+inbox remains empty, inspect only the web-process delivery error:
+
+```bash
+docker compose logs app | grep -E 'Net::SMTP|ECONNREFUSED|Error performing'
 ```
 
 Stop containers while preserving the database volume:

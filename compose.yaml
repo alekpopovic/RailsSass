@@ -18,6 +18,19 @@ services:
       retries: 10
       start_period: 10s
 
+  mailcatcher:
+    image: sj26/mailcatcher:v0.10.0@sha256:5d153a4daadf0c266f29c3856085741f06ca1e3768671f4267622d3e3ffe5564
+    command: [ "--ip", "0.0.0.0", "--messages-limit", "100", "--no-quit" ]
+    ports:
+      - "127.0.0.1:${SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${MAILCATCHER_HTTP_PORT:-1080}:1080"
+    healthcheck:
+      test: [ "CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:1080/" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
   app:
     build:
       context: .
@@ -27,9 +40,13 @@ services:
         GROUP_ID: "${LOCAL_GID:-1000}"
     command: bin/dev
     depends_on:
+      mailcatcher:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     environment:
+      APP_HOST: "${APP_HOST:-localhost}"
+      APP_PORT: "${PORT:-3000}"
       BINDING: 0.0.0.0
       FOREMAN_ENV: /dev/null
       PGHOST: postgres
@@ -37,6 +54,8 @@ services:
       PGUSER: rails_sass
       PGPASSWORD: rails_sass
       PORT: 3000
+      SMTP_ADDRESS: mailcatcher
+      SMTP_PORT: 1025
       TEST_WORKERS: "${TEST_WORKERS:-1}"
     init: true
     ports:

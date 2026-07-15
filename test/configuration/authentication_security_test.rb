@@ -28,6 +28,10 @@ class AuthenticationSecurityTest < ActiveSupport::TestCase
       request.filtered_path
   end
 
+  test "authentication mail bodies are not written to application logs" do
+    assert_nil ActionMailer::Base.logger
+  end
+
   test "secret-bearing links do not place tokens in route path segments" do
     assert_equal "/password/edit", Rails.application.routes.url_helpers.edit_password_path
     assert_equal "/email_verification/edit",

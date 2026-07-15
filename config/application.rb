@@ -35,6 +35,12 @@ module RailsSass
     config.time_zone = "Europe/Belgrade"
     config.active_record.default_timezone = :utc
 
+    # Action Mailer debug logging includes the complete encoded message. Auth
+    # messages contain signed reset and verification URLs, so delivery bodies
+    # must never be written to application logs. Active Job still reports
+    # delivery exceptions raised by the configured adapter.
+    config.action_mailer.logger = nil
+
     # Authorization failures are rendered by Rails as the static 403 page.
     config.action_dispatch.rescue_responses["Pundit::NotAuthorizedError"] = :forbidden
   end

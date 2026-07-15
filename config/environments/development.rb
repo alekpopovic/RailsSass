@@ -31,14 +31,32 @@ Rails.application.configure do
   # Store uploaded files on the local file system (see config/storage.yml for options).
   config.active_storage.service = :local
 
-  # Don't care if the mailer can't send.
-  config.action_mailer.raise_delivery_errors = false
+  # Surface a stopped or unreachable local mail catcher immediately.
+  config.action_mailer.raise_delivery_errors = true
 
   # Make template changes take effect immediately.
   config.action_mailer.perform_caching = false
 
-  # Set localhost to be used by links generated in mailer templates.
-  config.action_mailer.default_url_options = { host: "localhost", port: 3000 }
+  # Authentication mail uses deliver_later without requiring a separate
+  # development worker. Delivery errors are logged by the web process.
+  config.active_job.queue_adapter = :async
+
+  # Deliver every development email to the local MailCatcher SMTP service.
+  config.action_mailer.delivery_method = :smtp
+  config.action_mailer.perform_deliveries = true
+  config.action_mailer.smtp_settings = {
+    address: ENV.fetch("SMTP_ADDRESS", "127.0.0.1"),
+    port: Integer(ENV.fetch("SMTP_PORT", "1025"), 10),
+    authentication: nil,
+    enable_starttls_auto: false
+  }
+
+  # Generate browser-reachable links for host and container development.
+  config.action_mailer.default_url_options = {
+    host: ENV.fetch("APP_HOST", "localhost"),
+    port: Integer(ENV.fetch("APP_PORT") { ENV.fetch("PORT", "3000") }, 10),
+    protocol: "http"
+  }
 
   # Print deprecation notices to the Rails logger.
   config.active_support.deprecation = :log

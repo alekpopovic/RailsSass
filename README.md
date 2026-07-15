@@ -29,11 +29,11 @@ Install the matching Bundler version if necessary:
 gem install bundler -v 4.0.14
 ```
 
-Start the development PostgreSQL service and wait for its healthcheck, then run
-the idempotent setup:
+Start PostgreSQL and MailCatcher and wait for both healthchecks, then run the
+idempotent setup:
 
 ```bash
-docker compose up --detach --wait postgres
+docker compose up --detach --wait postgres mailcatcher
 bin/setup --skip-server
 ```
 
@@ -69,10 +69,15 @@ bin/dev
 Open <http://localhost:3000>. The liveness endpoint is
 <http://localhost:3000/up>.
 
-New accounts must verify their email address before signing in. Development does
-not send mail to a real provider; inspect deliveries through the configured local
-mailer workflow or exercise links in tests. Production must set `APP_HOST`,
-`MAILER_FROM`, and a real delivery adapter through its secret/configuration store.
+New accounts must verify their email address before signing in. Development
+sends every message to the local MailCatcher SMTP service; inspect the inbox at
+<http://localhost:1080>. Nothing is forwarded to a real provider. Production
+must set `APP_HOST`, `MAILER_FROM`, and a real delivery adapter through its
+secret/configuration store.
+
+If Rails was already running when MailCatcher or its SMTP settings were added,
+restart `bin/dev` or recreate the `app` container so Rails reloads its
+boot-time mailer configuration.
 
 The application operates in `Europe/Belgrade`; Active Record persists database
 timestamps in UTC.
@@ -130,7 +135,7 @@ workers; the safe default is one worker until CI database isolation is proven.
 - `docs/` — requirements, architecture, security, billing, ADRs, and execution plan
 - `public/` — static health-independent error pages and public assets
 - `bin/` — setup, development, test/quality, job, and deployment entrypoints
-- `compose.yaml` / `Dockerfile.dev` — local PostgreSQL and containerized development
+- `compose.yaml` / `Dockerfile.dev` — local PostgreSQL, MailCatcher, and containerized development
 
 ## Configuration and secrets
 

@@ -35,8 +35,8 @@ to discard changes that are not yours.
 - `test/` — Minitest suites mirroring application boundaries.
 - `docs/` — normative product, architecture, security, billing, ADR, and plan
   documents. Update them when an implementation changes a documented contract.
-- `compose.yaml` and `Dockerfile.dev` — reproducible local PostgreSQL and the
-  optional containerized Rails development process.
+- `compose.yaml` and `Dockerfile.dev` — reproducible local PostgreSQL,
+  MailCatcher, and the optional containerized Rails development process.
 
 The application is a modular monolith, not a collection of Rails engines.
 Domain code is grouped by clear namespaces and dependency boundaries documented
@@ -45,8 +45,8 @@ in `docs/architecture.md`.
 ## Commands
 
 ```bash
-# Start development PostgreSQL and wait until it is healthy
-docker compose up --detach --wait postgres
+# Start development PostgreSQL and MailCatcher and wait until both are healthy
+docker compose up --detach --wait postgres mailcatcher
 
 # Install dependencies and prepare PostgreSQL
 bin/setup --skip-server
