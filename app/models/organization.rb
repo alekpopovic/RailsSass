@@ -7,6 +7,12 @@ class Organization < ApplicationRecord
   has_many :organization_access_locators,
     dependent: :restrict_with_exception,
     inverse_of: :organization
+  has_many :organization_invitations,
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
+  has_many :audit_events,
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
   has_many :users, through: :organization_memberships
 
   enum :status, { active: "active", suspended: "suspended" },

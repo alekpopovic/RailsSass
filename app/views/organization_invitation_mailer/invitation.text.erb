@@ -1,0 +1,8 @@
+Join <%= @organization.name %>
+
+<%= @inviter.name %> invited you to join as <%= @invitation.organization_role.humanize.downcase %>.
+
+Review invitation:
+<%= @acceptance_url %>
+
+This link expires at <%= l @invitation.expires_at, format: :long %>. If you did not expect this invitation, you can ignore this email.

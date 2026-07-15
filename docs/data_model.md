@@ -236,9 +236,10 @@ fails closed.
 ### 5.6 `OrganizationInvitation` / `organization_invitations`
 
 - `organization_id`: not-null foreign key.
-- `invited_by_membership_id`: not-null membership foreign key.
+- `inviter_id`: not-null user foreign key. A composite tenant foreign key also
+  proves that this user has an organization membership.
 - `email_address`: normalized lowercase invite target.
-- `role`: invited organization role.
+- `organization_role`: invited organization role.
 - `status`: `pending`, `accepted`, `revoked`, or `expired`.
 - `token_digest`: one-way digest of a high-entropy token.
 - `expires_at`, `accepted_at`, `revoked_at`.
@@ -249,15 +250,18 @@ Constraints and indexes:
 - partial unique index on `(organization_id, lower(email_address)) WHERE
   status = 'pending'`;
 - composite foreign key
-  `(invited_by_membership_id, organization_id)` to
-  `organization_memberships(id, organization_id)`;
+  `(organization_id, inviter_id)` to
+  `organization_memberships(organization_id, user_id)`;
 - role, status, and timestamp consistency checks.
 
 Invitation acceptance locks the invitation, validates the authenticated email,
 and creates or reactivates the unique organization membership atomically. The
 create service first marks any elapsed pending invitation `expired` in the same
 serialized workflow, because a partial-index predicate cannot depend on
-`now()`. The invitation itself never authorizes tenant access.
+`now()`. Invitations expire after seven days. Creating an invitation for an
+email that already has an unexpired pending invitation returns that same row
+without rotating or re-sending its token; the explicit resend command rotates
+the digest and expiry. The invitation itself never authorizes tenant access.
 
 ## 6. Global catalog and plan entitlements
 
@@ -716,6 +720,9 @@ initial organization-foundation change; no retroactive events are fabricated.
 
 Indexes support `(organization_id, occurred_at)` and `action`. Application
 models expose create/read only; ordinary application code cannot update rows.
+A single recording service verifies that every non-organization subject carries
+the same `organization_id` and accepts only typed, explicitly allowlisted
+metadata keys; arbitrary nested values, emails, and token material are rejected.
 A dedicated retention service may delete expired rows under the documented
 policy and audit that operation. Tenant UI/support queries, if added, are rooted
 at `Current.organization.audit_events`.

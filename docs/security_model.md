@@ -66,7 +66,7 @@ are never stored.
 | --- | --- | --- | --- |
 | Tenant IDOR | Member of A guesses B's slug or record ID | Account locator selects candidate only; authoritative membership and records reload through `Current.organization`; Pundit scope/policy; composite tenant FKs | Cross-tenant request/model tests for every controller family |
 | Stale tenant context | Reused thread/job retains prior organization | Establish context explicitly; reset in `ensure`; fail closed without context | Sequential request/job tests including exceptions |
-| Organization privilege escalation | Admin grants owner/billing, concurrent removal leaves no owner, user disable or reactivation orphans/resurrects access, or UI-hidden POST succeeds | Exact role matrix; organization-row locking in `Organizations::Memberships::ChangeRole`/`Remove`; soft suspension removes locators/product assignments once present; server authorization; cross-organization account-disable guard added with locator/bootstrap | Table-driven service/policy, reactivation, direct request, and concurrency tests |
+| Organization privilege escalation | Admin grants owner/billing, concurrent removal leaves no owner, user disable or reactivation orphans/resurrects access, or UI-hidden POST succeeds | Exact role matrix; organization-row locking in `Organizations::Memberships::ChangeRole`/`Remove`/`Reactivate`; soft suspension removes locators/product assignments once present; server authorization; cross-organization account-disable guard added with locator/bootstrap | Table-driven service/policy, reactivation, direct request, and concurrency tests |
 | Product privilege escalation | Owner assumes implicit product access or cross-product role is attached | Entitlement AND product membership AND permission; no role bypass; composite product FKs | Central truth table and invalid database-write tests |
 | Numeric-limit race/bypass | Two concurrent creates consume the final unit, or client omits feature/delta | Server-owned action registry; product command revalidates common grant and locks/conditionally mutates usage in one transaction | Parameter-tamper plus concurrency test proving at most one commit |
 | Webhook forgery/tampering | Attacker posts active status or modifies one byte | HMAC-SHA256 exact raw body, constant-time compare, credential separation | Official-style fixture, mutation, bad/missing signature tests |
@@ -142,10 +142,13 @@ controllers.
   and verification state. A successful state change invalidates either token,
   making it single-use. Invitation tokens remain random, expiring, single-use,
   digest-only values bound to the authenticated normalized email.
-- Filter reset and verification token keys in both query and form parameters.
-  A token-bearing `GET` only renders confirmation; a CSRF-protected `PATCH`
-  performs the reset or verification. Tokens never appear in route path
-  segments or logs.
+- Filter reset, verification, and invitation token keys in both query and form
+  parameters. A token-bearing `GET` only renders confirmation; a
+  CSRF-protected `PATCH` performs the state change. Invitation confirmation
+  responses use `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+  An unauthenticated invitation request does not persist its raw-token URL as a
+  post-login destination; the user signs in or registers and reopens the email
+  link. Tokens never appear in route path segments or logs.
 - Validate every post-login destination as an internal application location;
   reject protocol-relative, absolute external, and malformed destinations and
   fall back to a fixed internal path.
@@ -169,9 +172,10 @@ The normative decision flow is in
   checks, product-assignment removal, and numeric consumption checks in locked
   service/product-command transactions, not view helpers or preflight requests.
   The Tenancy-owned commands are exposed as
-  `Organizations::Memberships::ChangeRole` and
-  `Organizations::Memberships::Remove`; `Remove` soft-suspends and never deletes
-  the membership row.
+  `Organizations::Memberships::ChangeRole`,
+  `Organizations::Memberships::Remove`, and
+  `Organizations::Memberships::Reactivate`; `Remove` soft-suspends and never
+  deletes the membership row.
 - Resolve permission/feature/consumption behavior from a server-owned action
   registry; never accept those security semantics as optional client input.
 - Audit both successful sensitive changes and denied high-risk attempts without
@@ -264,6 +268,11 @@ Logs use stable IDs and reason codes. Do not log:
 - authorization/API headers, cookies, webhook signature or body;
 - Lemon API keys, checkout or portal URLs;
 - unnecessary email/name/address/payment metadata.
+
+Rails parameter filtering is not sufficient for infrastructure that records
+the original request target. Reverse-proxy, load-balancer, CDN, and APM request
+logging must redact or omit sensitive query values, including `token`, before
+production traffic is enabled.
 
 Suggested MVP retention, subject to legal/product review:
 

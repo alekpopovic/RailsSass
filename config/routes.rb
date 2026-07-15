@@ -8,7 +8,21 @@ Rails.application.routes.draw do
 
   scope "/o/:organization_slug", as: :organization, module: :organizations do
     get "dashboard", to: "dashboard#show", as: :dashboard
-    get "members", to: "members#index", as: :members
+    get "invitations/accept", to: "invitation_acceptances#show", as: :invitation_acceptance
+    patch "invitations/accept", to: "invitation_acceptances#update"
+
+    resources :members, only: %i[index update] do
+      member do
+        patch :suspend
+        patch :reactivate
+      end
+    end
+    resources :invitations, only: %i[new create] do
+      member do
+        post :resend
+        patch :revoke
+      end
+    end
     get "settings", to: "settings#show", as: :settings
     get "billing", to: "billing#show", as: :billing
   end

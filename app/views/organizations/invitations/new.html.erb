@@ -1,0 +1,43 @@
+<% content_for :title, "Invite a member to #{Current.organization.name}" %>
+
+<section class="mx-auto max-w-lg py-12 sm:py-16" aria-labelledby="invitation-title">
+  <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+    <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600"><%= Current.organization.name %></p>
+    <h1 id="invitation-title" class="mt-2 text-2xl font-bold tracking-tight text-slate-950">Invite a member</h1>
+    <p class="mt-2 text-sm text-slate-600">The recipient must sign in with this email address before accepting.</p>
+
+    <% if @invitation.errors.any? %>
+      <div class="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
+        <p class="font-semibold">Please correct the following:</p>
+        <ul class="mt-2 list-disc space-y-1 pl-5">
+          <% @invitation.errors.full_messages.each do |message| %>
+            <li><%= message %></li>
+          <% end %>
+        </ul>
+      </div>
+    <% end %>
+
+    <%= form_with model: @invitation,
+      url: organization_invitations_path(organization_slug: Current.organization.slug),
+      class: "mt-6 space-y-5" do |form| %>
+      <div>
+        <%= form.label :email_address, "Email address", class: "block text-sm font-medium text-slate-700" %>
+        <%= form.email_field :email_address, required: true, autofocus: true, autocomplete: "email", class: "mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+      </div>
+
+      <div>
+        <%= form.label :organization_role, "Organization role", class: "block text-sm font-medium text-slate-700" %>
+        <% roles = Current.membership.owner? ? OrganizationMembership.roles.keys : %w[admin member] %>
+        <%= form.select :organization_role,
+          roles.map { |role| [ role.humanize, role ] },
+          {},
+          class: "mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+      </div>
+
+      <div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+        <%= link_to "Cancel", organization_members_path(organization_slug: Current.organization.slug), class: "rounded-lg border border-slate-300 px-4 py-2.5 text-center font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+        <%= form.submit "Send invitation", class: "cursor-pointer rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+      </div>
+    <% end %>
+  </div>
+</section>

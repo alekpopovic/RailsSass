@@ -1,7 +1,7 @@
 # Architecture: Rails Modular Monolith
 
-Status: Proposed
-Last updated: 2026-07-15
+Status: In progress
+Last updated: 2026-07-16
 
 ## 1. Context
 
@@ -10,10 +10,11 @@ Hotwire, Tailwind, Pundit, Solid Queue, and Minitest. It is deployed as one
 codebase and one application release, with separate web and worker processes.
 
 The repository contains the Rails application foundation, PostgreSQL-backed CI,
-email/password authentication, organization onboarding, and locator-backed path
-tenancy. This document describes both those established boundaries and the
-remaining target architecture; invitations, catalog, product access, billing,
-and deployment hardening remain incremental milestones.
+email/password authentication, organization onboarding, locator-backed path
+tenancy, and audited organization invitations/member administration. This
+document describes both those established boundaries and the remaining target
+architecture; catalog, product access, billing, and deployment hardening remain
+incremental milestones.
 
 Related contracts:
 
@@ -291,10 +292,12 @@ controls but never replace request authorization.
 - Published plan versions and their entitlement graph are immutable.
 - Service objects own multi-row state transitions. Authorization-sensitive
   invariants do not depend on uncontrolled Active Record callbacks.
-- `Organizations::Memberships::ChangeRole` and
-  `Organizations::Memberships::Remove` are the Tenancy-owned, locked command
-  boundaries for role changes and soft suspension; billing and member actors
-  cannot invoke a successful membership-management transition.
+- `Organizations::Memberships::ChangeRole`,
+  `Organizations::Memberships::Remove`, and
+  `Organizations::Memberships::Reactivate` are the Tenancy-owned, locked
+  command boundaries for role changes, soft suspension, and reactivation;
+  billing and member actors cannot invoke a successful
+  membership-management transition.
 - A webhook projection, subscription update, and event completion marker commit
   atomically under row locks.
 - Numeric consuming operations lock or conditionally update authoritative usage

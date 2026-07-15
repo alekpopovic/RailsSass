@@ -12,8 +12,15 @@ class Organizations::Memberships::ChangeRole < Organizations::Memberships::Base
       if target_membership.role == @role
         target_membership
       else
+        previous_role = target_membership.role
         ensure_another_active_owner!(scope, target_membership) unless @role == "owner"
-        persist_transition!(scope, target_membership, role: @role)
+        updated_membership = persist_transition!(scope, target_membership, role: @role)
+        record_audit_event!(
+          action: "organization.membership.role_changed",
+          subject: updated_membership,
+          metadata: { from_role: previous_role, to_role: updated_membership.role }
+        )
+        updated_membership
       end
     end
   end

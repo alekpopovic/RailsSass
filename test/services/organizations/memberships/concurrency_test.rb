@@ -1,9 +1,11 @@
 require "test_helper"
 require "timeout"
 require_relative "../../../support/organization_test_helper"
+require_relative "../../../support/audit_event_test_helper"
 
 class Organizations::Memberships::ConcurrencyTest < ActiveSupport::TestCase
   include OrganizationTestHelper
+  include AuditEventTestHelper
 
   self.use_transactional_tests = false
 
@@ -27,6 +29,7 @@ class Organizations::Memberships::ConcurrencyTest < ActiveSupport::TestCase
 
   teardown do
     Current.reset
+    clear_test_audit_events!
     Session.where(id: [ @first_session&.id, @second_session&.id ].compact).delete_all
     if @organization
       Current.organization = @organization

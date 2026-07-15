@@ -1,22 +1,115 @@
 <% content_for :title, "#{Current.organization.name} members" %>
 
-<section class="py-12">
-  <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Organization</p>
-  <h1 class="mt-2 text-3xl font-bold tracking-tight text-slate-950">Members</h1>
+<section class="py-12" aria-labelledby="members-title">
+  <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Organization</p>
+      <h1 id="members-title" class="mt-2 text-3xl font-bold tracking-tight text-slate-950">Members</h1>
+      <p class="mt-2 text-sm text-slate-600">Manage organization access, roles, and pending invitations.</p>
+    </div>
 
-  <div class="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white">
+    <%= link_to "Invite member",
+      new_organization_invitation_path(organization_slug: Current.organization.slug),
+      class: "inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+  </div>
+
+  <section class="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white" aria-labelledby="current-members-title">
+    <div class="border-b border-slate-200 px-5 py-4">
+      <h2 id="current-members-title" class="text-lg font-semibold text-slate-950">Current members</h2>
+    </div>
+
     <ul class="divide-y divide-slate-200">
       <% @memberships.each do |membership| %>
-        <li class="flex items-center justify-between gap-4 px-5 py-4">
-          <div>
-            <p class="font-semibold text-slate-950"><%= membership.user.name %></p>
-            <p class="text-sm text-slate-500"><%= membership.status.humanize %></p>
+        <li class="grid gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div class="min-w-0">
+            <p class="truncate font-semibold text-slate-950"><%= membership.user.name %></p>
+            <p class="truncate text-sm text-slate-600"><%= membership.user.email_address %></p>
+            <p class="mt-1 text-xs font-semibold uppercase tracking-wide <%= membership.active? ? "text-emerald-700" : "text-slate-500" %>">
+              <%= membership.status.humanize %>
+            </p>
           </div>
-          <span class="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700">
-            <%= membership.role.humanize %>
-          </span>
+
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <% if membership.active? && policy(membership).change_role? %>
+              <%= form_with model: membership,
+                url: organization_member_path(organization_slug: Current.organization.slug, id: membership.id),
+                method: :patch,
+                class: "flex flex-col gap-2 sm:flex-row sm:items-end" do |form| %>
+                <div>
+                  <%= form.label :role, "Role for #{membership.user.name}", class: "block text-xs font-medium text-slate-600" %>
+                  <% roles = Current.membership.owner? ? OrganizationMembership.roles.keys : %w[admin member] %>
+                  <%= form.select :role,
+                    roles.map { |role| [ role.humanize, role ] },
+                    {},
+                    class: "mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+                </div>
+                <%= form.submit "Update role", class: "cursor-pointer rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+              <% end %>
+            <% else %>
+              <span class="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700">
+                <%= membership.role.humanize %>
+              </span>
+            <% end %>
+
+            <% if membership.active? && policy(membership).suspend? %>
+              <%= button_to "Suspend",
+                suspend_organization_member_path(organization_slug: Current.organization.slug, id: membership.id),
+                method: :patch,
+                class: "cursor-pointer rounded-lg border border-red-300 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2" %>
+            <% elsif membership.suspended? && policy(membership).reactivate? %>
+              <%= button_to "Reactivate",
+                reactivate_organization_member_path(organization_slug: Current.organization.slug, id: membership.id),
+                method: :patch,
+                class: "cursor-pointer rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2" %>
+            <% end %>
+          </div>
         </li>
       <% end %>
     </ul>
-  </div>
+  </section>
+
+  <section class="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white" aria-labelledby="invitations-title">
+    <div class="border-b border-slate-200 px-5 py-4">
+      <h2 id="invitations-title" class="text-lg font-semibold text-slate-950">Invitations</h2>
+    </div>
+
+    <% if @invitations.any? %>
+      <ul class="divide-y divide-slate-200">
+        <% @invitations.each do |invitation| %>
+          <% invitation_status = if invitation.pending? && invitation.expired_for?
+            "Expired"
+          else
+            invitation.status.humanize
+          end %>
+          <li class="grid gap-4 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <div class="min-w-0">
+              <p class="truncate font-semibold text-slate-950"><%= invitation.email_address %></p>
+              <p class="mt-1 text-sm text-slate-600">
+                <%= invitation.organization_role.humanize %> · <%= invitation_status %>
+              </p>
+            </div>
+
+            <% if invitation.pending? && !invitation.expired_for? %>
+              <div class="flex flex-wrap gap-2">
+                <% if policy(invitation).resend? %>
+                  <%= button_to "Resend",
+                    resend_organization_invitation_path(organization_slug: Current.organization.slug, id: invitation.id),
+                    method: :post,
+                    class: "cursor-pointer rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+                <% end %>
+                <% if policy(invitation).revoke? %>
+                  <%= button_to "Revoke",
+                    revoke_organization_invitation_path(organization_slug: Current.organization.slug, id: invitation.id),
+                    method: :patch,
+                    class: "cursor-pointer rounded-lg border border-red-300 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2" %>
+                <% end %>
+              </div>
+            <% end %>
+          </li>
+        <% end %>
+      </ul>
+    <% else %>
+      <p class="px-5 py-6 text-sm text-slate-600">No invitations have been sent.</p>
+    <% end %>
+  </section>
 </section>

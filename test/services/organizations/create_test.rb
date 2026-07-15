@@ -22,11 +22,13 @@ class Organizations::CreateTest < ActiveSupport::TestCase
       -> { OrganizationMembership.count },
       -> { OrganizationAccessLocator.count }
     ], 1 do
-      organization = Organizations::Create.new(
-        user: @user,
-        name: "  Example Company  ",
-        slug: " Example Company "
-      ).call
+      assert_difference -> { AuditEvent.count }, 2 do
+        organization = Organizations::Create.new(
+          user: @user,
+          name: "  Example Company  ",
+          slug: " Example Company "
+        ).call
+      end
     end
 
     membership = organization.organization_memberships.sole
@@ -41,6 +43,8 @@ class Organizations::CreateTest < ActiveSupport::TestCase
     assert_equal membership, membership.organization_access_locator.organization_membership
     assert_equal @user, membership.organization_access_locator.user
     assert_equal organization, membership.organization_access_locator.organization
+    assert_equal %w[organization.created organization.membership.created],
+      organization.audit_events.order(:id).pluck(:action)
   end
 
   test "requires the explicitly authenticated verified and enabled user" do

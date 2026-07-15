@@ -41,8 +41,13 @@ class Organizations::Memberships::Base
       raise_not_authorized! unless authorized
     end
 
-    def authorize_membership_management!(actor_membership, target_membership, new_role: nil)
-      allowed = if !target_membership.active?
+    def authorize_membership_management!(
+      actor_membership,
+      target_membership,
+      new_role: nil,
+      allowed_statuses: %w[active]
+    )
+      allowed = if !target_membership.status.in?(allowed_statuses)
         false
       elsif actor_membership.owner?
         true
@@ -55,6 +60,25 @@ class Organizations::Memberships::Base
       end
 
       raise_not_authorized! unless allowed
+    end
+
+    def ensure_access_locator!(membership)
+      Current.organization.organization_access_locators.find_or_create_by!(
+        organization_membership_id: membership.id
+      ) do |locator|
+        locator.user = membership.user
+        locator.organization = Current.organization
+      end
+    end
+
+    def record_audit_event!(action:, subject:, metadata: {})
+      AuditEvents::Record.call(
+        organization: Current.organization,
+        actor_user: @actor,
+        action: action,
+        subject: subject,
+        metadata: metadata
+      )
     end
 
     def ensure_another_active_owner!(scope, target_membership)

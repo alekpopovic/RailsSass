@@ -66,6 +66,22 @@ END;
 $$;
 
 
+--
+-- Name: prevent_audit_event_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.prevent_audit_event_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+BEGIN
+  RAISE EXCEPTION 'audit events are append-only'
+    USING ERRCODE = '55000',
+      TABLE = 'audit_events';
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -80,6 +96,49 @@ CREATE TABLE public.ar_internal_metadata (
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL
 );
+
+
+--
+-- Name: audit_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.audit_events (
+    id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    actor_user_id bigint,
+    action character varying(100) NOT NULL,
+    subject_type character varying(100) NOT NULL,
+    subject_id bigint NOT NULL,
+    request_id character varying(255),
+    job_id character varying(255),
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    occurred_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT audit_events_action_format CHECK (((action)::text ~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'::text)),
+    CONSTRAINT audit_events_job_id_valid CHECK (((job_id IS NULL) OR (((job_id)::text = btrim((job_id)::text)) AND ((char_length((job_id)::text) >= 1) AND (char_length((job_id)::text) <= 255))))),
+    CONSTRAINT audit_events_metadata_object CHECK ((jsonb_typeof(metadata) = 'object'::text)),
+    CONSTRAINT audit_events_request_id_valid CHECK (((request_id IS NULL) OR (((request_id)::text = btrim((request_id)::text)) AND ((char_length((request_id)::text) >= 1) AND (char_length((request_id)::text) <= 255))))),
+    CONSTRAINT audit_events_subject_id_positive CHECK ((subject_id > 0)),
+    CONSTRAINT audit_events_subject_type_present CHECK ((((subject_type)::text = btrim((subject_type)::text)) AND ((char_length((subject_type)::text) >= 1) AND (char_length((subject_type)::text) <= 100))))
+);
+
+
+--
+-- Name: audit_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.audit_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: audit_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.audit_events_id_seq OWNED BY public.audit_events.id;
 
 
 --
@@ -113,6 +172,53 @@ CREATE SEQUENCE public.organization_access_locators_id_seq
 --
 
 ALTER SEQUENCE public.organization_access_locators_id_seq OWNED BY public.organization_access_locators.id;
+
+
+--
+-- Name: organization_invitations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.organization_invitations (
+    id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    inviter_id bigint NOT NULL,
+    email_address character varying(254) NOT NULL,
+    organization_role character varying(16) NOT NULL,
+    status character varying(16) DEFAULT 'pending'::character varying NOT NULL,
+    token_digest character varying(64) NOT NULL,
+    expires_at timestamp(6) without time zone NOT NULL,
+    accepted_at timestamp(6) without time zone,
+    revoked_at timestamp(6) without time zone,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT organization_invitations_accepted_at_valid CHECK (((accepted_at IS NULL) OR ((accepted_at >= created_at) AND (accepted_at < expires_at)))),
+    CONSTRAINT organization_invitations_email_normalized CHECK ((((email_address)::text = lower(btrim((email_address)::text))) AND ((char_length((email_address)::text) >= 3) AND (char_length((email_address)::text) <= 254)))),
+    CONSTRAINT organization_invitations_expiry_after_creation CHECK ((expires_at > created_at)),
+    CONSTRAINT organization_invitations_revoked_at_valid CHECK (((revoked_at IS NULL) OR (revoked_at >= created_at))),
+    CONSTRAINT organization_invitations_role_allowed CHECK (((organization_role)::text = ANY ((ARRAY['owner'::character varying, 'admin'::character varying, 'billing'::character varying, 'member'::character varying])::text[]))),
+    CONSTRAINT organization_invitations_status_allowed CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'accepted'::character varying, 'revoked'::character varying, 'expired'::character varying])::text[]))),
+    CONSTRAINT organization_invitations_status_timestamps CHECK (((((status)::text = ANY ((ARRAY['pending'::character varying, 'expired'::character varying])::text[])) AND (accepted_at IS NULL) AND (revoked_at IS NULL)) OR (((status)::text = 'accepted'::text) AND (accepted_at IS NOT NULL) AND (revoked_at IS NULL)) OR (((status)::text = 'revoked'::text) AND (accepted_at IS NULL) AND (revoked_at IS NOT NULL)))),
+    CONSTRAINT organization_invitations_token_digest_format CHECK (((token_digest)::text ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: organization_invitations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.organization_invitations_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: organization_invitations_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.organization_invitations_id_seq OWNED BY public.organization_invitations.id;
 
 
 --
@@ -277,10 +383,24 @@ ALTER SEQUENCE public.users_id_seq OWNED BY public.users.id;
 
 
 --
+-- Name: audit_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_events ALTER COLUMN id SET DEFAULT nextval('public.audit_events_id_seq'::regclass);
+
+
+--
 -- Name: organization_access_locators id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.organization_access_locators ALTER COLUMN id SET DEFAULT nextval('public.organization_access_locators_id_seq'::regclass);
+
+
+--
+-- Name: organization_invitations id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_invitations ALTER COLUMN id SET DEFAULT nextval('public.organization_invitations_id_seq'::regclass);
 
 
 --
@@ -320,11 +440,27 @@ ALTER TABLE ONLY public.ar_internal_metadata
 
 
 --
+-- Name: audit_events audit_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_events
+    ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: organization_access_locators organization_access_locators_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.organization_access_locators
     ADD CONSTRAINT organization_access_locators_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: organization_invitations organization_invitations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_invitations
+    ADD CONSTRAINT organization_invitations_pkey PRIMARY KEY (id);
 
 
 --
@@ -382,10 +518,73 @@ CREATE UNIQUE INDEX idx_on_organization_membership_id_c0ffad9c57 ON public.organ
 
 
 --
+-- Name: index_audit_events_on_action; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_audit_events_on_action ON public.audit_events USING btree (action);
+
+
+--
+-- Name: index_audit_events_on_actor_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_audit_events_on_actor_user_id ON public.audit_events USING btree (actor_user_id);
+
+
+--
+-- Name: index_audit_events_on_org_and_actor; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_audit_events_on_org_and_actor ON public.audit_events USING btree (organization_id, actor_user_id);
+
+
+--
+-- Name: index_audit_events_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_audit_events_on_organization_id ON public.audit_events USING btree (organization_id);
+
+
+--
+-- Name: index_audit_events_on_organization_id_and_occurred_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_audit_events_on_organization_id_and_occurred_at ON public.audit_events USING btree (organization_id, occurred_at);
+
+
+--
 -- Name: index_org_access_locators_on_user_and_organization; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX index_org_access_locators_on_user_and_organization ON public.organization_access_locators USING btree (user_id, organization_id);
+
+
+--
+-- Name: index_org_invitations_on_org_and_inviter; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_org_invitations_on_org_and_inviter ON public.organization_invitations USING btree (organization_id, inviter_id);
+
+
+--
+-- Name: index_org_invitations_on_org_status_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_org_invitations_on_org_status_created ON public.organization_invitations USING btree (organization_id, status, created_at);
+
+
+--
+-- Name: index_org_invitations_on_org_status_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_org_invitations_on_org_status_expiry ON public.organization_invitations USING btree (organization_id, status, expires_at);
+
+
+--
+-- Name: index_org_invitations_on_pending_email; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_org_invitations_on_pending_email ON public.organization_invitations USING btree (organization_id, lower((email_address)::text)) WHERE ((status)::text = 'pending'::text);
 
 
 --
@@ -414,6 +613,27 @@ CREATE INDEX index_organization_access_locators_on_organization_id ON public.org
 --
 
 CREATE INDEX index_organization_access_locators_on_user_id ON public.organization_access_locators USING btree (user_id);
+
+
+--
+-- Name: index_organization_invitations_on_inviter_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_organization_invitations_on_inviter_id ON public.organization_invitations USING btree (inviter_id);
+
+
+--
+-- Name: index_organization_invitations_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_organization_invitations_on_organization_id ON public.organization_invitations USING btree (organization_id);
+
+
+--
+-- Name: index_organization_invitations_on_token_digest; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_organization_invitations_on_token_digest ON public.organization_invitations USING btree (token_digest);
 
 
 --
@@ -494,6 +714,13 @@ CREATE INDEX index_users_on_system_role ON public.users USING btree (system_role
 
 
 --
+-- Name: audit_events audit_events_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER audit_events_are_append_only BEFORE DELETE OR UPDATE ON public.audit_events FOR EACH ROW EXECUTE FUNCTION public.prevent_audit_event_mutation();
+
+
+--
 -- Name: organization_memberships organization_must_have_active_owner; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -508,6 +735,14 @@ CREATE CONSTRAINT TRIGGER organization_must_have_active_owner AFTER INSERT ON pu
 
 
 --
+-- Name: audit_events fk_audit_events_actor_membership; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_events
+    ADD CONSTRAINT fk_audit_events_actor_membership FOREIGN KEY (organization_id, actor_user_id) REFERENCES public.organization_memberships(organization_id, user_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: organization_access_locators fk_org_access_locators_membership_identity; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -516,11 +751,43 @@ ALTER TABLE ONLY public.organization_access_locators
 
 
 --
+-- Name: organization_invitations fk_org_invitations_inviter_membership; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_invitations
+    ADD CONSTRAINT fk_org_invitations_inviter_membership FOREIGN KEY (organization_id, inviter_id) REFERENCES public.organization_memberships(organization_id, user_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: organization_access_locators fk_rails_1fbdd512c3; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.organization_access_locators
     ADD CONSTRAINT fk_rails_1fbdd512c3 FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: organization_invitations fk_rails_25f1cad884; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_invitations
+    ADD CONSTRAINT fk_rails_25f1cad884 FOREIGN KEY (inviter_id) REFERENCES public.users(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: audit_events fk_rails_2e3720791c; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_events
+    ADD CONSTRAINT fk_rails_2e3720791c FOREIGN KEY (actor_user_id) REFERENCES public.users(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: organization_invitations fk_rails_3046f3efef; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_invitations
+    ADD CONSTRAINT fk_rails_3046f3efef FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
 
 
 --
@@ -556,12 +823,21 @@ ALTER TABLE ONLY public.organization_access_locators
 
 
 --
+-- Name: audit_events fk_rails_be0ed9e37f; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_events
+    ADD CONSTRAINT fk_rails_be0ed9e37f FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20260716001730'),
 ('20260715170300'),
 ('20260715170200'),
 ('20260715170100'),

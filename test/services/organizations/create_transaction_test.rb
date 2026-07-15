@@ -1,8 +1,10 @@
 require "test_helper"
 require_relative "../../support/organization_test_helper"
+require_relative "../../support/audit_event_test_helper"
 
 class Organizations::CreateTransactionTest < ActiveSupport::TestCase
   include OrganizationTestHelper
+  include AuditEventTestHelper
 
   self.use_transactional_tests = false
 
@@ -15,6 +17,7 @@ class Organizations::CreateTransactionTest < ActiveSupport::TestCase
 
   teardown do
     Current.reset
+    clear_test_audit_events!
     Organization.where("slug LIKE ?", "commit-#{@suffix}%").find_each do |organization|
       Current.organization = organization
       Organization.transaction do

@@ -113,9 +113,10 @@ Additional rules:
 - Product usage for every role proceeds through the product gate below.
 
 The Tenancy module exposes the commands as `Organizations::Create`,
-`Organizations::Memberships::ChangeRole`, and
-`Organizations::Memberships::Remove`. `Remove` is a soft transition to
-`suspended`, never row deletion. Both membership commands require
+`Organizations::Memberships::ChangeRole`,
+`Organizations::Memberships::Remove`, and
+`Organizations::Memberships::Reactivate`. `Remove` is a soft transition to
+`suspended`, never row deletion. All membership commands require
 `Current.organization`, reload their target through its membership association,
 authorize the actor according to the matrix above, and lock the organization in
 the same transaction as the transition. Billing and member actors therefore
@@ -252,9 +253,12 @@ authoritative membership is always reloaded through `Current.organization`.
 
 ### 7.3 Pre-membership invitation acceptance
 
-The special route `/o/:organization_slug/invitations/:token/accept` resolves the
-public slug to a tentative organization root and sets `Current.organization`
-with no membership. It may then query only
+The special route `/o/:organization_slug/invitations/accept?token=...` resolves
+the public slug to a tentative organization root and sets
+`Current.organization` with no membership. The filtered token query parameter
+is never part of the route path or a persisted post-login destination. An
+unauthenticated recipient signs in or registers and then reopens the email
+link. The flow may then query only
 `Current.organization.organization_invitations`, compare the token digest, bind
 the authenticated normalized email, and validate expiry/state. On success, one
 transaction creates/reactivates the membership and access locator. No other

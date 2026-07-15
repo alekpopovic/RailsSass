@@ -6,6 +6,16 @@ class OrganizationMembership < ApplicationRecord
   has_one :organization_access_locator,
     dependent: :restrict_with_exception,
     inverse_of: :organization_membership
+  has_many :organization_invitations_as_inviter,
+    class_name: "OrganizationInvitation",
+    foreign_key: [ :organization_id, :inviter_id ],
+    primary_key: [ :organization_id, :user_id ],
+    dependent: :restrict_with_exception
+  has_many :audit_events_as_actor,
+    class_name: "AuditEvent",
+    foreign_key: [ :organization_id, :actor_user_id ],
+    primary_key: [ :organization_id, :user_id ],
+    dependent: :restrict_with_exception
 
   enum :role, {
     owner: "owner",

@@ -47,7 +47,7 @@
       </nav>
     </header>
 
-    <% if Current.organization.present? %>
+    <% if Current.organization.present? && Current.membership.present? %>
       <%= render "shared/tenant_navigation" %>
     <% end %>
 

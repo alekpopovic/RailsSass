@@ -25,6 +25,19 @@ class Organizations::Create
         user: user,
         organization: organization
       )
+      AuditEvents::Record.call(
+        organization: organization,
+        actor_user: user,
+        action: "organization.created",
+        subject: organization
+      )
+      AuditEvents::Record.call(
+        organization: organization,
+        actor_user: user,
+        action: "organization.membership.created",
+        subject: membership,
+        metadata: { organization_role: membership.role }
+      )
     end
 
     ActiveRecord.after_all_transactions_commit do

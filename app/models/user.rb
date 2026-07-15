@@ -13,6 +13,16 @@ class User < ApplicationRecord
   has_many :organization_access_locators,
     dependent: :restrict_with_exception,
     inverse_of: :user
+  has_many :sent_organization_invitations,
+    class_name: "OrganizationInvitation",
+    foreign_key: :inviter_id,
+    dependent: :restrict_with_exception,
+    inverse_of: :inviter
+  has_many :audit_events_as_actor,
+    class_name: "AuditEvent",
+    foreign_key: :actor_user_id,
+    dependent: :restrict_with_exception,
+    inverse_of: :actor_user
   has_many :organizations, through: :organization_memberships
 
   enum :system_role, { user: "user", platform_admin: "platform_admin" },

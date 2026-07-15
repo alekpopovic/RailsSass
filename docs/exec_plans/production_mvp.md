@@ -1,7 +1,7 @@
 # Production MVP Execution Plan
 
-Status: Proposed and implementation-ready
-Last updated: 2026-07-15
+Status: In progress
+Last updated: 2026-07-16
 Owner: Engineering
 
 ## 1. Objective
@@ -38,9 +38,9 @@ Implementation PRs may not silently change these decisions:
   slugs, and `active`/`suspended` status; memberships use
   `active`/`suspended` status and retain their original `joined_at`.
 - Organization roles: owner/admin/billing/member with the canonical matrix.
-- Tenancy owns `Organizations::Create` and
-  `Organizations::Memberships::{ChangeRole,Remove}`; `Remove` soft-suspends and
-  never deletes a membership row.
+- Tenancy owns `Organizations::Create`, invitation commands, and
+  `Organizations::Memberships::{ChangeRole,Remove,Reactivate}`; `Remove`
+  soft-suspends and never deletes a membership row.
 - Owner/admin have no product-access bypass.
 - Product access requires local subscription eligibility AND plan entitlement
   AND product membership/permission.
@@ -65,7 +65,7 @@ PR as implementation.
 
 ## 3. Current-state audit
 
-Observed on 2026-07-15:
+Observed on 2026-07-16:
 
 - The tracked Rails 8.1.3 application runs on Ruby 4.0.5 with PostgreSQL,
   Hotwire/importmap, Tailwind, Pundit, and Solid Queue/Cache/Cable.
@@ -76,8 +76,10 @@ Observed on 2026-07-15:
 - Organization and membership constraints, the deferred active-owner trigger,
   global access locators, path tenant bootstrap, organization shell, switcher,
   and base Pundit role policies exist.
-- Catalog, invitations, product RBAC/access, billing synchronization, audit,
-  and production hardening remain unimplemented milestones.
+- Organization invitations, audited member role/suspension/reactivation
+  commands, digest-only invitation tokens, and pre-membership acceptance exist.
+- Catalog, product RBAC/access, billing synchronization, and production
+  hardening remain unimplemented milestones.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
 

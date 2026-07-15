@@ -10,7 +10,12 @@ class Organizations::Memberships::Remove < Organizations::Memberships::Base
       Current.organization.organization_access_locators
         .where(organization_membership_id: target_membership.id)
         .delete_all
-      persist_transition!(scope, target_membership, status: "suspended")
+      updated_membership = persist_transition!(scope, target_membership, status: "suspended")
+      record_audit_event!(
+        action: "organization.membership.suspended",
+        subject: updated_membership
+      )
+      updated_membership
     end
   end
 end
