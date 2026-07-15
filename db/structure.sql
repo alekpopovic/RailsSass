@@ -128,8 +128,8 @@ CREATE TABLE public.organization_memberships (
     joined_at timestamp(6) without time zone NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT organization_memberships_role_allowed CHECK (((role)::text = ANY (ARRAY[('owner'::character varying)::text, ('admin'::character varying)::text, ('billing'::character varying)::text, ('member'::character varying)::text]))),
-    CONSTRAINT organization_memberships_status_allowed CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('suspended'::character varying)::text])))
+    CONSTRAINT organization_memberships_role_allowed CHECK (((role)::text = ANY ((ARRAY['owner'::character varying, 'admin'::character varying, 'billing'::character varying, 'member'::character varying])::text[]))),
+    CONSTRAINT organization_memberships_status_allowed CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying])::text[])))
 );
 
 
@@ -166,7 +166,7 @@ CREATE TABLE public.organizations (
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT organizations_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100)))),
     CONSTRAINT organizations_slug_format CHECK ((((slug)::text ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text) AND ((char_length((slug)::text) >= 1) AND (char_length((slug)::text) <= 63)))),
-    CONSTRAINT organizations_status_allowed CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('suspended'::character varying)::text])))
+    CONSTRAINT organizations_status_allowed CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying])::text[])))
 );
 
 
@@ -253,7 +253,7 @@ CREATE TABLE public.users (
     CONSTRAINT users_email_address_normalized CHECK ((((email_address)::text = lower(btrim((email_address)::text))) AND ((char_length((email_address)::text) >= 3) AND (char_length((email_address)::text) <= 254)))),
     CONSTRAINT users_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100)))),
     CONSTRAINT users_password_digest_present CHECK (((char_length((password_digest)::text) >= 1) AND (char_length((password_digest)::text) <= 255))),
-    CONSTRAINT users_system_role_allowed CHECK (((system_role)::text = ANY (ARRAY[('user'::character varying)::text, ('platform_admin'::character varying)::text])))
+    CONSTRAINT users_system_role_allowed CHECK (((system_role)::text = ANY ((ARRAY['user'::character varying, 'platform_admin'::character varying])::text[])))
 );
 
 
@@ -565,5 +565,6 @@ INSERT INTO "schema_migrations" (version) VALUES
 ('20260715170300'),
 ('20260715170200'),
 ('20260715170100'),
-('20260715170000');
+('20260715170000'),
+('0');
 
