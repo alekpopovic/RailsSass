@@ -1,4 +1,6 @@
 #!/usr/bin/env ruby
+ENV["RAILS_ENV"] = "test"
+
 require_relative "../config/boot"
 require "active_support/continuous_integration"
 

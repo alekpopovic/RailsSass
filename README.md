@@ -13,14 +13,12 @@ live Lemon Squeezy integration. The target behavior and delivery sequence are in
 
 ## Prerequisites
 
-- Ruby 4.0.5, as declared by `.ruby-version`
-- Bundler 4.0.14, as declared by `Gemfile.lock`
-- PostgreSQL with permission to create local development and test databases
-- Google Chrome or Chromium for system tests
-- Docker only if you prefer a containerized local PostgreSQL server
+- Docker with Docker Compose v2 for the default development PostgreSQL
+- For host Rails: Ruby 4.0.5, Bundler 4.0.14, and Google Chrome or Chromium
 
 The application uses gem-provided Importmap and Tailwind binaries, so Node.js is
-not required for this foundation.
+not required for this foundation. See the complete host and container workflows
+in [Development and CI](docs/development.md).
 
 ## Local setup
 
@@ -30,21 +28,11 @@ Install the matching Bundler version if necessary:
 gem install bundler -v 4.0.14
 ```
 
-PostgreSQL defaults to the current operating-system user over a local socket.
-Ensure that role exists and can create databases. For example, on a Linux host
-with PostgreSQL packages installed:
+Start the development PostgreSQL service and wait for its healthcheck, then run
+the idempotent setup:
 
 ```bash
-sudo -u postgres createuser --createdb "$USER"
-```
-
-If the role already exists, PostgreSQL will report that and no change is needed.
-
-Create the ignored local environment file, edit it only if your PostgreSQL
-connection differs from the socket default, and run the idempotent setup:
-
-```bash
-cp .env.example .env
+docker compose up --detach --wait postgres
 bin/setup --skip-server
 ```
 
@@ -52,26 +40,22 @@ bin/setup --skip-server
 clears stale logs and temporary files. Use `bin/setup --reset --skip-server` only
 when intentionally replacing local development data.
 
-### PostgreSQL with Docker
+The tracked `.env.example` contains only synthetic Compose credentials and is
+copied automatically when `.env` is absent. Native PostgreSQL remains supported
+by replacing or removing the standard `PG*` values in the ignored `.env`.
 
-As an alternative to a host PostgreSQL installation, start a disposable local
-server with synthetic development-only credentials:
+### Fully containerized development
+
+Rails can also run in the dedicated development image:
 
 ```bash
-docker run --name rails-sass-postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -p 5432:5432 \
-  -d postgres:17-alpine
+docker compose build app
+docker compose run --rm app bin/setup --skip-server
+docker compose up app
 ```
 
-Then set these values in the ignored `.env` before running `bin/setup`:
-
-```dotenv
-PGHOST=127.0.0.1
-PGPORT=5432
-PGUSER=postgres
-PGPASSWORD=postgres
-```
+The image includes Chromium/ChromeDriver, so
+`docker compose run --rm app bin/ci` executes the same quality gate as the host.
 
 ## Run the application
 
@@ -126,9 +110,10 @@ bin/bundler-audit
 bin/importmap audit
 ```
 
-`bin/ci` runs setup, the test suites, autoloading, style, and security checks in
-one local command. Set `TEST_WORKERS` to opt into parallel Minitest workers; the
-safe default is one worker until CI database isolation is proven.
+`bin/ci` forces the test environment and stops on the first failed dependency,
+style, database, test, autoload, or security gate. Run `bin/setup --skip-server`
+first on a clean checkout. Set `TEST_WORKERS` to opt into parallel Minitest
+workers; the safe default is one worker until CI database isolation is proven.
 
 ## Repository structure
 
@@ -139,13 +124,15 @@ safe default is one worker until CI database isolation is proven.
 - `docs/` — requirements, architecture, security, billing, ADRs, and execution plan
 - `public/` — static health-independent error pages and public assets
 - `bin/` — setup, development, test/quality, job, and deployment entrypoints
+- `compose.yaml` / `Dockerfile.dev` — local PostgreSQL and containerized development
 
 ## Configuration and secrets
 
-`.env.example` contains only commented examples and placeholders. `.env`, Rails key
-files, production credentials, Lemon keys, webhook secrets, and customer data
-must never be committed. Production values belong in the deployment secret
-store and must be passed through environment variables or Rails credentials.
+`.env.example` contains synthetic development-only values and placeholders.
+`.env`, Rails key files, production credentials, Lemon keys, webhook secrets,
+and customer data must never be committed. Production values belong in the
+deployment secret store and must be passed through environment variables or
+Rails credentials.
 
 Kamal files are still generator-level placeholders. Do not deploy them as-is;
 the production topology, hosts, registry, TLS settings, database credentials,

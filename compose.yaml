@@ -1,0 +1,53 @@
+name: rails-sass-development
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      POSTGRES_DB: rails_sass_development
+      POSTGRES_PASSWORD: rails_sass
+      POSTGRES_USER: rails_sass
+    ports:
+      - "${PGPORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        USER_ID: "${LOCAL_UID:-1000}"
+        GROUP_ID: "${LOCAL_GID:-1000}"
+    command: bin/dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BINDING: 0.0.0.0
+      FOREMAN_ENV: /dev/null
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: rails_sass
+      PGPASSWORD: rails_sass
+      PORT: 3000
+      TEST_WORKERS: "${TEST_WORKERS:-1}"
+    init: true
+    ports:
+      - "${PORT:-3000}:3000"
+    shm_size: 256mb
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/rails
+      - bundle_data:/usr/local/bundle
+
+volumes:
+  bundle_data:
+  postgres_data:

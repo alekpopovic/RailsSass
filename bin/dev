@@ -8,4 +8,4 @@ export PORT="${PORT:-3000}"
 export RUBY_DEBUG_OPEN="true"
 export RUBY_DEBUG_LAZY="true"
 
-exec bundle exec foreman start -f Procfile.dev "$@"
+exec bundle exec foreman start -f Procfile.dev -e "${FOREMAN_ENV:-.env}" "$@"

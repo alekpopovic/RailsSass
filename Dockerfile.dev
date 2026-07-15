@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+
+ARG RUBY_VERSION=4.0.5
+FROM docker.io/library/ruby:${RUBY_VERSION}-slim@sha256:42ad5227a4b2758f32563b34b5967e1055e75c80243eef04e6d2572887d1dec4
+
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+
+WORKDIR /rails
+
+ENV BUNDLE_PATH="/usr/local/bundle"
+
+RUN apt-get update -qq && \
+    apt-get install --no-install-recommends -y \
+      build-essential \
+      chromium \
+      chromium-driver \
+      git \
+      libpq-dev \
+      libvips \
+      libyaml-dev \
+      pkg-config \
+      postgresql-client && \
+    rm -rf /var/lib/apt/lists /var/cache/apt/archives && \
+    groupadd --gid "${GROUP_ID}" rails && \
+    useradd rails --uid "${USER_ID}" --gid "${GROUP_ID}" --create-home --shell /bin/bash && \
+    chown rails:rails /rails
+
+COPY Gemfile Gemfile.lock ./
+RUN bundle install && chown -R rails:rails "${BUNDLE_PATH}"
+
+COPY --chown=rails:rails . .
+
+USER rails:rails
+
+EXPOSE 3000
+
+CMD [ "bin/dev" ]

@@ -35,6 +35,8 @@ to discard changes that are not yours.
 - `test/` — Minitest suites mirroring application boundaries.
 - `docs/` — normative product, architecture, security, billing, ADR, and plan
   documents. Update them when an implementation changes a documented contract.
+- `compose.yaml` and `Dockerfile.dev` — reproducible local PostgreSQL and the
+  optional containerized Rails development process.
 
 The application is a modular monolith, not a collection of Rails engines.
 Domain code is grouped by clear namespaces and dependency boundaries documented
@@ -43,6 +45,9 @@ in `docs/architecture.md`.
 ## Commands
 
 ```bash
+# Start development PostgreSQL and wait until it is healthy
+docker compose up --detach --wait postgres
+
 # Install dependencies and prepare PostgreSQL
 bin/setup --skip-server
 
@@ -68,6 +73,14 @@ bin/importmap audit
 # Combined local CI sequence
 bin/ci
 ```
+
+`bin/ci` always runs with `RAILS_ENV=test` and stops at the first failed gate.
+It verifies the locked bundle and dependency advisories, runs RuboCop, prepares
+the test database, builds Tailwind, runs Rails and (when present) system tests,
+checks autoloading, and finishes with Brakeman. Run `bin/setup --skip-server`
+first on a clean checkout; `bin/ci` intentionally does not install gems or
+modify local environment files. The equivalent container command is
+`docker compose run --rm app bin/ci`.
 
 Use focused test paths while iterating, then run every relevant full command
 before handoff. A command that was not run must be reported as not run, never as

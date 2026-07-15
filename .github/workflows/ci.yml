@@ -5,63 +5,96 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
-  scan_ruby:
+  quality_gate:
     runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          bundler-cache: true
-
-      - name: Scan for common Rails security vulnerabilities using static analysis
-        run: bin/brakeman --no-pager
-      
-      - name: Scan for known security vulnerabilities in gems used
-        run: bin/bundler-audit
-      
-  scan_js:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          bundler-cache: true
-
-      - name: Scan for security vulnerabilities in JavaScript dependencies
-        run: bin/importmap audit
-
-  lint:
-    runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
-      RUBOCOP_CACHE_ROOT: tmp/rubocop
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      RAILS_ENV: test
+      TEST_WORKERS: 1
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+        env:
+          POSTGRES_DB: rails_sass_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rails_sass_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
+      - name: Set up Ruby and locked gems
+        uses: ruby/setup-ruby@8e41b362d2589a22a44c1cfa214b3c83052c195b # v1.318.0
         with:
           bundler-cache: true
 
-      - name: Prepare RuboCop cache
-        uses: actions/cache@v4
-        env:
-          DEPENDENCIES_HASH: ${{ hashFiles('.ruby-version', '**/.rubocop.yml', '**/.rubocop_todo.yml', 'Gemfile.lock') }}
+      - name: Run the quality gate
+        run: bin/ci
+
+      - name: Upload test diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          path: ${{ env.RUBOCOP_CACHE_ROOT }}
-          key: rubocop-${{ runner.os }}-${{ env.DEPENDENCIES_HASH }}-${{ github.ref_name == github.event.repository.default_branch && github.run_id || 'default' }}
-          restore-keys: |
-            rubocop-${{ runner.os }}-${{ env.DEPENDENCIES_HASH }}-
+          name: test-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            log/test.log
+            tmp/capybara/
+            tmp/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
 
-      - name: Lint code for consistent style
-        run: bin/rubocop -f github
+  image_smoke:
+    needs: quality_gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Build production image
+        run: docker build --tag rails-sass:ci .
+
+      - name: Start production web image without deployment credentials
+        run: >-
+          docker run --detach
+          --name rails-sass-ci-web
+          --publish 3000:80
+          --env SECRET_KEY_BASE_DUMMY=1
+          --entrypoint /rails/bin/thrust
+          rails-sass:ci
+          ./bin/rails server
+
+      - name: Verify production web boot
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/up > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          exit 1
+
+      - name: Print container logs on failure
+        if: ${{ failure() }}
+        run: docker logs rails-sass-ci-web || true
+
+      - name: Remove smoke-test container
+        if: ${{ always() }}
+        run: docker rm --force rails-sass-ci-web || true

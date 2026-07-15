@@ -1,18 +1,27 @@
 # Run using bin/ci
 
 CI.run do
-  step "Setup", "bin/setup --skip-server"
+  quality_gate_steps = [
+    [ "Dependencies: Locked bundle", "bundle", "check" ],
+    [ "Security: Gem audit", "bin/bundler-audit", "check", "--update" ],
+    [ "Security: Importmap vulnerability audit", "bin/importmap", "audit" ],
+    [ "Style: Ruby", "bin/rubocop" ],
+    [ "Database: Prepare test database", "bin/rails", "db:prepare" ],
+    [ "Assets: Tailwind CSS", "bin/rails", "tailwindcss:build" ],
+    [ "Tests: Rails", "bin/rails", "test" ],
+    [ "Autoloading", "bin/rails", "zeitwerk:check" ],
+    [ "Security: Brakeman code analysis", "bin/brakeman", "--quiet", "--no-pager", "--exit-on-warn", "--exit-on-error" ]
+  ]
 
-  step "Assets: Tailwind CSS", "bin/rails tailwindcss:build"
-  step "Tests: Rails", "bin/rails test"
-  step "Tests: System", "bin/rails test:system"
-  step "Autoloading", "bin/rails zeitwerk:check"
+  system_test_pattern = File.expand_path("../test/system/**/*_test.rb", __dir__)
+  if Dir[system_test_pattern].any?
+    quality_gate_steps.insert(7, [ "Tests: System", "bin/rails", "test:system" ])
+  end
 
-  step "Style: Ruby", "bin/rubocop"
-
-  step "Security: Gem audit", "bin/bundler-audit"
-  step "Security: Importmap vulnerability audit", "bin/importmap audit"
-  step "Security: Brakeman code analysis", "bin/brakeman --quiet --no-pager --exit-on-warn --exit-on-error"
+  quality_gate_steps.each do |title, *command|
+    step title, *command
+    break unless success?
+  end
 
   # Optional: set a green GitHub commit status to unblock PR merge.
   # Requires the `gh` CLI and `gh extension install basecamp/gh-signoff`.
