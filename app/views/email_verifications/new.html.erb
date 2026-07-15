@@ -1,0 +1,19 @@
+<% content_for :title, "Resend verification" %>
+
+<section class="mx-auto max-w-md py-12 sm:py-16" aria-labelledby="verification-request-title">
+  <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+    <h1 id="verification-request-title" class="text-2xl font-bold tracking-tight text-slate-950">Resend verification</h1>
+    <p class="mt-2 text-sm text-slate-600">We will send instructions if the account is eligible.</p>
+
+    <%= form_with url: email_verification_path, class: "mt-6 space-y-5" do |form| %>
+      <div>
+        <%= form.label :email_address, "Email address", class: "block text-sm font-medium text-slate-700" %>
+        <%= form.email_field :email_address, required: true, autofocus: true, autocomplete: "email", class: "mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+      </div>
+
+      <%= form.submit "Send verification instructions", class: "w-full cursor-pointer rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+    <% end %>
+
+    <p class="mt-6 text-center text-sm"><%= link_to "Back to sign in", new_session_path, class: "font-semibold text-indigo-700 hover:text-indigo-600" %></p>
+  </div>
+</section>

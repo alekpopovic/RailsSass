@@ -48,8 +48,11 @@ redirect or an outbound provider API response never grants access.
 ### 4.1 User
 
 A global account that can authenticate and hold memberships in multiple
-organizations. A user has no tenant access without an active organization
-membership.
+organizations. Registration creates only this global account and does not
+create an organization. A user must verify the current normalized email and
+remain enabled before authenticating, and has no tenant access without an
+active organization membership. Every user has a system role of `user` or
+`platform_admin`; the MVP exposes no platform-admin interface.
 
 ### 4.2 Organization roles
 
@@ -104,8 +107,20 @@ has no explicit deny permission and no tenant-defined custom roles.
 
 ### 6.1 Identity and tenancy
 
-- Email/password authentication, logout, session revocation, and password
-  reset using Rails-native primitives.
+- Email/password registration, verification, authentication, logout, session
+  revocation, and password reset using Rails-native primitives. Registration
+  never creates an organization.
+- Unverified and disabled accounts cannot establish sessions. Registration
+  duplicates, login, recovery, and verification-delivery responses are generic
+  where account disclosure is possible, and the endpoints have separate rate
+  limits.
+- Password-reset tokens are Rails signed, state-bound, single-use, and expire
+  after 15 minutes; email-verification tokens have the same properties and
+  expire after 24 hours. Token-bearing `GET` requests only render confirmation;
+  CSRF-protected `PATCH` requests perform the mutation.
+- Sessions are server-side, rotate on authentication, expire after 30 days,
+  and store only a SHA-256 digest of the opaque cookie token. Redirects after
+  authentication accept only validated internal application locations.
 - Organization creation with a globally unique, normalized, immutable slug.
 - Organization switcher for users with multiple active memberships.
 - Email invitation flow with an expiring, single-use token. An invitation does
@@ -275,7 +290,8 @@ has no explicit deny permission and no tenant-defined custom roles.
 
 The MVP is acceptable when all of the following are demonstrated:
 
-1. A user can authenticate, join multiple organizations, and switch tenants.
+1. A user can register without implicitly creating an organization, verify the
+   email, authenticate, join multiple organizations, and switch tenants.
 2. A guessed organization slug or tenant record ID cannot cross tenant
    boundaries.
 3. The organization role matrix is server-enforced, including the last-owner

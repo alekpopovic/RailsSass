@@ -1,0 +1,29 @@
+<% content_for :title, "Sign in" %>
+
+<section class="mx-auto max-w-md py-12 sm:py-16" aria-labelledby="session-title">
+  <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+    <h1 id="session-title" class="text-2xl font-bold tracking-tight text-slate-950">Sign in</h1>
+
+    <%= form_with url: session_path, class: "mt-6 space-y-5" do |form| %>
+      <div>
+        <%= form.label :email_address, "Email address", class: "block text-sm font-medium text-slate-700" %>
+        <%= form.email_field :email_address, required: true, autofocus: true, autocomplete: "username", value: params[:email_address], class: "mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+      </div>
+
+      <div>
+        <div class="flex items-center justify-between gap-4">
+          <%= form.label :password, class: "block text-sm font-medium text-slate-700" %>
+          <%= link_to "Forgot password?", new_password_path, class: "text-sm font-semibold text-indigo-700 hover:text-indigo-600" %>
+        </div>
+        <%= form.password_field :password, required: true, autocomplete: "current-password", class: "mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+      </div>
+
+      <%= form.submit "Sign in", class: "w-full cursor-pointer rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+    <% end %>
+
+    <div class="mt-6 space-y-2 text-center text-sm text-slate-600">
+      <p>Need an account? <%= link_to "Register", new_registration_path, class: "font-semibold text-indigo-700 hover:text-indigo-600" %></p>
+      <p>Verification link expired? <%= link_to "Send another", new_email_verification_path, class: "font-semibold text-indigo-700 hover:text-indigo-600" %></p>
+    </div>
+  </div>
+</section>

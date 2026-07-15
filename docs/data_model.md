@@ -18,7 +18,8 @@ Behavioral interpretation is defined in
 - PostgreSQL is authoritative. All required associations have foreign keys and
   supporting indexes.
 - Rails bigint primary keys are used for internal records. Public security
-  tokens use UUIDs or high-entropy random tokens.
+  tokens use UUIDs, high-entropy random tokens, or purpose-scoped Rails signed
+  tokens whose expiry and invalidating state are explicit.
 - Every table has non-null `created_at` and `updated_at` unless explicitly an
   append-only ledger with a more specific timestamp.
 - Required strings are `NOT NULL` and protected by a non-blank `btrim` check.
@@ -83,31 +84,56 @@ erDiagram
 
 Planned columns:
 
+- `name`: trimmed, non-blank text, not null.
 - `email_address`: normalized lowercase text, not null.
 - `password_digest`: not null.
+- `email_verified_at`: nullable; non-null means the current normalized email
+  address has been verified.
+- `system_role`: `user` or `platform_admin`, not null, default `user`.
 - `disabled_at`: nullable; non-null means the account cannot authenticate or
   authorize.
 
 Constraints and indexes:
 
 - unique functional index on `lower(email_address)`;
-- check that the stored value is trimmed, lowercase, and non-blank;
-- disabled users cannot establish a new session or tenant context;
+- checks that `name` is trimmed/non-blank and that the stored email is trimmed,
+  lowercase, and non-blank;
+- check that `system_role` is in the allowlist; the default role is `user` and
+  no platform-admin interface is part of the MVP;
+- unverified or disabled users cannot establish a new session or tenant
+  context;
 - disabling an account is allowed only through the locked ownership service
   described below.
 
 Authentication secrets are one-way digests. Plain passwords are never stored.
+Registration creates only the global account and sends verification; it does
+not create an organization or tenant membership.
 
 ### 5.2 `Session` / `sessions`
 
 - `user_id`: not-null foreign key to `users`, `ON DELETE CASCADE`; sessions are
   ephemeral, while any future user hard-deletion workflow remains separately
   authorized and audited.
-- token/digest fields as produced by the Rails authentication implementation.
+- `token_digest`: not-null lowercase 64-character SHA-256 hex digest of an
+  opaque high-entropy cookie token; globally unique. The raw token is persisted
+  only in the browser cookie, handled transiently by the request, and never
+  stored server-side or logged.
+- `expires_at`: not null and set to 30 days after session creation.
 - optional `ip_address`, `user_agent`, and `last_seen_at`, with bounded lengths.
 
-Index `user_id`; session tokens/digests are globally unique. Session revocation
-does not delete business history.
+Index `user_id`; add a unique index and lowercase-hex shape check for
+`token_digest`, plus a check that `expires_at > created_at`. A login rotates
+browser and server session state. Logout, password reset, account disablement,
+and security-sensitive changes revoke applicable server-side sessions without
+deleting business history.
+
+Password reset and email verification do not add plaintext-token columns.
+They use purpose-scoped Rails signed tokens bound to invalidating user state.
+Password-reset tokens expire after 15 minutes and become invalid when the
+password changes; email-verification tokens expire after 24 hours and become
+invalid when the current email is verified or changed. Successful mutation is
+therefore single-use. Token-bearing `GET` requests render confirmation only;
+the state transition requires a CSRF-protected `PATCH`.
 
 ### 5.3 `Organization` / `organizations`
 

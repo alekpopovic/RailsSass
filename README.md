@@ -4,8 +4,9 @@ This repository is the executable foundation for a modular-monolith SaaS built
 with Rails 8.1, PostgreSQL, Hotwire, Tailwind CSS, Pundit, Solid Queue, Propshaft,
 Faraday, and Minitest.
 
-The current slice intentionally contains no domain models, tenant behavior, or
-live Lemon Squeezy integration. The target behavior and delivery sequence are in
+The current slice contains global email/password authentication but intentionally
+has no organization, tenant-owned domain models, or live Lemon Squeezy integration.
+Registration never creates an organization. The target behavior and delivery sequence are in
 [`docs/`](docs/), beginning with the
 [product requirements](docs/product_requirements.md),
 [architecture](docs/architecture.md), and
@@ -67,6 +68,11 @@ bin/dev
 
 Open <http://localhost:3000>. The liveness endpoint is
 <http://localhost:3000/up>.
+
+New accounts must verify their email address before signing in. Development does
+not send mail to a real provider; inspect deliveries through the configured local
+mailer workflow or exercise links in tests. Production must set `APP_HOST`,
+`MAILER_FROM`, and a real delivery adapter through its secret/configuration store.
 
 The application operates in `Europe/Belgrade`; Active Record persists database
 timestamps in UTC.

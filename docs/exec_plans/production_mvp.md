@@ -227,12 +227,27 @@ Depends on: PR-02.
 
 Scope:
 
-- Use Rails-native authentication primitives for `User`, `Session`, login,
-  logout, password reset, and account disable checks.
-- Normalize `email_address`; add password digest and session rotation/revocation.
+- Use Rails-native authentication primitives for registration, email
+  verification, `User`, `Session`, login, logout, password reset, and account
+  disable checks. Registration creates no organization or membership.
+- Add a required non-blank `name`; normalize `email_address`; add password
+  digest, nullable `email_verified_at`, and `system_role` with a database-backed
+  `user`/`platform_admin` allowlist and default `user`. Do not expose a
+  platform-admin interface.
+- Deny session creation to unverified or disabled users with the same generic
+  response used for unknown email and wrong password.
+- Use separate, state-bound Rails signed tokens: password reset expires after
+  15 minutes and email verification after 24 hours. A successful mutation
+  invalidates its token. Token-bearing `GET` actions render confirmation only;
+  CSRF-protected `PATCH` actions mutate state, and query/form token parameters
+  are filtered from logs.
+- Store server-side sessions for 30 days using only a unique SHA-256 digest of
+  an opaque raw cookie token. Rotate sessions on login and revoke them on
+  logout, password reset, disablement, and security-sensitive changes.
 - Keep account routes outside `/o/:organization_slug`.
-- Add generic non-enumerating authentication/reset responses and enforce
-  endpoint-specific login/reset rate limits in this PR.
+- Validate post-login redirects as internal application locations with a fixed
+  fallback. Add generic non-enumerating authentication/recovery responses and
+  enforce endpoint-specific registration/login/reset/verification rate limits.
 - Ship responsive Tailwind authentication/reset forms with semantic labels,
   keyboard operation, focus handling, and clear inline/error-summary feedback.
 - Add concrete nullable `disabled_at` and deny disabled authentication. Do not
@@ -241,22 +256,30 @@ Scope:
 
 Migrations:
 
-- `users`: unique normalized email, non-blank/normalization checks, password
-  digest, nullable `disabled_at`.
-- `sessions`: user FK/index and unique token/digest fields per chosen Rails
-  implementation.
+- `users`: non-blank name, unique normalized email, non-blank/normalization
+  checks, password digest, nullable `email_verified_at`, non-null `system_role`
+  defaulting to `user` with an allowed-values check, and nullable `disabled_at`.
+- `sessions`: non-null user FK with `ON DELETE CASCADE`, user index, unique
+  constrained SHA-256 token digest, and non-null expiry.
 
 Tests:
 
-- database constraints and duplicate/case-normalized email;
-- login/logout/session rotation/revocation;
-- disabled user denial;
-- reset expiry/single use/non-enumeration;
+- database constraints, role default/allowlist, and duplicate/case-normalized
+  email;
+- registration without organization creation and email verification;
+- login/logout/session rotation/revocation/expiry;
+- unverified and disabled user denial with generic responses;
+- reset and verification expiry/single use/non-enumeration plus redacted query
+  and form token logs;
+- safe internal post-login redirect and malicious redirect fallback;
+- endpoint-specific authentication rate limits;
 - CSRF and secure cookie configuration behavior;
-- system test for keyboard-only login/reset and responsive error presentation.
+- system test for keyboard-only registration/login/reset/verification and
+  responsive error presentation.
 
-Acceptance: authentication establishes `Current.user` only; it grants no
-organization access.
+Acceptance: a verified enabled user can establish `Current.user`; registration
+creates no organization, and authentication alone grants no organization
+access. Raw session/reset/verification tokens are neither persisted nor logged.
 
 ### PR-04: Add organizations and membership invariants
 
@@ -1031,7 +1054,7 @@ baseline evidence.
 | ID | Acceptance criterion | Primary evidence/PR |
 | --- | --- | --- |
 | A1 | Fresh setup prepares PostgreSQL and runs Minitest/quality checks | PR-01–02 CI |
-| A2 | User authenticates, resets password, and session revokes safely | PR-03 tests/system flow |
+| A2 | User registers without an organization, verifies/authenticates, resets password, and session revokes safely | PR-03 tests/system flow |
 | A3 | User belongs to/switches multiple organizations through path tenancy | PR-04–06 request/system tests |
 | A4 | Non-member slug and guessed cross-tenant IDs expose/mutate nothing | PR-05 plus every tenant PR |
 | A5 | Role matrix and concurrent last-owner invariant are exact | PR-04/06 policy+concurrency tests |

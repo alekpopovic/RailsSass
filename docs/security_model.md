@@ -22,8 +22,8 @@ not a control.
    not granted.
 3. Prevent forged, replayed, reordered, or confused billing messages from
    over-granting plan access.
-4. Protect credentials, authentication tokens, invitation/reset tokens,
-   provider URLs, and sensitive customer data from disclosure.
+4. Protect credentials, authentication tokens, invitation/reset/verification
+   tokens, provider URLs, and sensitive customer data from disclosure.
 5. Preserve authorization integrity during concurrency, retries, deployment,
    and partial failure.
 6. Keep production recoverable through backups, observable queues, and bounded
@@ -34,7 +34,7 @@ not a control.
 | Class | Examples | Required handling |
 | --- | --- | --- |
 | Secret | Rails master key, database password/URL, Lemon API keys, webhook secrets, mail credentials | Secret manager/Kamal environment only; never repository, logs, browser, fixtures, or docs |
-| Authentication token | Session token, password reset token, invitation token | High entropy; one-way digest at rest where usable; single-use/expiry; never log |
+| Authentication token | Session, password-reset, email-verification, invitation token | Opaque tokens are high entropy and one-way digested at rest; Rails signed account tokens are purpose/expiry/state bound; never log |
 | Sensitive signed URL | Checkout URL, customer portal/payment-method URL | Return only after authorization; short-lived; do not log; portal URL not persisted; checkout URL encrypted and short-retained only if necessary |
 | PII | Email address, optional billing/customer identifiers, IP/user agent | Minimize, access-control, redact logs, retain only for defined purpose |
 | Tenant business data | Organization memberships, product resources, assignments, usage | Non-null tenant ownership, scoped query, policy, database constraints, backup encryption |
@@ -82,7 +82,7 @@ are never stored.
 | Credential stuffing | Automated login/reset/invite guessing | Generic responses, rate limiting, strong password hashing, token entropy/expiry, alerting | Throttle and enumeration tests |
 | XSS | User-controlled organization name injects script | Rails escaping, sanitized rich text only, no unsafe HTML, CSP, no secret-bearing JS | View/security-header tests and Brakeman |
 | SQL injection/mass assignment | Crafted sort/filter/role parameter changes arbitrary data | Active Record bind values, allowlisted sort/filter, strong parameters, server-resolved role transitions | Request/unit tests and static analysis |
-| Open redirect | Client changes billing return/provider URL | Canonical application return paths, allowed provider host/scheme, no arbitrary redirect params | Redirect validation tests |
+| Open redirect | Client changes login return location or billing return/provider URL | Validate login destinations as internal application locations; use canonical billing return paths and allowlisted provider host/scheme | Redirect validation tests |
 | Sensitive logging | Payload/email/signature/portal URL appears in logs | Parameter/header filtering, structured reason codes, no raw body logging, exception scrubbing | Log-capture tests |
 | Queue abuse/failure | Large webhook bodies fill storage or worker outage leaves state pending | Body/rate limits, fast durable receipt, separate worker, queue backpressure, sweeper, age alerts | Size/load/recovery drills |
 | Database corruption/loss | Constraint omission or failed host loses authorization state | FKs/checks/unique indexes, managed PostgreSQL, encrypted backups, point-in-time recovery where available, restore drill | Constraint suite and restore evidence |
@@ -117,17 +117,38 @@ controllers.
 
 - Use Rails-native password authentication with a current secure password
   digest algorithm and framework defaults.
-- Normalize email consistently in application and database; avoid revealing
-  whether an email exists in login/reset responses.
-- Rotate the session on authentication and revoke server-side sessions on
-  logout, password reset, account disablement, and security-sensitive changes.
+- Normalize email consistently in application and database. Registration
+  creates a global account only and never creates an organization; an existing
+  normalized email receives no account-existence-revealing response.
+- Require the current normalized email to be verified and the account to be
+  enabled before session creation. Use the same generic login failure for an
+  unknown email, wrong password, unverified account, and disabled account; use
+  generic reset and verification-delivery responses as well.
+- Store sessions server-side. Persist an opaque high-entropy raw token only in
+  an `HttpOnly` cookie, handle it transiently during authentication, persist
+  only its SHA-256 digest server-side, expire it after 30 days, and rotate
+  browser/server session state on authentication. Revoke applicable sessions
+  on logout, password reset, account disablement, and other security-sensitive
+  changes.
 - Account disablement locks affected organizations and is rejected if it would
   leave any organization without another enabled active owner.
 - Cookies are `HttpOnly`, `Secure` in production, and an appropriate `SameSite`
   setting. All production traffic uses HTTPS.
-- Password reset and invitation tokens are random, time-limited, single-use, and
-  stored as digests. Acceptance is bound to the authenticated normalized email.
-- Rate-limit login, reset, invitation acceptance, checkout creation, and webhook
+- Password reset uses a purpose-scoped Rails signed token that expires after 15
+  minutes and is bound to password state; email verification uses a separate
+  signed token that expires after 24 hours and is bound to the normalized email
+  and verification state. A successful state change invalidates either token,
+  making it single-use. Invitation tokens remain random, expiring, single-use,
+  digest-only values bound to the authenticated normalized email.
+- Filter reset and verification token keys in both query and form parameters.
+  A token-bearing `GET` only renders confirmation; a CSRF-protected `PATCH`
+  performs the reset or verification. Tokens never appear in route path
+  segments or logs.
+- Validate every post-login destination as an internal application location;
+  reject protocol-relative, absolute external, and malformed destinations and
+  fall back to a fixed internal path.
+- Rate-limit registration, login, reset request/update, verification
+  delivery/confirmation, invitation acceptance, checkout creation, and webhook
   ingress at the proxy and/or application with separate thresholds.
 - MFA/SSO are out of MVP, so owner/billing accounts carry residual phishing
   risk. This is documented and revisited before enterprise onboarding.
@@ -201,7 +222,8 @@ properties are:
   contain names/placeholders only.
 - Limit credential access by environment and process. Web workers need only
   required keys; database and provider keys use least privilege available.
-- Rotate sessions/reset/invitation secrets through framework-supported methods;
+- Rotate session/reset/verification/invitation secrets through
+  framework-supported methods;
   rotate Lemon signing secrets with an explicitly timed current/previous window.
 - Secret values are filtered from exceptions, job arguments, Rails parameter
   logs, shell history, CI output, and monitoring tags.
@@ -231,7 +253,8 @@ properties are:
 
 Logs use stable IDs and reason codes. Do not log:
 
-- passwords, session/reset/invitation tokens;
+- passwords, password confirmations, and session/reset/verification/invitation
+  tokens;
 - authorization/API headers, cookies, webhook signature or body;
 - Lemon API keys, checkout or portal URLs;
 - unnecessary email/name/address/payment metadata.
@@ -315,6 +338,8 @@ Deployment requirements:
 - HMAC, replay, ordering, variant/environment mismatch, redirect-no-grant, and
   status matrix billing tests.
 - CSRF, open redirect, log redaction, body limit, and rate-limit tests.
+- Registration/verification gating, reset/verification expiry and reuse,
+  session rotation/revocation/expiry, and generic-response enumeration tests.
 - Brakeman, dependency audits, RuboCop, eager-load and image-build checks.
 
 ### Manual/staging
