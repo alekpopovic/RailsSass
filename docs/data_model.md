@@ -163,7 +163,7 @@ There is no `owner_id` column. Ownership has one source:
 For verified and authenticated onboarding, `Organizations::Create` inserts the
 active organization and first active owner membership in one database
 transaction after locking and validating the authoritative user row. It assigns
-`Current.organization` and `Current.organization_membership` only after the
+`Current.organization` and `Current.membership` only after the
 outermost database transaction commits.
 Registration and email verification do not invoke this command automatically.
 
@@ -200,18 +200,17 @@ does not change `joined_at`. `Organizations::Memberships::ChangeRole` and
 `Current.organization.organization_memberships`, lock the organization, and
 prevent demoting or suspending the final **active** owner. Multiple active owners
 are valid. A separate access-eligible owner is an active owner membership whose
-user is not disabled. The global account-disable guard is added with the
-locator/path bootstrap follow-up: it enumerates only access-locator candidates,
-establishes each `Current.organization`, and locks roots in stable ID order before
-allowing a disable transition that would leave no access-eligible owner.
+user is not disabled. Before an account-disable mutation is exposed, its global
+guard must enumerate only access-locator candidates, establish each
+`Current.organization`, and lock roots in stable ID order before allowing a
+disable transition that would leave no access-eligible owner.
 
 ### 5.5 `OrganizationAccessLocator` / `organization_access_locators`
 
 A global, non-authoritative discovery index for authenticated organization
-switching and path bootstrap. This table is intentionally introduced in the
-path-bootstrap follow-up, not the initial organization-foundation change. That
-follow-up backfills all existing active memberships and completes successfully
-before any ordinary tenant path is enabled.
+switching and path bootstrap. It was introduced after the initial organization
+foundation; its migration backfills all existing active memberships and must
+complete successfully before ordinary tenant paths are enabled.
 
 - `organization_membership_id`, `user_id`, `organization_id`: not null.
 

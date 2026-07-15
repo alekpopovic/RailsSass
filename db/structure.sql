@@ -83,6 +83,39 @@ CREATE TABLE public.ar_internal_metadata (
 
 
 --
+-- Name: organization_access_locators; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.organization_access_locators (
+    id bigint NOT NULL,
+    organization_membership_id bigint NOT NULL,
+    user_id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL
+);
+
+
+--
+-- Name: organization_access_locators_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.organization_access_locators_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: organization_access_locators_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.organization_access_locators_id_seq OWNED BY public.organization_access_locators.id;
+
+
+--
 -- Name: organization_memberships; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -95,8 +128,8 @@ CREATE TABLE public.organization_memberships (
     joined_at timestamp(6) without time zone NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT organization_memberships_role_allowed CHECK (((role)::text = ANY ((ARRAY['owner'::character varying, 'admin'::character varying, 'billing'::character varying, 'member'::character varying])::text[]))),
-    CONSTRAINT organization_memberships_status_allowed CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying])::text[])))
+    CONSTRAINT organization_memberships_role_allowed CHECK (((role)::text = ANY (ARRAY[('owner'::character varying)::text, ('admin'::character varying)::text, ('billing'::character varying)::text, ('member'::character varying)::text]))),
+    CONSTRAINT organization_memberships_status_allowed CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('suspended'::character varying)::text])))
 );
 
 
@@ -133,7 +166,7 @@ CREATE TABLE public.organizations (
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT organizations_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100)))),
     CONSTRAINT organizations_slug_format CHECK ((((slug)::text ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text) AND ((char_length((slug)::text) >= 1) AND (char_length((slug)::text) <= 63)))),
-    CONSTRAINT organizations_status_allowed CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying])::text[])))
+    CONSTRAINT organizations_status_allowed CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('suspended'::character varying)::text])))
 );
 
 
@@ -244,6 +277,13 @@ ALTER SEQUENCE public.users_id_seq OWNED BY public.users.id;
 
 
 --
+-- Name: organization_access_locators id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_access_locators ALTER COLUMN id SET DEFAULT nextval('public.organization_access_locators_id_seq'::regclass);
+
+
+--
 -- Name: organization_memberships id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -277,6 +317,14 @@ ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_
 
 ALTER TABLE ONLY public.ar_internal_metadata
     ADD CONSTRAINT ar_internal_metadata_pkey PRIMARY KEY (key);
+
+
+--
+-- Name: organization_access_locators organization_access_locators_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_access_locators
+    ADD CONSTRAINT organization_access_locators_pkey PRIMARY KEY (id);
 
 
 --
@@ -327,6 +375,20 @@ CREATE INDEX idx_on_organization_id_status_role_ce3565acf4 ON public.organizatio
 
 
 --
+-- Name: idx_on_organization_membership_id_c0ffad9c57; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_on_organization_membership_id_c0ffad9c57 ON public.organization_access_locators USING btree (organization_membership_id);
+
+
+--
+-- Name: index_org_access_locators_on_user_and_organization; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_org_access_locators_on_user_and_organization ON public.organization_access_locators USING btree (user_id, organization_id);
+
+
+--
 -- Name: index_org_memberships_on_id_and_organization_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -338,6 +400,20 @@ CREATE UNIQUE INDEX index_org_memberships_on_id_and_organization_id ON public.or
 --
 
 CREATE UNIQUE INDEX index_org_memberships_on_id_user_id_organization_id ON public.organization_memberships USING btree (id, user_id, organization_id);
+
+
+--
+-- Name: index_organization_access_locators_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_organization_access_locators_on_organization_id ON public.organization_access_locators USING btree (organization_id);
+
+
+--
+-- Name: index_organization_access_locators_on_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_organization_access_locators_on_user_id ON public.organization_access_locators USING btree (user_id);
 
 
 --
@@ -432,6 +508,22 @@ CREATE CONSTRAINT TRIGGER organization_must_have_active_owner AFTER INSERT ON pu
 
 
 --
+-- Name: organization_access_locators fk_org_access_locators_membership_identity; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_access_locators
+    ADD CONSTRAINT fk_org_access_locators_membership_identity FOREIGN KEY (organization_membership_id, user_id, organization_id) REFERENCES public.organization_memberships(id, user_id, organization_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: organization_access_locators fk_rails_1fbdd512c3; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_access_locators
+    ADD CONSTRAINT fk_rails_1fbdd512c3 FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: organization_memberships fk_rails_57cf70d280; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -456,12 +548,21 @@ ALTER TABLE ONLY public.sessions
 
 
 --
+-- Name: organization_access_locators fk_rails_903c442217; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization_access_locators
+    ADD CONSTRAINT fk_rails_903c442217 FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE RESTRICT;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20260715170300'),
 ('20260715170200'),
 ('20260715170100'),
 ('20260715170000');

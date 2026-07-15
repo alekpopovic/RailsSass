@@ -19,10 +19,10 @@ product-domain workflows are deliberately separate from the platform contract.
 
 The repository is a Rails 8.1.3 application with PostgreSQL, Hotwire, Tailwind,
 Pundit, Solid Queue/Cache/Cable, Docker/Kamal scaffolding, Minitest, and a
-PostgreSQL-backed CI quality gate. Email/password authentication and the initial
-organization/onboarding foundation exist. Tenant path bootstrap, catalog,
-product access, Lemon Squeezy billing, audit, and deployment hardening remain
-separate execution-plan milestones.
+PostgreSQL-backed CI quality gate. Email/password authentication, organization
+onboarding, and locator-backed tenant path bootstrap exist. Invitations,
+catalog, product access, Lemon Squeezy billing, audit, and deployment hardening
+remain separate execution-plan milestones.
 
 Each milestone must inspect and test existing behavior rather than assume an
 earlier prompt was implemented perfectly.

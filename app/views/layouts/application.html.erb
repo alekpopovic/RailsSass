@@ -47,6 +47,10 @@
       </nav>
     </header>
 
+    <% if Current.organization.present? %>
+      <%= render "shared/tenant_navigation" %>
+    <% end %>
+
     <%= render "shared/flash", flashes: flash %>
 
     <main id="main-content" class="mx-auto w-full max-w-7xl px-5">

@@ -23,16 +23,37 @@ class CurrentTest < ActiveSupport::TestCase
     assert_equal @session.user, Current.user
   end
 
-  test "reset clears both session and delegated user" do
+  test "exposes canonical membership context through the compatibility name" do
+    membership = OrganizationMembership.new(role: :owner, joined_at: Time.current)
+
+    Current.organization_membership = membership
+
+    assert_same membership, Current.membership
+    assert_same membership, Current.organization_membership
+  end
+
+  test "supports the compatibility name in scoped Current context" do
+    membership = OrganizationMembership.new(role: :owner, joined_at: Time.current)
+
+    Current.set(organization_membership: membership) do
+      assert_same membership, Current.membership
+      assert_same membership, Current.organization_membership
+    end
+
+    assert_nil Current.membership
+  end
+
+  test "reset clears session, user, and tenant context" do
     Current.session = @session
     Current.organization = Organization.new(name: "Current Organization", slug: "current-organization")
-    Current.organization_membership = OrganizationMembership.new(role: :owner, joined_at: Time.current)
+    Current.membership = OrganizationMembership.new(role: :owner, joined_at: Time.current)
 
     Current.reset
 
     assert_nil Current.session
     assert_nil Current.user
     assert_nil Current.organization
+    assert_nil Current.membership
     assert_nil Current.organization_membership
   end
 end

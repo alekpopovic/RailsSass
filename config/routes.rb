@@ -6,6 +6,13 @@ Rails.application.routes.draw do
   resource :email_verification, only: %i[ new create edit update ]
   resources :organizations, only: %i[ new create ]
 
+  scope "/o/:organization_slug", as: :organization, module: :organizations do
+    get "dashboard", to: "dashboard#show", as: :dashboard
+    get "members", to: "members#index", as: :members
+    get "settings", to: "settings#show", as: :settings
+    get "billing", to: "billing#show", as: :billing
+  end
+
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
 
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.

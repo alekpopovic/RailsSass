@@ -34,7 +34,7 @@ class Organizations::Memberships::Base
     def authorize_current_actor!(actor_membership)
       actor_user = User.lock.find_by(id: actor_membership&.user_id)
       authorized = Current.user&.id == @actor.id &&
-        Current.organization_membership&.id == actor_membership&.id &&
+        Current.membership&.id == actor_membership&.id &&
         actor_membership&.active? &&
         actor_user&.authentication_allowed?
 
@@ -72,8 +72,8 @@ class Organizations::Memberships::Base
       raise ActiveRecord::RecordNotFound, "organization membership not found" unless affected_rows == 1
 
       updated_membership = scope.find(target_membership.id)
-      if Current.organization_membership&.id == updated_membership.id
-        Current.organization_membership = updated_membership
+      if Current.membership&.id == updated_membership.id
+        Current.membership = updated_membership
       end
       updated_membership
     end

@@ -155,7 +155,7 @@ class Organizations::Memberships::ChangeRoleTest < ActiveSupport::TestCase
     updated = change_role(actor: @owner, membership: @owner_membership, role: :admin)
 
     assert_predicate updated, :admin?
-    assert_equal updated, Current.organization_membership
+    assert_equal updated, Current.membership
     assert_equal 1, @organization.organization_memberships.active_owners.count
   end
 

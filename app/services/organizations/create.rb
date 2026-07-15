@@ -21,11 +21,15 @@ class Organizations::Create
         status: :active,
         joined_at: Time.current
       )
+      membership.create_organization_access_locator!(
+        user: user,
+        organization: organization
+      )
     end
 
     ActiveRecord.after_all_transactions_commit do
       Current.organization = organization
-      Current.organization_membership = membership
+      Current.membership = membership
     end
 
     organization

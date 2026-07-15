@@ -18,6 +18,9 @@ class Organizations::CreateTransactionTest < ActiveSupport::TestCase
     Organization.where("slug LIKE ?", "commit-#{@suffix}%").find_each do |organization|
       Current.organization = organization
       Organization.transaction do
+        Current.organization.organization_access_locators
+          .where(organization_id: Current.organization.id)
+          .delete_all
         Current.organization.organization_memberships
           .where(organization_id: Current.organization.id)
           .delete_all
@@ -38,29 +41,29 @@ class Organizations::CreateTransactionTest < ActiveSupport::TestCase
       organization = create_organization(slug: "commit-#{@suffix}")
 
       assert_nil Current.organization
-      assert_nil Current.organization_membership
+      assert_nil Current.membership
     end
 
     assert_equal organization, Current.organization
-    assert_equal organization.organization_memberships.sole, Current.organization_membership
+    assert_equal organization.organization_memberships.sole, Current.membership
   end
 
   test "an outer rollback preserves the previous Current context" do
     previous_organization = Organization.new(name: "Previous", slug: "previous")
     previous_membership = OrganizationMembership.new(role: :owner, joined_at: Time.current)
     Current.organization = previous_organization
-    Current.organization_membership = previous_membership
+    Current.membership = previous_membership
 
     Organization.transaction do
       create_organization(slug: "commit-#{@suffix}-rolled-back")
 
       assert_equal previous_organization, Current.organization
-      assert_equal previous_membership, Current.organization_membership
+      assert_equal previous_membership, Current.membership
       raise ActiveRecord::Rollback
     end
 
     assert_equal previous_organization, Current.organization
-    assert_equal previous_membership, Current.organization_membership
+    assert_equal previous_membership, Current.membership
     assert_not Organization.exists?(slug: "commit-#{@suffix}-rolled-back")
   end
 

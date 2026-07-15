@@ -1,0 +1,22 @@
+<% content_for :title, "#{Current.organization.name} members" %>
+
+<section class="py-12">
+  <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Organization</p>
+  <h1 class="mt-2 text-3xl font-bold tracking-tight text-slate-950">Members</h1>
+
+  <div class="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white">
+    <ul class="divide-y divide-slate-200">
+      <% @memberships.each do |membership| %>
+        <li class="flex items-center justify-between gap-4 px-5 py-4">
+          <div>
+            <p class="font-semibold text-slate-950"><%= membership.user.name %></p>
+            <p class="text-sm text-slate-500"><%= membership.status.humanize %></p>
+          </div>
+          <span class="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700">
+            <%= membership.role.humanize %>
+          </span>
+        </li>
+      <% end %>
+    </ul>
+  </div>
+</section>

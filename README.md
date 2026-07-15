@@ -4,10 +4,11 @@ This repository is the executable foundation for a modular-monolith SaaS built
 with Rails 8.1, PostgreSQL, Hotwire, Tailwind CSS, Pundit, Solid Queue, Propshaft,
 Faraday, and Minitest.
 
-The current slice contains global email/password authentication and the initial
-organization/onboarding foundation, but intentionally has no tenant path
-bootstrap, product-access domain, or live Lemon Squeezy integration. Registration
-never creates an organization; verified users explicitly complete onboarding.
+The current slice contains global email/password authentication, explicit
+organization onboarding, and locator-backed path tenancy with a Pundit-enforced
+organization shell. It intentionally has no product-access domain or live Lemon
+Squeezy integration. Registration never creates an organization; verified users
+explicitly complete onboarding.
 The target behavior and delivery sequence are in
 [`docs/`](docs/), beginning with the
 [product requirements](docs/product_requirements.md),
@@ -77,6 +78,12 @@ sends every message to the local MailCatcher SMTP service; inspect the inbox at
 <http://localhost:1080>. Nothing is forwarded to a real provider. Production
 must set `APP_HOST`, `MAILER_FROM`, and a real delivery adapter through its
 secret/configuration store.
+
+After signing in, a verified user explicitly creates an organization and is
+redirected to `/o/:organization_slug/dashboard`. The tenant navigation exposes
+members, settings, and billing according to the server-enforced organization
+role, and the switcher appears when the account has multiple active locator
+candidates.
 
 If Rails was already running when MailCatcher or its SMTP settings were added,
 restart `bin/dev` or recreate the `app` container so Rails reloads its

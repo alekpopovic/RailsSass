@@ -17,7 +17,11 @@ class Organizations::CreateTest < ActiveSupport::TestCase
   test "atomically creates an active organization and its first owner" do
     organization = nil
 
-    assert_difference [ -> { Organization.count }, -> { OrganizationMembership.count } ], 1 do
+    assert_difference [
+      -> { Organization.count },
+      -> { OrganizationMembership.count },
+      -> { OrganizationAccessLocator.count }
+    ], 1 do
       organization = Organizations::Create.new(
         user: @user,
         name: "  Example Company  ",
@@ -34,6 +38,9 @@ class Organizations::CreateTest < ActiveSupport::TestCase
     assert_predicate membership, :owner?
     assert_predicate membership, :active?
     assert_in_delta Time.current, membership.joined_at, 1.second
+    assert_equal membership, membership.organization_access_locator.organization_membership
+    assert_equal @user, membership.organization_access_locator.user
+    assert_equal organization, membership.organization_access_locator.organization
   end
 
   test "requires the explicitly authenticated verified and enabled user" do
@@ -49,7 +56,11 @@ class Organizations::CreateTest < ActiveSupport::TestCase
     [ unverified_user, disabled_user ].each do |user|
       Current.session, = Session.issue_for!(user, ip_address: nil, user_agent: "Minitest")
 
-      assert_no_difference [ -> { Organization.count }, -> { OrganizationMembership.count } ] do
+      assert_no_difference [
+        -> { Organization.count },
+        -> { OrganizationMembership.count },
+        -> { OrganizationAccessLocator.count }
+      ] do
         assert_raises(Pundit::NotAuthorizedError) do
           Organizations::Create.new(user: user, name: "Denied", slug: "denied").call
         end
@@ -73,23 +84,31 @@ class Organizations::CreateTest < ActiveSupport::TestCase
       slug: "existing-organization"
     )
     Current.organization = existing_organization
-    Current.organization_membership = existing_membership
+    Current.membership = existing_membership
 
-    assert_no_difference [ -> { Organization.count }, -> { OrganizationMembership.count } ] do
+    assert_no_difference [
+      -> { Organization.count },
+      -> { OrganizationMembership.count },
+      -> { OrganizationAccessLocator.count }
+    ] do
       assert_raises(ActiveRecord::RecordInvalid) do
         Organizations::Create.new(user: @user, name: "", slug: "").call
       end
     end
 
     assert_equal existing_organization, Current.organization
-    assert_equal existing_membership, Current.organization_membership
+    assert_equal existing_membership, Current.membership
   end
 
   test "uses authoritative verification state instead of a stale user object" do
     User.find(@user.id).update!(email_address: "changed-creator@example.test")
 
     assert_predicate @user, :email_verified?
-    assert_no_difference [ -> { Organization.count }, -> { OrganizationMembership.count } ] do
+    assert_no_difference [
+      -> { Organization.count },
+      -> { OrganizationMembership.count },
+      -> { OrganizationAccessLocator.count }
+    ] do
       assert_raises(Pundit::NotAuthorizedError) do
         Organizations::Create.new(
           user: @user,

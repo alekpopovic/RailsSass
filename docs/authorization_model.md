@@ -40,7 +40,8 @@ subscription predicate is in
 - `user`;
 - `session` when needed for audit/revocation;
 - `organization`;
-- `organization_membership`.
+- `membership` (the authoritative organization membership; the legacy
+  `organization_membership` accessor is a compatibility alias).
 
 Context is established and cleared at request/job boundaries. Domain methods do
 not infer a tenant from arbitrary records or a process-global variable.
@@ -57,7 +58,7 @@ For a tenant request:
    `Current.organization` to it.
 5. Reload the authoritative active membership through
    `Current.organization.organization_memberships` for `Current.user`, then set
-   `Current.organization_membership`.
+   `Current.membership`.
 6. Continue only when the user is enabled and the tenant-owned reload succeeds.
 
 The global locator is a discovery index maintained atomically with membership;
@@ -146,7 +147,7 @@ applicable step succeeds:
 ```text
 1. authenticated, enabled Current.user
 2. active Current.organization
-3. active Current.organization_membership for Current.organization
+3. active Current.membership for Current.organization
 4. current local Billing::Subscription is synchronized and access-granting now
 5. subscription's exact Plan has PlanProductEntitlement for the product
 6. when feature is required:
@@ -234,15 +235,15 @@ Verified and authenticated `POST /organizations` is global because the tenant
 does not exist yet. `Organizations::Create` uses one database transaction to
 insert an active organization and its first active owner membership. After a
 successful commit, and never before, it sets `Current.organization` and
-`Current.organization_membership`. Registration and email verification do not
+`Current.membership`. Registration and email verification do not
 implicitly invoke the command.
 
-The initial foundation does not create an `OrganizationAccessLocator` or expose
-the new tenant path. The path-bootstrap follow-up backfills locators for existing
-active memberships, begins creating/removing them in the same transaction as
-membership activation/suspension, and only then enables redirects and ordinary
-tenant routes. Until that rollout completes, request-local `Current` after
-onboarding is not a persistent authorization mechanism.
+The path-bootstrap migration backfills locators for existing active memberships
+before tenant routes are enabled. Organization creation now creates its locator
+in the same transaction as the first owner membership, membership suspension
+removes its locator in the same locked transaction, and onboarding redirects to
+the tenant dashboard. Request-local `Current` never replaces this persistent,
+revalidated authorization state.
 
 ### 7.2 Authenticated tenant path and switcher
 
@@ -291,14 +292,13 @@ controllers and product services.
 
 ### 7.6 Global account disablement
 
-Account disablement remains unavailable in the initial organization-foundation
-change. The locator/path-bootstrap follow-up adds its cross-organization guard:
-it enumerates candidate organization roots only through the user's global access
-locators, locks those roots in stable ID order, and for each root sets
-`Current.organization` before reloading memberships/access-eligible-owner state
-through that organization. The service aborts the entire transaction if any
-tenant would lose its last access-eligible owner, then clears context. It never
-queries memberships globally.
+Account disablement remains unavailable until a dedicated cross-organization
+guard is implemented. That guard enumerates candidate organization roots only
+through the user's global access locators, locks those roots in stable ID order,
+and for each root sets `Current.organization` before reloading
+memberships/access-eligible-owner state through that organization. The service
+aborts the entire transaction if any tenant would lose its last access-eligible
+owner, then clears context. It never queries memberships globally.
 
 ## 8. Background jobs
 

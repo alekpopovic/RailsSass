@@ -23,18 +23,23 @@ class Organizations::Memberships::RemoveTest < ActiveSupport::TestCase
       role: :member,
       joined_at: 2.days.ago
     )
+    locator = create_locator_for(membership)
     joined_at = membership.joined_at
     establish_tenant_context(user: @owner, organization: @organization, membership: @owner_membership)
 
-    assert_no_difference -> { OrganizationMembership.count } do
-      membership = Organizations::Memberships::Remove.new(
-        actor: @owner,
-        membership_id: membership.id
-      ).call
+    assert_difference -> { OrganizationAccessLocator.count }, -1 do
+      assert_no_difference -> { OrganizationMembership.count } do
+        membership = Organizations::Memberships::Remove.new(
+          actor: @owner,
+          membership_id: membership.id
+        ).call
 
-      assert_predicate membership, :suspended?
-      assert_equal joined_at, membership.joined_at
+        assert_predicate membership, :suspended?
+        assert_equal joined_at, membership.joined_at
+      end
     end
+
+    assert_not OrganizationAccessLocator.exists?(locator.id)
   end
 
   test "last active owner cannot leave or be suspended" do
@@ -58,6 +63,7 @@ class Organizations::Memberships::RemoveTest < ActiveSupport::TestCase
       user: second_owner,
       role: :owner
     )
+    create_locator_for(@owner_membership)
     establish_tenant_context(user: @owner, organization: @organization, membership: @owner_membership)
 
     removed = Organizations::Memberships::Remove.new(
@@ -66,9 +72,32 @@ class Organizations::Memberships::RemoveTest < ActiveSupport::TestCase
     ).call
 
     assert_predicate removed, :suspended?
-    assert_equal removed, Current.organization_membership
+    assert_equal removed, Current.membership
     assert_predicate second_membership.reload, :active?
     assert_equal 1, @organization.organization_memberships.active_owners.count
+  end
+
+  test "locator deletion and membership suspension are atomic" do
+    member = create_test_user(email_address: "atomic-remove-member@example.test")
+    membership = create_test_membership(
+      organization: @organization,
+      user: member,
+      role: :member
+    )
+    locator = create_locator_for(membership)
+    establish_tenant_context(user: @owner, organization: @organization, membership: @owner_membership)
+    service = Organizations::Memberships::Remove.new(
+      actor: @owner,
+      membership_id: membership.id
+    )
+    service.define_singleton_method(:persist_transition!) do |*, **|
+      raise ActiveRecord::Rollback
+    end
+
+    service.call
+
+    assert_predicate membership.reload, :active?
+    assert OrganizationAccessLocator.exists?(locator.id)
   end
 
   test "admin can remove member or admin but cannot remove owner or billing" do
@@ -173,4 +202,13 @@ class Organizations::Memberships::RemoveTest < ActiveSupport::TestCase
 
     assert_predicate other_membership.reload, :active?
   end
+
+  private
+    def create_locator_for(membership)
+      OrganizationAccessLocator.create!(
+        organization_membership: membership,
+        user: membership.user,
+        organization: membership.organization
+      )
+    end
 end

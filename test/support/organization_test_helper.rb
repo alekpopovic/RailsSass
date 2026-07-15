@@ -36,7 +36,7 @@ module OrganizationTestHelper
     session_record, = Session.issue_for!(user, ip_address: nil, user_agent: "Minitest")
     Current.session = session_record
     Current.organization = organization
-    Current.organization_membership = membership
+    Current.membership = membership
     session_record
   end
 end

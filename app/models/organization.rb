@@ -4,6 +4,9 @@ class Organization < ApplicationRecord
   SLUG_PATTERN = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/
 
   has_many :organization_memberships, dependent: :restrict_with_exception, inverse_of: :organization
+  has_many :organization_access_locators,
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
   has_many :users, through: :organization_memberships
 
   enum :status, { active: "active", suspended: "suspended" },

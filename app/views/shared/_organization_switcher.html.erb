@@ -1,0 +1,22 @@
+<% if organizations.many? %>
+  <details class="relative">
+    <summary class="cursor-pointer list-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+      <span class="sr-only">Current organization:</span>
+      <%= Current.organization.name %>
+    </summary>
+
+    <div class="absolute left-0 z-20 mt-2 min-w-64 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+      <p class="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Switch organization</p>
+      <ul>
+        <% organizations.each do |organization| %>
+          <li>
+            <%= link_to organization.name,
+              organization_dashboard_path(organization_slug: organization.slug),
+              aria: { current: organization == Current.organization ? "page" : nil },
+              class: "block rounded-md px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-950" %>
+          </li>
+        <% end %>
+      </ul>
+    </div>
+  </details>
+<% end %>

@@ -1,8 +1,11 @@
 class ApplicationPolicy
-  attr_reader :user, :record
+  attr_reader :context, :user, :organization, :membership, :record
 
-  def initialize(user, record)
-    @user = user
+  def initialize(context, record)
+    @context = context
+    @user = context.respond_to?(:user) ? context.user : context
+    @organization = context.organization if context.respond_to?(:organization)
+    @membership = context.membership if context.respond_to?(:membership)
     @record = record
   end
 
@@ -35,10 +38,13 @@ class ApplicationPolicy
   end
 
   class Scope
-    attr_reader :user, :scope
+    attr_reader :context, :user, :organization, :membership, :scope
 
-    def initialize(user, scope)
-      @user = user
+    def initialize(context, scope)
+      @context = context
+      @user = context.respond_to?(:user) ? context.user : context
+      @organization = context.organization if context.respond_to?(:organization)
+      @membership = context.membership if context.respond_to?(:membership)
       @scope = scope
     end
 

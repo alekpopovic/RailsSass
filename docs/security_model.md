@@ -131,10 +131,9 @@ controllers.
   browser/server session state on authentication. Revoke applicable sessions
   on logout, password reset, account disablement, and other security-sensitive
   changes.
-- Account disablement is not exposed by the initial organization-foundation
-  change. The locator/path-bootstrap follow-up locks affected organizations and
-  rejects a disable operation if it would leave any organization without another
-  enabled active owner.
+- Account disablement remains unexposed until its dedicated guard locks affected
+  organizations and rejects a disable operation if it would leave any
+  organization without another enabled active owner.
 - Cookies are `HttpOnly`, `Secure` in production, and an appropriate `SameSite`
   setting. All production traffic uses HTTPS.
 - Password reset uses a purpose-scoped Rails signed token that expires after 15

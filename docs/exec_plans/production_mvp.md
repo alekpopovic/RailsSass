@@ -67,25 +67,22 @@ PR as implementation.
 
 Observed on 2026-07-15:
 
-- Git branch `main` has no commits and no tracked files; the whole generated
-  application is untracked.
-- Rails resolves to 8.1.3 and Ruby is configured as 4.0.5.
-- PostgreSQL, Hotwire/importmap, Tailwind, Solid Queue/Cache/Cable, Docker, and
-  Kamal dependencies/scaffolding exist.
-- There are no domain models, tenant routes, primary migrations/schema, or
-  tests.
-- `rails/test_unit/railtie` is commented out.
-- Pundit and authentication dependencies/implementation are absent.
-- CI runs lint/security scans only; it has no PostgreSQL service or test step.
+- The tracked Rails 8.1.3 application runs on Ruby 4.0.5 with PostgreSQL,
+  Hotwire/importmap, Tailwind, Pundit, and Solid Queue/Cache/Cable.
+- PostgreSQL-backed local and GitHub Actions quality gates run Minitest, system
+  tests, RuboCop, dependency audits, Zeitwerk, and Brakeman.
+- Rails-native email/password authentication, server-side sessions, email
+  verification, password reset, and explicit organization onboarding exist.
+- Organization and membership constraints, the deferred active-owner trigger,
+  global access locators, path tenant bootstrap, organization shell, switcher,
+  and base Pundit role policies exist.
+- Catalog, invitations, product RBAC/access, billing synchronization, audit,
+  and production hardening remain unimplemented milestones.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
-- `bundle check`, `bin/rails --version`, and Rails task discovery could not run
-  because several locked gems are not installed locally. No application tests
-  exist.
 
-The first implementation work must establish a reviewable baseline and an
-executable test foundation. No later milestone may claim existing behavior from
-the generator skeleton.
+Each remaining milestone must re-audit the implemented behavior and may not
+claim an invariant without executable evidence.
 
 ## 4. External inputs and decisions
 
@@ -308,7 +305,7 @@ Scope:
   verification continue to create no organization automatically.
 - In one database transaction, `Organizations::Create` creates the organization
   and its first active owner membership. Set `Current.organization` and
-  `Current.organization_membership` only after the outermost commit; a rollback
+  `Current.membership` only after the outermost commit; a rollback
   must preserve the previous context.
 - Require membership mutations to resolve targets through
   `Current.organization.organization_memberships`, enforce the complete role
@@ -350,6 +347,11 @@ until PR-05 has installed and backfilled locator/bootstrap state.
 ### PR-05: Add path tenant context, organization shell, and Pundit enforcement
 
 Depends on: PR-04.
+
+Implementation status: the locator migration/backfill, request context,
+read-only shell routes, switcher, and base policies are implemented. The
+account-disable guard, tenant job wrapper, and any organization update mutation
+remain required before the full PR-05 acceptance claim.
 
 **Goal:** make `/o/:organization_slug/` the safe tenant boundary.
 

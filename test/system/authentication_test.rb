@@ -62,8 +62,9 @@ class AuthenticationTest < ApplicationSystemTestCase
     fill_in "Slug", with: "system-organization"
     click_button "Create organization"
 
-    assert_current_path root_path
+    assert_current_path organization_dashboard_path(organization_slug: "system-organization")
     assert_text "Your organization has been created."
+    assert_selector "h1", text: "System Organization"
     assert_text user.name
     assert_equal 1, user.sessions.reload.count
     membership = Organization.find_by!(slug: "system-organization").organization_memberships.sole

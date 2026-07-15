@@ -10,7 +10,8 @@ class OrganizationsController < ApplicationController
       slug: organization_params[:slug]
     ).call
 
-    redirect_to root_path, notice: "Your organization has been created."
+    redirect_to organization_dashboard_path(organization_slug: @organization.slug),
+      notice: "Your organization has been created."
   rescue ActiveRecord::RecordInvalid => error
     raise unless error.record.is_a?(Organization)
 

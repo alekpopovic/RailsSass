@@ -221,7 +221,7 @@ class Organizations::Memberships::ConcurrencyTest < ActiveSupport::TestCase
     def establish_thread_context(user_id:, session_id:)
       Current.session = Session.includes(:user).find(session_id)
       Current.organization = Organization.find(@organization.id)
-      Current.organization_membership = Current.organization
+      Current.membership = Current.organization
         .organization_memberships
         .find_by!(user_id: user_id)
     end

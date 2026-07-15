@@ -59,9 +59,10 @@ class OrganizationsRequestTest < ActionDispatch::IntegrationTest
     assert_predicate membership, :owner?
     assert_predicate membership, :active?
     assert_in_delta Time.current, membership.joined_at, 1.second
-    assert_redirected_to root_path
+    assert_redirected_to organization_dashboard_path(organization_slug: organization.slug)
     assert_equal "Your organization has been created.", flash[:notice]
     assert_nil Current.organization
+    assert_nil Current.membership
     assert_nil Current.organization_membership
   end
 

@@ -30,7 +30,7 @@ Use path-based tenancy for ordinary tenant UI and application routes:
   `OrganizationAccessLocator` to select a candidate organization
   for the slug.
 - Set `Current.organization`, then reload the active membership through that
-  organization's association before setting `Current.organization_membership`.
+  organization's association before setting `Current.membership`.
 - After the candidate root is set, every tenant-owned child query starts from a
   `Current.organization` association and applies a Pundit policy scope/policy.
 - Tenant-owned rows include non-null `organization_id`; composite foreign keys
@@ -62,10 +62,10 @@ Context establishment is explicit:
 6. verified webhook processing may query only the global
    `Billing::ProviderLocator` by provider subscription ID or checkout-token
    digest, then reload all tenant state through `Current.organization`;
-7. global account disablement is enabled with the locator/path-bootstrap
-   follow-up; it enumerates only account locators, locks candidate
-   roots in stable order, and reloads each tenant's ownership state through
-   `Current.organization` before committing.
+7. global account disablement remains unexposed until its dedicated guard can
+   enumerate only account locators, lock candidate roots in stable order, and
+   reload each tenant's ownership state through `Current.organization` before
+   committing.
 
 Global locators are discovery indexes, not grants. Stale/mismatched locators
 fail at the authoritative tenant-owned reload. No tenant-owned child table is

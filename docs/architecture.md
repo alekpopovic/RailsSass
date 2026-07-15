@@ -10,10 +10,10 @@ Hotwire, Tailwind, Pundit, Solid Queue, and Minitest. It is deployed as one
 codebase and one application release, with separate web and worker processes.
 
 The repository contains the Rails application foundation, PostgreSQL-backed CI,
-email/password authentication, and the initial organization foundation. This
-document describes both those established boundaries and the remaining target
-architecture; catalog, product access, billing, and deployment hardening remain
-incremental milestones.
+email/password authentication, organization onboarding, and locator-backed path
+tenancy. This document describes both those established boundaries and the
+remaining target architecture; invitations, catalog, product access, billing,
+and deployment hardening remain incremental milestones.
 
 Related contracts:
 
@@ -183,18 +183,18 @@ ordinary tenant routes. Global application controllers still authenticate and
 authorize where appropriate. `Organizations::Create`, which is owned by the
 Tenancy module despite its public namespace, atomically inserts the active
 organization and first active owner membership. It sets
-`Current.organization` and `Current.organization_membership` only after the
+`Current.organization` and `Current.membership` only after the
 outermost transaction commits, so rollback cannot leave request-local context
 pointing at uncommitted records. Registration and email verification never
 create an organization automatically.
 
-The initial organization foundation does not expose an ordinary tenant path.
-The path-bootstrap follow-up adds and backfills the non-authoritative access
-locator before enabling any `/o/:organization_slug/` route. From that point,
-successful onboarding can redirect to the new tenant path. The same follow-up
-adds the global account-disable ownership guard, which enumerates only locator
-candidates and checks each tenant's access-eligible-owner state through
-`Current.organization` under stable-order locks.
+The path-bootstrap migration adds and backfills the non-authoritative access
+locator before enabling `/o/:organization_slug/` routes. Successful onboarding
+therefore creates its locator atomically and redirects to the tenant dashboard.
+The account-disable mutation remains unexposed until its cross-organization
+ownership guard can enumerate locator candidates and check every tenant's
+access-eligible-owner state through `Current.organization` under stable-order
+locks.
 
 ### 6.2 Tenant requests
 
@@ -214,7 +214,7 @@ The request lifecycle is:
 3. Require an active organization, set `Current.organization`, then reload the
    active membership through
    `Current.organization.organization_memberships` and set
-   `Current.organization_membership`.
+   `Current.membership`.
 4. Load tenant records from a `Current.organization` association and a Pundit
    policy scope.
 5. Authorize the record/action on the server.

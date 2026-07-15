@@ -1,0 +1,27 @@
+<div class="border-b border-slate-200 bg-slate-50">
+  <nav class="mx-auto flex max-w-7xl items-center gap-5 overflow-x-auto px-5 py-3 text-sm" aria-label="Organization navigation">
+    <%= render "shared/organization_switcher", organizations: organization_switcher_options %>
+
+    <%= link_to "Dashboard",
+      organization_dashboard_path(organization_slug: Current.organization.slug),
+      class: "whitespace-nowrap font-semibold text-slate-700 hover:text-slate-950" %>
+
+    <% if policy(Current.organization).members? %>
+      <%= link_to "Members",
+        organization_members_path(organization_slug: Current.organization.slug),
+        class: "whitespace-nowrap font-semibold text-slate-700 hover:text-slate-950" %>
+    <% end %>
+
+    <% if policy(Current.organization).settings? %>
+      <%= link_to "Settings",
+        organization_settings_path(organization_slug: Current.organization.slug),
+        class: "whitespace-nowrap font-semibold text-slate-700 hover:text-slate-950" %>
+    <% end %>
+
+    <% if policy(Current.organization).billing? %>
+      <%= link_to "Billing",
+        organization_billing_path(organization_slug: Current.organization.slug),
+        class: "whitespace-nowrap font-semibold text-slate-700 hover:text-slate-950" %>
+    <% end %>
+  </nav>
+</div>

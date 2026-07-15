@@ -3,6 +3,9 @@ class OrganizationMembership < ApplicationRecord
 
   belongs_to :organization, inverse_of: :organization_memberships
   belongs_to :user, inverse_of: :organization_memberships
+  has_one :organization_access_locator,
+    dependent: :restrict_with_exception,
+    inverse_of: :organization_membership
 
   enum :role, {
     owner: "owner",

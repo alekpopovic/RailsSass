@@ -117,7 +117,7 @@ Rules:
 `POST /o/:organization_slug/billing/checkouts` requires:
 
 - authenticated enabled user;
-- active `Current.organization_membership` with role owner/billing;
+- active `Current.membership` with role owner/billing;
 - valid CSRF token;
 - active local billing price in the correct environment whose plan is still
   `published`;
