@@ -44,8 +44,14 @@ Implementation PRs may not silently change these decisions:
 - Owner/admin have no product-access bypass.
 - Product access requires local subscription eligibility AND plan entitlement
   AND product membership/permission.
-- Published plan versions and entitlements are immutable.
-- No free/manual fallback plan in MVP.
+- Catalog plans use globally unique stable keys, explicit active/free/display
+  metadata, and typed plan-product/feature rows. `Plan.free` never assigns an
+  organization plan or creates an authorization fallback.
+- Limit entitlements use an explicit finite non-negative value or explicit
+  unlimited state; `enabled` remains the master grant switch.
+- `PlanPrice` is local catalog/display data, not payment proof or an access
+  grant. Exact test/live provider mapping remains a required Billing boundary
+  before checkout or webhook projection.
 - Only verified `expired` is terminal for replacement checkout; resubscription
   atomically supersedes the expired historical row.
 - Local database is runtime authorization truth; runtime performs no Lemon
@@ -78,8 +84,9 @@ Observed on 2026-07-16:
   and base Pundit role policies exist.
 - Organization invitations, audited member role/suspension/reactivation
   commands, digest-only invitation tokens, and pre-membership acceptance exist.
-- Catalog, product RBAC/access, billing synchronization, and production
-  hardening remain unimplemented milestones.
+- The constrained local catalog, development/test seed command, typed
+  entitlements, and local plan prices exist. Product RBAC/access, billing
+  synchronization, and production hardening remain unimplemented milestones.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
 
@@ -96,7 +103,7 @@ value in code.
 | Whether `RailsSass`/`rails_sass` naming is intentional or should be `SaaS`/product-specific | PR-00 | Preserve current identifiers until explicitly decided |
 | Initial product, feature, permission, and role keys | PR-07 | Synthetic test fixtures only |
 | Numeric feature units and authoritative usage queries | PR-15 | No production numeric feature enabled |
-| Initial plan versions and entitlement values | PR-08 | Synthetic draft fixtures until product approval |
+| Initial plan-product rows and feature entitlement values | PR-08 | Synthetic development/test fixtures until product approval |
 | Test/live Lemon variant mappings | PR-11/PR-16 | Test mappings only outside production |
 | Production host, registry, PostgreSQL, backup target, and alert destination | PR-20 | No deploy |
 | Email delivery provider/from-domain | PR-06 | Test delivery only |
@@ -127,7 +134,7 @@ value in code.
 | 0. Baseline | PR-00 | Reviewable, secret-safe repository and accepted docs |
 | 1. Executable foundation | PR-01–02 | Rails/Minitest/system/PostgreSQL CI and boundary check are green before domain behavior |
 | 2. Accounts and tenancy | PR-03–06 | Authentication, organizations, scoped routing, invitations and role policies |
-| 3. Catalog and RBAC data | PR-07–10 | Immutable plan graph and constrained product assignments |
+| 3. Catalog and RBAC data | PR-07–10 | Stable typed plan graph and constrained product assignments |
 | 4. Billing synchronization | PR-11–14B | Signed durable webhook projection and canonical local subscription state |
 | 5. Runtime access and checkout | PR-15–17 | Full entitlement+permission gate, atomic limit slice, safe checkout/portal UX |
 | 6. Security and production | PR-18A–20 | Hardened app, operable Kamal/PostgreSQL topology, launch evidence |
@@ -449,69 +456,80 @@ Tests:
 Acceptance: an owner/admin can onboard allowed roles without any pre-created
 production user data.
 
-### PR-07: Add global product, feature, and versioned plan catalog
+### PR-07: Add the local product and plan catalog
 
 Depends on: PR-02; initial catalog keys decided before production data task.
 
-**Goal:** establish stable global catalog identities without tenant behavior.
+**Goal:** establish stable global catalog identities and database-enforced plan
+typing without tenant or billing behavior.
 
 Scope:
 
-- Add `Product`, `ProductFeature`, and `Plan`.
+- Add `Product`, `ProductFeature`, `Plan`, `PlanProduct`,
+  `PlanFeatureEntitlement`, and `PlanPrice`.
 - Add deployment-controlled, idempotent catalog data task using synthetic
   development/test values and separately supplied production identifiers.
-- Add draft-plan create/edit services and lifecycle schema, but expose no
-  publish/retire transition before PR-08 can validate the complete entitlement
-  graph.
-- Add active/retired lifecycle to product and feature. Retirement blocks new
-  references but does not silently revoke existing published-plan behavior.
-- Add explicit numeric feature unit registry contract; do not enable a numeric
-  production feature until its usage query is specified.
+- Seed only the requested synthetic local identities: products `core`,
+  `analytics`, and `crm`, plus plans `starter` and `professional`; do not invent
+  feature, entitlement, price, or production Lemon values.
+- Use stable lowercase keys and active flags; use display names only for
+  presentation.
+- Treat `Plan.free` as metadata only and enforce at most one active free plan.
+- Enforce same-product feature attachment with composite foreign keys.
+- Model flag entitlements through `enabled`. Model limit capacity as exactly one
+  finite non-negative value or explicit unlimited state regardless of enabled;
+  enabled remains the grant switch. Settings must be a JSON object.
+- Store local monthly/yearly price display data and optional all-or-none Lemon
+  identifiers in `PlanPrice`; do not expose checkout or treat it as a complete
+  test/live mapping.
 
-Migrations: catalog tables with FKs, exact snake-case key checks, unique stable
-keys/plan key+version, state, type, version, explicit typed unit nullability,
-lifecycle, and non-blank checks plus composite feature key.
+Migrations: all six catalog tables with restricted FKs, exact snake-case key
+checks, globally unique product/plan keys, per-product feature keys,
+plan-product/feature uniqueness, composite product/type FKs, typed
+finite/unlimited checks, settings JSON shape, one-active-free partial unique,
+price interval/currency/amount checks, and partial Lemon variant uniqueness.
 
 Tests:
 
-- duplicates and invalid keys/types/units/version/state fail at DB;
-- attempts to publish/retire before the PR-08 graph service are unavailable;
-- retired catalog objects are unavailable for new assignments;
+- duplicates and invalid keys/kinds/typed capacities/settings/prices fail at DB;
+- cross-product and feature-kind mismatch fail at DB;
+- only one free plan may be active, including under concurrent writes;
+- `PlanPrice` and free/active flags create no tenant/subscription rows and grant
+  no access;
 - data task is repeatable.
 
 Acceptance: catalog reads are global/read-only to tenant users; no global admin
 UI exists.
 
-### PR-08: Add plan product and typed feature entitlements
+### PR-08: Add catalog query and controlled mutation boundaries
 
 Depends on: PR-07.
 
-**Goal:** encode the immutable entitlement graph with database-enforced type and
-product consistency.
+**Goal:** expose deterministic Catalog-owned reads and reviewed mutation paths
+without coupling the catalog to tenant or provider state.
 
 Scope:
 
-- Add plan-product and plan-feature entitlement models.
-- Publish the entire plan graph atomically; only drafts are editable.
-- Add one-way publish/retire services and published-field immutability. Plan
-  retirement is a sales stop, not an entitlement revoke; existing synchronized
-  subscribers retain the immutable version.
-- Add catalog query returning product/feature entitlement for an exact plan.
-- Implement boolean and finite integer value semantics without an unlimited
-  sentinel.
+- Add a catalog query returning product/feature entitlement for an exact stable
+  plan key/record.
+- Return enabled flag or enabled finite/unlimited capacity deterministically;
+  missing or disabled rows deny.
+- Add deployment-controlled mutation services with audit coverage before any
+  catalog management UI or production data loader.
+- Keep display names, active/free metadata, and price records outside the
+  authorization decision that selects an organization's plan.
 
-Migrations: both entitlement tables, composite parent/feature FKs and supporting
-unique indexes, exact-one-typed-value checks including explicit non-null numeric
-limit, and non-negative checks.
+Migrations: none expected for the base graph; any audit/history requirement
+discovered here lands explicitly rather than weakening PR-07 constraints.
 
 Tests:
 
-- reject feature without product, wrong product/type, duplicate, malformed
-  boolean, negative/null numeric value;
-- missing and false boolean deny in catalog resolver;
-- published entitlement graph cannot mutate through write paths.
+- missing/disabled flag and limit deny in the catalog query;
+- finite zero and explicit unlimited return distinct typed results;
+- lookup by display name is unavailable;
+- controlled changes are audited and cannot alter stable identity fields.
 
-Acceptance: given a plan version and product/feature, Catalog returns one
+Acceptance: given a plan and product/feature, Catalog returns one
 deterministic local answer without tenant/provider input.
 
 ### PR-09: Add system product roles and permissions
@@ -573,7 +591,7 @@ Tests:
 Acceptance: RBAC assignment data is safe but does not yet imply runtime product
 access.
 
-### PR-11: Add billing price and checkout-attempt persistence
+### PR-11: Add environment-qualified price mapping and checkout persistence
 
 Depends on: PR-05, PR-07–08; initial Lemon test mappings available.
 
@@ -582,25 +600,26 @@ without an external endpoint.
 
 Scope:
 
-- Add `Billing::Price` and `Billing::CheckoutAttempt` exactly as documented.
+- Add a Billing-owned environment-qualified provider mapping from an exact
+  `PlanPrice` to Lemon and add `Billing::CheckoutAttempt`.
 - Add test/live mapping loader with no credentials or real customer data.
-- Permit new mappings/checkout selection only for published plans; plan
-  retirement blocks selection while preserving historical subscription
-  resolution, even before optional price-flag cleanup.
+- Permit new mapping/checkout selection only when both plan and price are
+  active; deactivation blocks selection while preserving historical resolution.
 - Generate checkout correlation plaintext only in memory and persist a SHA-256
   digest; no API checkout is created yet.
 - Add locked/lazy and sweeper transition for pending attempts at
   `expires_at + 10 minutes`, including static partial-unique behavior.
 
-Migrations: price and checkout-attempt tables; exact price mapping/composite
-supporting keys, tenant/initiator/billing-price FKs, token-digest/provider-ID
+Migrations: environment-qualified provider-mapping and checkout-attempt tables;
+exact PlanPrice/provider mapping/composite supporting keys,
+tenant/initiator/provider-mapping FKs, token-digest/provider-ID
 unique indexes, pending partial unique, state/environment/timestamp constraints,
 and explicit delete restrictions.
 
 Tests:
 
-- mapping uniqueness and exact immutable plan version;
-- retired plans reject new mappings/checkout selection even if a price flag is
+- mapping uniqueness and exact `PlanPrice`/stable plan identity;
+- inactive plans reject new mapping/checkout selection even if a price flag is
   stale-active, while historical mapping remains queryable;
 - concurrent pending attempts yield one winner;
 - plaintext token never persists/logs and digest uniqueness holds;
@@ -621,9 +640,9 @@ Scope:
 
 - Add `Billing::Subscription`, global non-authoritative
   `Billing::ProviderLocator`, and `Billing::WebhookEvent`.
-- Bind subscriptions to immutable origin attempt/price while allowing verified
-  current price changes; derive the exact plan only through current
-  `Billing::Price`.
+- Bind subscriptions to their original attempt/provider mapping while allowing
+  verified current mapping changes; derive the exact plan only through the
+  current environment-qualified mapping and `PlanPrice`.
 - Add atomic checkout-attempt + checkout-locator creation service and provider
   subscription locator transitions. Checkout locators distinguish unresolved,
   webhook-consumed, and definitive-creation-failure correlation; expiry alone
@@ -634,7 +653,7 @@ Scope:
 - Implement pure local subscription access predicate matching every matrix row.
 
 Migrations: subscription, provider-locator, and webhook-event tables; exact
-current price composite FK, immutable origin attempt/price composite FK, one
+current provider-mapping composite FK, retained origin attempt/mapping composite FK, one
 current subscription partial unique, provider/token-digest locator composites,
 event fingerprint unique, all status/sync/environment/timestamp/JSON shape
 checks, and sweeper indexes.
@@ -648,8 +667,8 @@ Tests:
 - malformed/test-live/unknown mapping fails closed without violating exact
   current mapping FK;
 - table-driven matrix with exact trial/cancelled/past-due boundaries;
-- an existing synchronized subscription retains its immutable retired-plan
-  entitlement while new checkout remains blocked;
+- an existing synchronized subscription retains its referenced inactive plan
+  while new checkout remains blocked;
 - provider timestamps beyond the five-minute future-skew allowance fail closed;
 - access predicate performs zero network calls.
 
@@ -1058,7 +1077,7 @@ manual evidence and an owner.
 | Layer | Required coverage |
 | --- | --- |
 | Database | Every FK, unique/partial index, enum/type/range check, composite tenant/product mismatch, delete behavior |
-| Model/service | Normalization, lifecycle transitions, immutable publish, last owner, idempotency |
+| Model/service | Normalization, stable catalog identity, active/free selection, typed capacity, last owner, idempotency |
 | Policy/access | Exact organization role matrix and one-factor-at-a-time product denial truth table |
 | Request | Authentication, CSRF, tenant bootstrap, two-tenant IDOR, Turbo/direct POST parity, checkout/webhook codes |
 | Job | Current setup/reset, retries, duplicate/reordered event projection, sweeper recovery, quarantine |
@@ -1106,10 +1125,10 @@ baseline evidence.
 | A3 | User belongs to/switches multiple organizations through path tenancy | PR-04–06 request/system tests |
 | A4 | Non-member slug and guessed cross-tenant IDs expose/mutate nothing | PR-05 plus every tenant PR |
 | A5 | Role matrix and concurrent last-owner invariant are exact | PR-04/06 policy+concurrency tests |
-| A6 | Catalog/plan versions are stable, typed, constrained, and published immutable | PR-07–08 DB/service tests |
+| A6 | Catalog keys are stable; plan-product, flag/finite/unlimited entitlements, free-plan uniqueness, and prices are database-constrained | PR-07–08 DB/service tests |
 | A7 | Cross-product roles/permissions/assignments are impossible | PR-09–10 DB/request tests |
 | A8 | Owner/admin have no product bypass; all entitlement+RBAC factors are required | PR-15 truth table |
-| A9 | Boolean/numeric limits and concurrent final-unit consumption are correct | PR-15 service/concurrency tests |
+| A9 | Flag, finite/unlimited limits, and concurrent final-unit consumption are correct | PR-15 service/concurrency tests |
 | A10 | Every billing status/time boundary matches the one canonical matrix | PR-12/14B table tests |
 | A11 | Redirect/API/portal success never changes access | PR-16–17 request/integration tests |
 | A12 | Forged/mutated/replayed/reordered/mismatched webhooks cannot over-grant | PR-13–14B tests/drills |

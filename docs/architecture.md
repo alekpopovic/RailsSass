@@ -11,10 +11,10 @@ codebase and one application release, with separate web and worker processes.
 
 The repository contains the Rails application foundation, PostgreSQL-backed CI,
 email/password authentication, organization onboarding, locator-backed path
-tenancy, and audited organization invitations/member administration. This
-document describes both those established boundaries and the remaining target
-architecture; catalog, product access, billing, and deployment hardening remain
-incremental milestones.
+tenancy, audited organization invitations/member administration, and the
+constrained local product/plan catalog. This document describes both those
+established boundaries and the remaining target architecture; product access,
+billing, and deployment hardening remain incremental milestones.
 
 Related contracts:
 
@@ -73,8 +73,8 @@ network boundary.
 | --- | --- | --- | --- |
 | Accounts | `User`, sessions, password reset | Rails security primitives | Organizations, plans, billing |
 | Tenancy | `Organization`, memberships, `Organizations::*` commands, invitations, global access locators, `Current`, tenant loader | Accounts | Product permission logic, provider calls |
-| Catalog | Products, features, immutable plan versions and entitlements | None of the tenant modules | Organization state, usage, billing lifecycle |
-| Billing | Prices, checkout attempts, subscriptions, global provider locators, webhook ledger, Lemon adapter | Tenancy, Catalog | Product RBAC or product resource data |
+| Catalog | Products, features, stable-keyed plans, plan-product/feature entitlements, and local plan-price records | None of the tenant modules | Organization state, usage, subscription lifecycle |
+| Billing | Checkout attempts, subscriptions, environment-specific provider mapping, global provider locators, webhook ledger, Lemon adapter | Tenancy, Catalog | Product RBAC or product resource data |
 | Access Control | Product memberships, roles, permissions, Pundit base integration, central common gate | Tenancy, Catalog, Billing | Provider HTTP, product-specific record/usage mutations |
 | Product modules | Tenant product records, Pundit record rules, authoritative numeric usage/commands | Tenancy, Access Control | Subscription projection or global role definitions |
 | Platform | Jobs, mail, audit/logging, health, deployment and observability | Explicit module APIs | Business decisions hidden in callbacks |
@@ -133,15 +133,16 @@ app/
     product.rb
     product_feature.rb
     plan.rb
-    plan_product_entitlement.rb
+    plan_product.rb
     plan_feature_entitlement.rb
+    plan_price.rb
     product_membership.rb
     product_membership_role.rb
     product_role.rb
     product_permission.rb
     product_role_permission.rb
     audit_event.rb
-    billing/price.rb
+    billing/provider_price_mapping.rb
     billing/checkout_attempt.rb
     billing/subscription.rb
     billing/provider_locator.rb
@@ -255,15 +256,16 @@ active organization
 AND active organization membership
 AND locally access-granting synchronized subscription
 AND plan product entitlement
-AND optional typed feature entitlement/limit
+AND optional enabled flag or finite/unlimited feature entitlement
 AND product membership
 AND product-role permission
 ```
 
 The product Pundit policy then applies tenant record rules. A consuming product
 command revalidates the common grant and atomically enforces product-owned usage
-plus its server-calculated delta against the returned numeric limit in the same
-transaction as mutation. Action-to-permission/feature/consumption mappings are
+plus its server-calculated delta against returned finite capacity in the same
+transaction as mutation; explicit unlimited capacity still follows the command
+and permission path but has no numeric ceiling. Action-to-permission/feature/consumption mappings are
 server-owned, so a client cannot omit a capacity check.
 
 Organization administration and billing actions use the explicit organization
@@ -289,7 +291,12 @@ controls but never replace request authorization.
   indexes; enums/types/ranges use database check constraints.
 - Cross-tenant and cross-product joins use composite foreign keys, not only
   model validation.
-- Published plan versions and their entitlement graph are immutable.
+- Catalog identities use stable keys and explicit active flags. Catalog writes
+  are deployment-controlled; an active/free/price flag never assigns a plan to
+  an organization or changes subscription state.
+- `PlanPrice` is catalog/display data and a future Billing input, not an access
+  grant. Billing must add and validate exact test/live environment mapping
+  before exposing checkout or webhook projection.
 - Service objects own multi-row state transitions. Authorization-sensitive
   invariants do not depend on uncontrolled Active Record callbacks.
 - `Organizations::Memberships::ChangeRole`,
@@ -402,7 +409,7 @@ Minitest is enabled before domain work. Test layers are:
   authorization;
 - job tests for tenant context, retries, duplicates, and state projection;
 - provider contract tests using sanitized official-style fixtures;
-- concurrency tests for last-owner and numeric-limit races;
+- concurrency tests for last-owner and finite-limit races;
 - system tests for critical organization, assignment, checkout-pending, and
   subscription UI flows;
 - production smoke checks for database preparation, eager load, image build,

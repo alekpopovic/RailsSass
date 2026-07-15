@@ -119,6 +119,17 @@ Dependabot checks Bundler, GitHub Actions, and Docker dependencies weekly.
 
 ## Database lifecycle and troubleshooting
 
+Development and test may load the synthetic local catalog repeatedly:
+
+```bash
+bin/rails db:seed
+```
+
+The task converges products `core`, `analytics`, and `crm` plus plans `starter`
+and `professional` by stable key. It is a no-op outside development/test and
+does not create entitlements, prices, Lemon identifiers, subscriptions, or
+tenant grants.
+
 The primary PostgreSQL database uses `db/structure.sql` so a clean schema load
 preserves database functions and deferred constraint triggers. Generate it only
 through Rails migration/schema tasks; do not edit it by hand. Solid

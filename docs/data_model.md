@@ -1,14 +1,15 @@
 # Data Model
 
 Status: Proposed
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 ## 1. Purpose
 
 This document is the canonical relational model for the production MVP. It
 defines ownership, names, relationships, indexes, foreign keys, and database
-constraints. Account/session migrations and the organization foundation exist;
-the remaining tables below are planned in the execution order documented here.
+constraints. Account/session, organization, invitation/audit, and local catalog
+migrations exist; later access-control, product-domain, and billing tables below
+remain planned in the documented execution order.
 
 Behavioral interpretation is defined in
 [Authorization Model](authorization_model.md) and
@@ -36,7 +37,7 @@ Behavioral interpretation is defined in
   can be derived through another relationship.
 - Composite foreign keys prevent cross-organization and cross-product joins.
 - Product, feature, role, and plan keys use lowercase ASCII snake case and are
-  immutable after publish. Permission keys use dot-separated lowercase
+  stable identities that are not renamed in place. Permission keys use dot-separated lowercase
   snake-case segments, for example `projects.create`.
 
 ## 3. Ownership classes
@@ -45,7 +46,7 @@ Behavioral interpretation is defined in
 | --- | --- | --- |
 | Global account | `users`, `sessions` | Through authenticated account/session |
 | Tenant-owned | organizations' memberships, invitations, product assignments, checkout attempts, subscriptions, product-domain records | Through `Current.organization` after bootstrap |
-| Global system catalog | products, features, plans, entitlements, product roles/permissions, billing prices | Read through explicit catalog services; writes are deployment-controlled |
+| Global system catalog | products, features, plans, plan products, feature entitlements, plan prices, product roles/permissions | Read through explicit catalog services; writes are deployment-controlled |
 | Global locator infrastructure | `organization_access_locators`, `billing_provider_locators` | Discovery only; never sufficient authorization; immediately reload tenant records through `Current.organization` |
 | Provider ingress ledger | `billing_webhook_events` | No ordinary user query; verified system resolver, then tenant reload when associated |
 
@@ -69,13 +70,13 @@ erDiagram
   PRODUCT_ROLE ||--o{ PRODUCT_ROLE_PERMISSION : grants
   PRODUCT_PERMISSION ||--o{ PRODUCT_ROLE_PERMISSION : included
   PRODUCT ||--o{ PRODUCT_FEATURE : defines
-  PLAN ||--o{ PLAN_PRODUCT_ENTITLEMENT : grants
-  PRODUCT ||--o{ PLAN_PRODUCT_ENTITLEMENT : entitled
-  PLAN_PRODUCT_ENTITLEMENT ||--o{ PLAN_FEATURE_ENTITLEMENT : contains
+  PLAN ||--o{ PLAN_PRODUCT : grants
+  PRODUCT ||--o{ PLAN_PRODUCT : entitled
+  PLAN_PRODUCT ||--o{ PLAN_FEATURE_ENTITLEMENT : contains
   PRODUCT_FEATURE ||--o{ PLAN_FEATURE_ENTITLEMENT : valued
-  PLAN ||--o{ BILLING_PRICE : sold_as
+  PLAN ||--o{ PLAN_PRICE : sold_as
   ORGANIZATION ||--o{ BILLING_SUBSCRIPTION : owns
-  BILLING_PRICE ||--o{ BILLING_SUBSCRIPTION : maps
+  PLAN_PRICE ||--o{ BILLING_SUBSCRIPTION : maps
   ORGANIZATION ||--o{ BILLING_PROVIDER_LOCATOR : discovered_by
 ```
 
@@ -269,101 +270,129 @@ the digest and expiry. The invitation itself never authorizes tenant access.
 
 - `key`: globally unique stable lowercase snake-case identifier.
 - `name`: display name.
-- `state`: `active` or `retired`.
+- `description`: normalized display description, defaulting to an empty string.
+- `active`: non-null boolean, default true.
 
-Retiring a product blocks new plan/RBAC/product-membership assignment but does
-not delete or silently revoke historical references. Existing published plans
-and assignments continue to evaluate until customers are explicitly migrated to
-a new plan/assignment graph. An emergency global product kill switch, if ever
-needed, is a separate audited security control rather than overloaded `state`.
+`key` is the application identity and is readonly after creation. `name` and
+`description` are presentation values and are never lookup or authorization
+inputs. Setting `active` false removes the product from new catalog selections;
+it does not delete retained references and is not an emergency authorization
+kill switch.
 
 ### 6.2 `ProductFeature` / `product_features`
 
 - `product_id`: not-null foreign key to `products`, delete restricted.
 - `key`: stable within the product.
 - `name`: display name.
-- `value_type`: `boolean` or `integer_limit`.
-- `state`: `active` or `retired`.
-- `unit`: null for boolean features; non-blank stable unit name for numeric
-  features, such as `projects` or `seats`.
+- `description`: normalized display description, defaulting to an empty string.
+- `kind`: `flag` or `limit`.
+- `active`: non-null boolean, default true.
 
 Constraints and indexes:
 
 - unique `(product_id, key)`;
-- check allowed `value_type` and `state`;
-- explicit typed unit check: boolean requires `unit IS NULL`; integer-limit
-  requires `unit IS NOT NULL AND btrim(unit) <> ''`;
-- unique `(id, product_id, value_type)` to support a composite entitlement
+- check allowed `kind`;
+- unique `(id, product_id, kind)` to support a composite entitlement
   foreign key.
 
 A feature key is not a permission key. Product code maintains an explicit
-registry from each numeric feature key to its authoritative usage query and
+registry from each limit feature key to its unit, authoritative usage query, and
 atomic consuming operation. Arbitrary constant lookup from database text is
-prohibited.
-
-Retirement blocks new draft-plan references but preserves existing published
-plan behavior until an explicit plan-version migration.
+prohibited. `product_id`, `key`, and `kind` are readonly identities. Setting
+`active` false blocks new catalog selection but does not rewrite existing rows.
 
 ### 6.3 `Plan` / `plans`
 
-- `key`: stable offering family, such as `starter`.
-- `version`: positive integer.
+- `key`: globally unique stable identifier, such as `starter`.
 - `name`: display name.
-- `state`: `draft`, `published`, or `retired`.
-- `published_at`, `retired_at`.
+- `description`: normalized display description, defaulting to an empty string.
+- `active`: non-null boolean, default true.
+- `free`: non-null boolean, default false.
+- `position`: non-negative integer used only for deterministic display order.
 
 Constraints and indexes:
 
-- unique `(key, version)`;
-- positive version check;
-- lifecycle state/timestamp checks.
+- unique `key`;
+- partial unique index allowing at most one row where `active AND free`;
+- non-negative `position` check.
 
-Once published, the plan and its entitlement rows are immutable. Changes create
-a new version. A Lemon Squeezy variant mapping can be created only for one exact
-currently published version; moving customers requires an explicit provider
-variant/subscription transition.
-Lifecycle is one-way `draft -> published -> retired`. Retirement blocks new
-billing-price mappings and new checkout selection, but does not rewrite or
-revoke the immutable entitlements used by already synchronized subscriptions.
+`key` is readonly after creation. `free` is catalog metadata; it does not attach
+the plan to any organization, bypass subscription synchronization, or create a
+fallback entitlement. An inactive plan is unavailable for new catalog and
+future checkout selection, but changing `active` does not itself change a local
+subscription.
 
-### 6.4 `PlanProductEntitlement` / `plan_product_entitlements`
+### 6.4 `PlanProduct` / `plan_products`
 
 - `plan_id`: not-null foreign key to `plans`, delete restricted.
 - `product_id`: not-null foreign key to `products`, delete restricted.
 
-Presence grants base product entitlement. Constraints:
+Presence grants base product entitlement when the selected local subscription
+resolves to that plan. It grants nothing by itself. Constraints:
 
-- unique `(plan_id, product_id)`, which is also the parent composite key for
-  feature entitlements;
+- unique `(plan_id, product_id)`;
+- supporting unique `(id, product_id)` for the feature-entitlement composite
+  foreign key;
 - supporting index on `product_id`.
 
 Absence denies the product.
 
 ### 6.5 `PlanFeatureEntitlement` / `plan_feature_entitlements`
 
-- `plan_id`, `product_id`, `product_feature_id`: not null.
-- `value_type`: copied from the referenced feature for a database-enforceable
-  composite relationship.
-- `boolean_value`: nullable boolean.
+- `plan_product_id`, `product_feature_id`: not-null restricted foreign keys.
+- `product_id`: not-null integrity copy of the plan product's product.
+- `feature_kind`: not-null integrity copy of the feature's `kind`.
+- `enabled`: non-null master grant switch, default false.
 - `limit_value`: nullable bigint.
+- `unlimited`: non-null boolean, default false.
+- `settings`: non-null JSONB object, default `{}`.
 
 Foreign keys:
 
-- `(plan_id, product_id)` to
-  `plan_product_entitlements(plan_id, product_id)`;
-- `(product_feature_id, product_id, value_type)` to
-  `product_features(id, product_id, value_type)`.
+- `(plan_product_id, product_id)` to `plan_products(id, product_id)`;
+- `(product_feature_id, product_id, feature_kind)` to
+  `product_features(id, product_id, kind)`.
 
 Constraints and indexes:
 
-- unique `(plan_id, product_feature_id)`;
-- for `boolean`, `boolean_value` is non-null and `limit_value` is null;
-- for `integer_limit`, `boolean_value` is null and
-  `limit_value IS NOT NULL AND limit_value >= 0`;
-- no negative or `-1 means unlimited` sentinel.
+- unique `(plan_product_id, product_feature_id)`;
+- `settings` must be a JSON object;
+- for `flag`, `limit_value` is null and `unlimited` is false; `enabled` is the
+  boolean entitlement value;
+- for `limit`, exactly one capacity representation is required regardless of
+  `enabled`: either `unlimited = true` with null `limit_value`, or
+  `unlimited = false` with non-null `limit_value >= 0`;
+- `enabled` is the master grant switch. A disabled limit entitlement may retain
+  its configured finite or unlimited capacity but still denies access.
+
+Unknown `settings` keys have no generic authorization effect. Any setting that
+affects product behavior requires a code-reviewed, feature-specific schema and
+registry contract before it is consumed.
 
 This shape prevents a feature entitlement without its product entitlement,
 wrong-product feature attachment, and value-type drift.
+
+### 6.6 `PlanPrice` / `plan_prices`
+
+A global local-catalog price belonging to one plan:
+
+- `plan_id`: not-null restricted foreign key.
+- `billing_interval`: `monthly` or `yearly`.
+- `currency`: normalized three-letter uppercase currency code.
+- `amount_cents`: non-negative bigint.
+- nullable `lemon_store_id`, `lemon_product_id`, and `lemon_variant_id`.
+- `active`: non-null boolean, default true.
+
+The three Lemon identifiers are either all null or all present and normalized.
+`lemon_variant_id` is globally unique when present. This local mapping and its
+display amount are server-controlled catalog data, not payment confirmation and
+not an access grant. `active` controls catalog/future checkout selection only.
+
+`PlanPrice` does not yet model provider environment. Before a public checkout or
+webhook projection is implemented, Billing must add and validate exact test/live
+environment and store isolation; production code must not infer it from display
+price, plan name, or runtime environment alone. Provider responses remain
+authoritative for charged amount and tax.
 
 ## 7. Product RBAC
 
@@ -439,49 +468,30 @@ no product action.
 
 ## 8. Billing
 
-### 8.1 `Billing::Price` / `billing_prices`
+### 8.1 Price input boundary
 
-A global allowlist created by mapping an exact Lemon Squeezy variant to an exact
-currently published plan version; the historical mapping survives later plan
-retirement.
+The implemented local price record is `PlanPrice`, documented in section 6.6.
+It is a Catalog input and does not grant access, confirm payment, or provide a
+complete production provider mapping.
 
-- `plan_id`: not-null foreign key, delete restricted.
-- `provider`: checked to `lemon_squeezy` in the MVP.
-- `environment`: `test` or `live`.
-- `provider_store_id`, `provider_product_id`, `provider_variant_id`: non-blank
-  text.
-- `active`: non-null boolean.
-- optional display-only billing interval/label; provider remains authoritative
-  for price and tax.
-
-Indexes and constraints:
-
-- unique `(provider, environment, provider_store_id, provider_variant_id)`;
-- index `plan_id`;
-- supporting unique `(id, provider, environment)` for checkout attempts;
-- supporting unique
-  `(id, provider, environment, provider_store_id, provider_product_id,
-  provider_variant_id)` for subscriptions.
-
-Multiple billing prices can map to one plan version. A plan version change
-requires a distinct provider variant or an explicit migration strategy;
-silently repointing a used price is prohibited.
-
-The mapping service accepts only a currently `published` plan. `active` controls
-new checkout selection only, which also rechecks that the plan remains
-published. Retiring a plan therefore blocks checkout even if a price's `active`
-flag has not yet been cleared; Billing may deactivate those prices as
-housekeeping without changing historical meaning. An inactive historical price
-continues to resolve existing subscriptions to its immutable
-published-then-retired plan version.
+The later Billing milestone must define the persisted environment-qualified
+mapping used by checkout and verified webhook projection. That mapping must bind
+an exact test/live environment, configured store, Lemon product/variant, and
+local `PlanPrice`/`Plan` without trusting browser fields or display names. The
+remaining checkout/subscription schema in this section is therefore proposed;
+its price-mapping foreign-key shape must be finalized with that Billing
+milestone rather than treating `PlanPrice.lemon_variant_id` alone as production
+authorization evidence.
 
 ### 8.2 `Billing::CheckoutAttempt` / `billing_checkout_attempts`
 
 - `organization_id`: not-null tenant foreign key.
 - `initiated_by_membership_id`: not null, composite tenant foreign key.
-- `billing_price_id`: not-null foreign key.
+- `plan_price_id`: not-null restricted foreign key to the selected local
+  `plan_prices` row.
 - `provider`: `lemon_squeezy`.
-- `environment`: `test` or `live`, matching the billing price.
+- `environment`: `test` or `live`; the future Billing mapping must validate it
+  independently because `PlanPrice` has no environment column.
 - `token_digest`: SHA-256 digest of a transient high-entropy correlation token,
   not null; plaintext is never persisted.
 - `state`: `creating`, `ready`, `creation_unknown`, `completed`, `expired`,
@@ -496,12 +506,13 @@ Constraints and indexes:
 - globally unique 64-character hex `token_digest`;
 - composite foreign key
   `(initiated_by_membership_id, organization_id)` to membership;
-- composite foreign key `(billing_price_id, provider, environment)` to the same
-  tuple on `billing_prices`;
+- ordinary restricted foreign key from `plan_price_id` to `plan_prices`;
+- an environment-qualified provider-mapping constraint to be defined before
+  checkout is exposed;
 - unique `(provider, environment, provider_checkout_id)` when the checkout ID is
   present;
 - supporting unique tuple
-  `(id, organization_id, billing_price_id, provider, environment)` for a
+  `(id, organization_id, plan_price_id, provider, environment)` for a
   subscription foreign key;
 - supporting unique
   `(id, organization_id, provider, environment, token_digest)` for the verified
@@ -530,8 +541,8 @@ token is transient correlation data, not proof of access.
 ### 8.3 `Billing::Subscription` / `billing_subscriptions`
 
 - `organization_id`: not-null tenant foreign key.
-- `billing_price_id`: not-null current provider-price mapping foreign key.
-- `origin_billing_price_id`: not-null immutable original price foreign key.
+- `plan_price_id`: not-null current local plan-price foreign key.
+- `origin_plan_price_id`: not-null original local plan-price foreign key.
 - `origin_checkout_attempt_id`: not-null immutable unique foreign key.
 - `provider`: `lemon_squeezy`.
 - `environment`: `test` or `live`.
@@ -559,15 +570,14 @@ Constraints and indexes:
   the global provider locator;
 - partial unique index on `organization_id WHERE superseded_at IS NULL`;
 - foreign key to organization;
+- ordinary restricted foreign key from `plan_price_id` to `plan_prices`, plus
+  the environment-qualified provider-mapping constraint finalized by the
+  Billing milestone;
 - composite foreign key
-  `(billing_price_id, provider, environment, provider_store_id,
-  provider_product_id, provider_variant_id)` to the same supporting unique tuple
-  on `billing_prices`, enforcing the current exact mapping;
-- composite foreign key
-  `(origin_checkout_attempt_id, organization_id, origin_billing_price_id,
+  `(origin_checkout_attempt_id, organization_id, origin_plan_price_id,
   provider, environment)` to the supporting tuple on
   `billing_checkout_attempts`, preventing cross-tenant/origin-price attachment;
-- ordinary foreign key from `origin_billing_price_id` to `billing_prices`,
+- ordinary foreign key from `origin_plan_price_id` to `plan_prices`,
   delete restricted;
 - check `test` implies `test_mode = true` and `live` implies false;
 - normalized status and sync-state checks;
@@ -593,10 +603,10 @@ subscription row and grants nothing.
 
 There is no `organizations.plan_id` and no separate mutable effective-plan row.
 The one current, synchronized, access-granting local subscription derives its
-canonical plan version through its current immutable `Billing::Price`. This
-avoids two sources of entitlement truth. A verified plan change updates only the
-current `billing_price_id` and matching provider identifiers; origin fields stay
-unchanged.
+canonical plan through its current `PlanPrice`. `PlanPrice` alone still grants
+nothing: the synchronized subscription and exact future environment-qualified
+provider mapping are required. A verified plan change updates only the current
+`plan_price_id` and matching provider identifiers; origin fields stay unchanged.
 
 Only `expired` is terminal for starting a replacement subscription in the MVP.
 When a verified new subscription is correlated after an expired current row,
@@ -737,11 +747,11 @@ Every product-domain table must:
   tenant/product row;
 - define the authoritative usage query for each numeric feature it consumes.
 
-The MVP does not introduce a generic usage ledger. Current-capacity features use
+The MVP does not introduce a generic usage ledger. Finite current-capacity features use
 the product's authoritative records or a product-owned counter maintained in the
 same transaction. If a future feature needs time-window metering, it requires a
-separate ADR and data model; `-1` or a null limit must not be overloaded as
-unlimited.
+separate ADR and data model. Unlimited is represented only by the explicit
+entitlement boolean; `-1` and null are never implicit unlimited sentinels.
 
 ## 11. Lifecycle, deletion, and foreign-key policy
 
@@ -751,8 +761,8 @@ unlimited.
 | Organization | Retain; organization archive and hard deletion are outside the MVP |
 | Membership | Soft-suspend; service deletes product memberships/role joins and the global access locator atomically once those records exist |
 | Invitation | Revoke/expire; retain minimal audit metadata for a bounded period |
-| Product/feature/role/permission | Retire; restrict deletion when referenced |
-| Published plan/entitlements | Immutable; restrict deletion |
+| Product/feature/role/permission | Deactivate; restrict deletion when referenced |
+| Plan/product/feature entitlement/price | Deactivate or update through deployment-controlled catalog changes; restrict deletion when referenced |
 | Checkout attempt/subscription/webhook | Retain per billing/security retention policy; never cascade from ordinary UI operations |
 
 Default foreign-key deletion is `RESTRICT`/`NO ACTION`. Intentional database
@@ -763,13 +773,14 @@ cascades are limited to:
 - `product_membership_roles` when the audited suspension/assignment service
   deletes a product membership.
 
-PostgreSQL cascades cannot be conditional on parent lifecycle. Draft-plan
-editing therefore explicitly deletes feature-entitlement children before their
-plan-product parent in one service transaction; catalog role/permission joins
-are handled the same way. Their foreign keys remain `RESTRICT`, so deleting a
-published/retired or referenced parent cannot silently cascade.
+PostgreSQL cascades cannot be conditional on parent lifecycle. A future
+deployment-controlled catalog edit therefore explicitly deletes unreferenced
+feature-entitlement children before their plan-product parent in one service
+transaction; catalog role/permission joins are handled the same way. Their
+foreign keys remain `RESTRICT`, so deleting a referenced parent cannot silently
+cascade.
 
-Published catalog/plan data, organizations, memberships, invitations, audit
+Referenced catalog/plan data, organizations, memberships, invitations, audit
 events, billing attempts/subscriptions/locators/webhook events, and provider
 history are delete-restricted or explicitly retained. Application lifecycle/
 suspension services perform allowed child transitions before changing the
@@ -794,17 +805,20 @@ columns as non-null from the start.
 
 ## 13. Data-model acceptance tests
 
-- Duplicate organization slug, membership, product assignment, plan-product
-  entitlement, role-permission join, and provider subscription IDs fail.
+- Duplicate organization slug, membership, product assignment, plan product,
+  plan feature, active free plan, Lemon variant mapping, role-permission join,
+  and provider subscription IDs fail.
 - Database checks reject invalid roles/statuses, negative limits, malformed
-  typed feature values, blank stable keys, and environment/test-mode mismatch.
+  flag/finite/unlimited values, non-object settings, blank stable keys, and
+  environment/test-mode mismatch.
 - Composite foreign keys reject cross-organization product membership and
   cross-product permission/role/feature joins.
 - An entitlement cannot reference a feature unless its plan also grants that
   feature's product.
 - One checkout attempt cannot activate two subscriptions, and an organization
   cannot have two current subscriptions or concurrent pending checkouts.
-- Published plan data cannot be modified through application write paths.
+- Catalog identity keys and cross-product integrity fields cannot be changed
+  through ordinary model write paths.
 - Sequential, concurrent, and direct database membership transitions cannot
   remove the last active owner; the account-disable follow-up separately
   prevents disabling the last access-eligible owner across organizations.

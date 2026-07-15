@@ -29,7 +29,7 @@ Related documents:
 2. Every tenant billing query is scoped through `Current.organization`. Only the
    verified webhook resolver may query the global, non-authoritative
    `Billing::ProviderLocator` to select a candidate tenant.
-3. The browser supplies a local billing-price ID only. Provider store, product,
+3. The browser supplies a local plan-price ID only. Provider store, product,
    variant, price, custom price, environment, and redirect URL are server-owned.
 4. Checkout correlation uses a transient high-entropy local token. Only its
    SHA-256 digest is persisted; email, name, slug, browser session, and
@@ -82,33 +82,41 @@ single local status matrix below isolate the application from provider details.
 
 ## 4. Catalog and environment mapping
 
-`Billing::Price` is the only allowed mapping from a Lemon Squeezy variant to a
-local plan version. It binds:
+`PlanPrice` is the local catalog/display record for a plan's monthly or yearly
+price. It may carry one complete Lemon store/product/variant tuple, but it has no
+provider-environment dimension and therefore is not yet a production-safe
+checkout or webhook mapping by itself.
+
+Before Billing exposes checkout or subscription projection, its mapping
+milestone must bind and validate:
 
 ```text
 provider + environment + store ID + product ID + variant ID
-                                  -> exact immutable Plan version
+                                  -> exact local PlanPrice -> Plan
 ```
 
 Rules:
 
-- Only an active price whose immutable plan is still `published` may be selected
-  for a new checkout. This plan-state recheck, not eventual price cleanup, is
-  the sales-stop boundary.
+- No checkout is exposed until exact test/live environment and configured-store
+  isolation exists in addition to the current `PlanPrice` fields.
+- Only an active `PlanPrice` whose plan is also active may be considered for a
+  future checkout. Both checks are selection rules, not access grants.
 - Inactive historical prices remain valid mappings for existing subscriptions;
   `active` is a checkout-selection flag, not an entitlement kill switch.
-- A retired plan remains valid for an already synchronized subscription; plan
-  retirement is a sales lifecycle transition, not an implicit customer revoke.
+- An inactive plan remains referenced by an already synchronized subscription;
+  deactivation is not an implicit subscription or entitlement transition.
 - Production checkout selects a `live` mapping; development/test uses `test`.
 - Provider identifiers are configuration/catalog data, not secrets, but they
   are still server-controlled and never trusted from a form.
 - API keys and webhook secrets are credentials and remain outside the
   repository.
-- Published plan versions are immutable. A new entitlement version requires a
-  new provider variant or an explicit subscription migration; an existing used
-  price is never silently repointed.
+- A provider tuple already referenced by billing history is never silently
+  repointed; the Billing milestone must enforce the required transition and
+  history policy before provider-backed rows exist.
 - An incoming variant with no exact active/historical mapping is quarantined and
   fail-closed. It does not inherit a nearby plan by product name or price.
+- `Plan.free` is catalog metadata only. It does not create a subscription or a
+  free/manual runtime fallback.
 
 ## 5. Checkout sequence
 
@@ -119,8 +127,8 @@ Rules:
 - authenticated enabled user;
 - active `Current.membership` with role owner/billing;
 - valid CSRF token;
-- active local billing price in the correct environment whose plan is still
-  `published`;
+- active local `PlanPrice` with an active plan and an exact server-owned mapping
+  for the configured environment/store;
 - no current non-terminal subscription;
 - no pending checkout attempt.
 
@@ -162,7 +170,8 @@ sequenceDiagram
 
 Server request details:
 
-- set one `enabled_variants` entry matching `Billing::Price`;
+- set one `enabled_variants` entry matching the environment-qualified mapping
+  for the selected `PlanPrice`;
 - set a canonical server-generated return URL for the current tenant;
 - set a short provider and local expiry, initially 30 minutes;
 - generate a high-entropy token, persist only its SHA-256 digest in the attempt
@@ -391,7 +400,7 @@ Every `ALLOW` also requires all preconditions:
 - one current, non-superseded local subscription;
 - `sync_state = synced`;
 - correct application environment and test/live mapping;
-- exact known billing price and immutable plan mapping;
+- exact known `PlanPrice`, plan, and environment-qualified provider mapping;
 - no mapping conflict or invalid provider snapshot;
 - tenant-scoped lookup through `Current.organization`.
 
@@ -413,8 +422,9 @@ It slightly exceeds the currently documented roughly two-week retry period while
 bounding access if a terminal webhook is missed. Exact boundaries are strict:
 access ends at, not after, the stored timestamp.
 
-This predicate returns an exact `Plan` only when allowed. With no allowed
-subscription there is no free/manual fallback plan in the MVP. Organization and
+This predicate returns an exact `Plan` only when allowed. `Plan.free` does not
+change the predicate; with no allowed subscription there is no automatic
+catalog-plan fallback. Organization and
 billing administration remain available according to organization roles, while
 product access denies.
 
@@ -432,7 +442,8 @@ only the event is quarantined and no arbitrary subscription is changed.
 - API success may set a separate checkout/command display state, but never edits
   local subscription status or plan.
 - A variant change takes effect locally only after a verified
-  `subscription_updated` webhook maps the exact variant to a plan version.
+  `subscription_updated` webhook maps the exact variant to a `PlanPrice` and
+  plan in the configured environment.
 - Cancellation remains access-granting only before local `ends_at` according to
   the matrix.
 - Resume, pause, recovery, and expiration are likewise synchronized from a
@@ -502,7 +513,8 @@ this accepted operational risk without creating a second mutation authority.
 - Owner/billing allowed; admin/member/non-member denied server-side.
 - CSRF is enforced.
 - Cross-tenant slug/price/attempt IDs cannot select another tenant.
-- Inactive price and client-supplied provider fields/custom price/redirect fail.
+- Inactive plan/price, absent environment-qualified mapping, and client-supplied
+  provider fields/custom price/redirect fail.
 - The request contains exactly one allowlisted variant and a transient opaque
   token; only its digest exists in the database/log capture.
 - A non-terminal current subscription and concurrent pending attempt block

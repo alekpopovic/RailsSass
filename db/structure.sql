@@ -296,6 +296,238 @@ ALTER SEQUENCE public.organizations_id_seq OWNED BY public.organizations.id;
 
 
 --
+-- Name: plan_feature_entitlements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.plan_feature_entitlements (
+    id bigint NOT NULL,
+    plan_product_id bigint NOT NULL,
+    product_feature_id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    feature_kind character varying(16) NOT NULL,
+    enabled boolean DEFAULT false NOT NULL,
+    limit_value bigint,
+    unlimited boolean DEFAULT false NOT NULL,
+    settings jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT plan_feature_entitlements_kind_allowed CHECK (((feature_kind)::text = ANY ((ARRAY['flag'::character varying, 'limit'::character varying])::text[]))),
+    CONSTRAINT plan_feature_entitlements_settings_object CHECK ((jsonb_typeof(settings) = 'object'::text)),
+    CONSTRAINT plan_feature_entitlements_typed_value CHECK (((((feature_kind)::text = 'flag'::text) AND (limit_value IS NULL) AND (unlimited = false)) OR (((feature_kind)::text = 'limit'::text) AND (((unlimited = true) AND (limit_value IS NULL)) OR ((unlimited = false) AND (limit_value IS NOT NULL) AND (limit_value >= 0))))))
+);
+
+
+--
+-- Name: plan_feature_entitlements_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.plan_feature_entitlements_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: plan_feature_entitlements_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.plan_feature_entitlements_id_seq OWNED BY public.plan_feature_entitlements.id;
+
+
+--
+-- Name: plan_prices; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.plan_prices (
+    id bigint NOT NULL,
+    plan_id bigint NOT NULL,
+    billing_interval character varying(16) NOT NULL,
+    currency character varying(3) NOT NULL,
+    amount_cents bigint NOT NULL,
+    lemon_store_id character varying(64),
+    lemon_product_id character varying(64),
+    lemon_variant_id character varying(64),
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT plan_prices_amount_non_negative CHECK ((amount_cents >= 0)),
+    CONSTRAINT plan_prices_billing_interval_allowed CHECK (((billing_interval)::text = ANY ((ARRAY['monthly'::character varying, 'yearly'::character varying])::text[]))),
+    CONSTRAINT plan_prices_currency_format CHECK (((currency)::text ~ '^[A-Z]{3}$'::text)),
+    CONSTRAINT plan_prices_lemon_mapping_complete CHECK ((((lemon_store_id IS NULL) AND (lemon_product_id IS NULL) AND (lemon_variant_id IS NULL)) OR ((lemon_store_id IS NOT NULL) AND ((lemon_store_id)::text = btrim((lemon_store_id)::text)) AND ((lemon_store_id)::text !~ '[[:space:]]'::text) AND ((char_length((lemon_store_id)::text) >= 1) AND (char_length((lemon_store_id)::text) <= 64)) AND (lemon_product_id IS NOT NULL) AND ((lemon_product_id)::text = btrim((lemon_product_id)::text)) AND ((lemon_product_id)::text !~ '[[:space:]]'::text) AND ((char_length((lemon_product_id)::text) >= 1) AND (char_length((lemon_product_id)::text) <= 64)) AND (lemon_variant_id IS NOT NULL) AND ((lemon_variant_id)::text = btrim((lemon_variant_id)::text)) AND ((lemon_variant_id)::text !~ '[[:space:]]'::text) AND ((char_length((lemon_variant_id)::text) >= 1) AND (char_length((lemon_variant_id)::text) <= 64)))))
+);
+
+
+--
+-- Name: plan_prices_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.plan_prices_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: plan_prices_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.plan_prices_id_seq OWNED BY public.plan_prices.id;
+
+
+--
+-- Name: plan_products; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.plan_products (
+    id bigint NOT NULL,
+    plan_id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL
+);
+
+
+--
+-- Name: plan_products_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.plan_products_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: plan_products_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.plan_products_id_seq OWNED BY public.plan_products.id;
+
+
+--
+-- Name: plans; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.plans (
+    id bigint NOT NULL,
+    key character varying(63) NOT NULL,
+    name character varying(100) NOT NULL,
+    description text DEFAULT ''::text NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    free boolean DEFAULT false NOT NULL,
+    "position" integer DEFAULT 0 NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT plans_description_normalized CHECK (((description = btrim(description)) AND (char_length(description) <= 2000))),
+    CONSTRAINT plans_key_format CHECK ((((key)::text ~ '^[a-z][a-z0-9]*(_[a-z0-9]+)*$'::text) AND ((char_length((key)::text) >= 1) AND (char_length((key)::text) <= 63)))),
+    CONSTRAINT plans_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100)))),
+    CONSTRAINT plans_position_non_negative CHECK (("position" >= 0))
+);
+
+
+--
+-- Name: plans_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.plans_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: plans_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.plans_id_seq OWNED BY public.plans.id;
+
+
+--
+-- Name: product_features; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_features (
+    id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    key character varying(63) NOT NULL,
+    name character varying(100) NOT NULL,
+    description text DEFAULT ''::text NOT NULL,
+    kind character varying(16) NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT product_features_description_normalized CHECK (((description = btrim(description)) AND (char_length(description) <= 2000))),
+    CONSTRAINT product_features_key_format CHECK ((((key)::text ~ '^[a-z][a-z0-9]*(_[a-z0-9]+)*$'::text) AND ((char_length((key)::text) >= 1) AND (char_length((key)::text) <= 63)))),
+    CONSTRAINT product_features_kind_allowed CHECK (((kind)::text = ANY ((ARRAY['flag'::character varying, 'limit'::character varying])::text[]))),
+    CONSTRAINT product_features_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100))))
+);
+
+
+--
+-- Name: product_features_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.product_features_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: product_features_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.product_features_id_seq OWNED BY public.product_features.id;
+
+
+--
+-- Name: products; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.products (
+    id bigint NOT NULL,
+    key character varying(63) NOT NULL,
+    name character varying(100) NOT NULL,
+    description text DEFAULT ''::text NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT products_description_normalized CHECK (((description = btrim(description)) AND (char_length(description) <= 2000))),
+    CONSTRAINT products_key_format CHECK ((((key)::text ~ '^[a-z][a-z0-9]*(_[a-z0-9]+)*$'::text) AND ((char_length((key)::text) >= 1) AND (char_length((key)::text) <= 63)))),
+    CONSTRAINT products_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100))))
+);
+
+
+--
+-- Name: products_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.products_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: products_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.products_id_seq OWNED BY public.products.id;
+
+
+--
 -- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -418,6 +650,48 @@ ALTER TABLE ONLY public.organizations ALTER COLUMN id SET DEFAULT nextval('publi
 
 
 --
+-- Name: plan_feature_entitlements id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_feature_entitlements ALTER COLUMN id SET DEFAULT nextval('public.plan_feature_entitlements_id_seq'::regclass);
+
+
+--
+-- Name: plan_prices id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_prices ALTER COLUMN id SET DEFAULT nextval('public.plan_prices_id_seq'::regclass);
+
+
+--
+-- Name: plan_products id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_products ALTER COLUMN id SET DEFAULT nextval('public.plan_products_id_seq'::regclass);
+
+
+--
+-- Name: plans id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plans ALTER COLUMN id SET DEFAULT nextval('public.plans_id_seq'::regclass);
+
+
+--
+-- Name: product_features id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_features ALTER COLUMN id SET DEFAULT nextval('public.product_features_id_seq'::regclass);
+
+
+--
+-- Name: products id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products ALTER COLUMN id SET DEFAULT nextval('public.products_id_seq'::regclass);
+
+
+--
 -- Name: sessions id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -477,6 +751,54 @@ ALTER TABLE ONLY public.organization_memberships
 
 ALTER TABLE ONLY public.organizations
     ADD CONSTRAINT organizations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: plan_feature_entitlements plan_feature_entitlements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_feature_entitlements
+    ADD CONSTRAINT plan_feature_entitlements_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: plan_prices plan_prices_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_prices
+    ADD CONSTRAINT plan_prices_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: plan_products plan_products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_products
+    ADD CONSTRAINT plan_products_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: plans plans_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plans
+    ADD CONSTRAINT plans_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_features product_features_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_features
+    ADD CONSTRAINT product_features_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: products products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products
+    ADD CONSTRAINT products_pkey PRIMARY KEY (id);
 
 
 --
@@ -679,6 +1001,146 @@ CREATE INDEX index_organizations_on_status ON public.organizations USING btree (
 
 
 --
+-- Name: index_plan_feature_entitlements_on_plan_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_plan_feature_entitlements_on_plan_product_id ON public.plan_feature_entitlements USING btree (plan_product_id);
+
+
+--
+-- Name: index_plan_feature_entitlements_on_product_and_feature; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_plan_feature_entitlements_on_product_and_feature ON public.plan_feature_entitlements USING btree (plan_product_id, product_feature_id);
+
+
+--
+-- Name: index_plan_feature_entitlements_on_product_feature_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_plan_feature_entitlements_on_product_feature_id ON public.plan_feature_entitlements USING btree (product_feature_id);
+
+
+--
+-- Name: index_plan_feature_entitlements_on_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_plan_feature_entitlements_on_product_id ON public.plan_feature_entitlements USING btree (product_id);
+
+
+--
+-- Name: index_plan_prices_on_lemon_variant_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_plan_prices_on_lemon_variant_id ON public.plan_prices USING btree (lemon_variant_id) WHERE (lemon_variant_id IS NOT NULL);
+
+
+--
+-- Name: index_plan_prices_on_plan_and_selection; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_plan_prices_on_plan_and_selection ON public.plan_prices USING btree (plan_id, active, billing_interval, currency);
+
+
+--
+-- Name: index_plan_prices_on_plan_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_plan_prices_on_plan_id ON public.plan_prices USING btree (plan_id);
+
+
+--
+-- Name: index_plan_products_on_id_and_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_plan_products_on_id_and_product_id ON public.plan_products USING btree (id, product_id);
+
+
+--
+-- Name: index_plan_products_on_plan_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_plan_products_on_plan_id ON public.plan_products USING btree (plan_id);
+
+
+--
+-- Name: index_plan_products_on_plan_id_and_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_plan_products_on_plan_id_and_product_id ON public.plan_products USING btree (plan_id, product_id);
+
+
+--
+-- Name: index_plan_products_on_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_plan_products_on_product_id ON public.plan_products USING btree (product_id);
+
+
+--
+-- Name: index_plans_on_active_and_position; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_plans_on_active_and_position ON public.plans USING btree (active, "position");
+
+
+--
+-- Name: index_plans_on_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_plans_on_key ON public.plans USING btree (key);
+
+
+--
+-- Name: index_plans_on_single_active_free; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_plans_on_single_active_free ON public.plans USING btree (free) WHERE (active AND free);
+
+
+--
+-- Name: index_product_features_on_id_product_and_kind; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_features_on_id_product_and_kind ON public.product_features USING btree (id, product_id, kind);
+
+
+--
+-- Name: index_product_features_on_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_features_on_product_id ON public.product_features USING btree (product_id);
+
+
+--
+-- Name: index_product_features_on_product_id_and_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_features_on_product_id_and_active ON public.product_features USING btree (product_id, active);
+
+
+--
+-- Name: index_product_features_on_product_id_and_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_features_on_product_id_and_key ON public.product_features USING btree (product_id, key);
+
+
+--
+-- Name: index_products_on_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_products_on_active ON public.products USING btree (active);
+
+
+--
+-- Name: index_products_on_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_products_on_key ON public.products USING btree (key);
+
+
+--
 -- Name: index_sessions_on_expires_at; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -759,6 +1221,30 @@ ALTER TABLE ONLY public.organization_invitations
 
 
 --
+-- Name: plan_feature_entitlements fk_plan_feature_entitlements_plan_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_feature_entitlements
+    ADD CONSTRAINT fk_plan_feature_entitlements_plan_product FOREIGN KEY (plan_product_id, product_id) REFERENCES public.plan_products(id, product_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: plan_feature_entitlements fk_plan_feature_entitlements_product_feature; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_feature_entitlements
+    ADD CONSTRAINT fk_plan_feature_entitlements_product_feature FOREIGN KEY (product_feature_id, product_id, feature_kind) REFERENCES public.product_features(id, product_id, kind) ON DELETE RESTRICT;
+
+
+--
+-- Name: plan_products fk_rails_19f4567acb; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_products
+    ADD CONSTRAINT fk_rails_19f4567acb FOREIGN KEY (plan_id) REFERENCES public.plans(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: organization_access_locators fk_rails_1fbdd512c3; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -791,11 +1277,35 @@ ALTER TABLE ONLY public.organization_invitations
 
 
 --
+-- Name: plan_prices fk_rails_3e32e08315; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_prices
+    ADD CONSTRAINT fk_rails_3e32e08315 FOREIGN KEY (plan_id) REFERENCES public.plans(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: plan_feature_entitlements fk_rails_4245058809; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_feature_entitlements
+    ADD CONSTRAINT fk_rails_4245058809 FOREIGN KEY (plan_product_id) REFERENCES public.plan_products(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: organization_memberships fk_rails_57cf70d280; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.organization_memberships
     ADD CONSTRAINT fk_rails_57cf70d280 FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: plan_products fk_rails_6cc811864d; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_products
+    ADD CONSTRAINT fk_rails_6cc811864d FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
 
 
 --
@@ -815,11 +1325,27 @@ ALTER TABLE ONLY public.sessions
 
 
 --
+-- Name: product_features fk_rails_9019f50ede; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_features
+    ADD CONSTRAINT fk_rails_9019f50ede FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: organization_access_locators fk_rails_903c442217; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.organization_access_locators
     ADD CONSTRAINT fk_rails_903c442217 FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: plan_feature_entitlements fk_rails_b7d4a4f088; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_feature_entitlements
+    ADD CONSTRAINT fk_rails_b7d4a4f088 FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
 
 
 --
@@ -831,12 +1357,21 @@ ALTER TABLE ONLY public.audit_events
 
 
 --
+-- Name: plan_feature_entitlements fk_rails_dcabbaef40; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_feature_entitlements
+    ADD CONSTRAINT fk_rails_dcabbaef40 FOREIGN KEY (product_feature_id) REFERENCES public.product_features(id) ON DELETE RESTRICT;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20260716010600'),
 ('20260716001730'),
 ('20260715170300'),
 ('20260715170200'),

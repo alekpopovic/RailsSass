@@ -1,7 +1,7 @@
 # Product Requirements: Modular SaaS MVP
 
 Status: Proposed
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 ## 1. Purpose
 
@@ -21,8 +21,9 @@ The repository is a Rails 8.1.3 application with PostgreSQL, Hotwire, Tailwind,
 Pundit, Solid Queue/Cache/Cable, Docker/Kamal scaffolding, Minitest, and a
 PostgreSQL-backed CI quality gate. Email/password authentication, organization
 onboarding, and locator-backed tenant path bootstrap exist. Invitations,
-catalog, product access, Lemon Squeezy billing, audit, and deployment hardening
-remain separate execution-plan milestones.
+audited membership administration, and the constrained local product/plan
+catalog also exist. Product access, Lemon Squeezy billing, and deployment
+hardening remain separate execution-plan milestones.
 
 Each milestone must inspect and test existing behavior rather than assume an
 earlier prompt was implemented perfectly.
@@ -30,8 +31,8 @@ earlier prompt was implemented perfectly.
 ## 3. Product statement
 
 An authenticated user can participate in multiple organizations. Each
-organization buys access to a versioned plan. The plan grants products and
-typed product features. Organization administrators assign members to specific
+organization buys access to a stable-keyed local plan. The plan grants products
+and typed product features. Organization administrators assign members to specific
 products and product roles. A product action is permitted only when both the
 organization's local entitlement and the member's product permission allow it.
 
@@ -96,8 +97,9 @@ has no explicit deny permission and no tenant-defined custom roles.
 4. Organization role and product RBAC are independent.
 5. Product access requires an access-granting local subscription, plan product
    entitlement, product membership, and product permission.
-6. A feature-specific action additionally requires the typed feature
-   entitlement. A consuming numeric action additionally requires capacity.
+6. A feature-specific action additionally requires the enabled typed feature
+   entitlement. A consuming finite-limit action additionally requires capacity;
+   explicit unlimited still requires every other access factor.
 7. Missing, malformed, stale-conflicted, or unknown authorization input denies
    access.
 8. UI visibility is advisory; every read and mutation is authorized on the
@@ -141,16 +143,28 @@ has no explicit deny permission and no tenant-defined custom roles.
 
 ### 6.2 Catalog and plans
 
-- System-managed global `Product`, `ProductFeature`, `Plan`, product role, and
-  product permission catalogs.
-- Stable product, feature, role, and permission keys in English.
-- Versioned plans. Published plan versions and their entitlements are
-  immutable; changing an offering creates a new plan version.
-- Retiring a plan blocks new price mappings/checkouts but does not revoke the
-  immutable version from already synchronized subscriptions.
-- A plan-product entitlement row grants base product access.
-- Product features are either boolean or finite non-negative integer limits.
-- Missing feature entitlement denies the feature. Boolean `false` denies it.
+- System-managed global `Product`, `ProductFeature`, `Plan`, `PlanProduct`,
+  `PlanFeatureEntitlement`, and `PlanPrice` catalogs, plus system product roles
+  and permissions.
+- Stable product, feature, plan, role, and permission keys in English. Runtime
+  lookup never identifies a catalog record by its display name.
+- Products, product features, plans, and prices use explicit `active` flags.
+  Inactive records are unavailable for new selections, while retained foreign
+  keys preserve the historical meaning of existing local records.
+- `Plan.free` is catalog metadata used for presentation and catalog rules only.
+  It never assigns a plan to an organization and is never an authorization
+  fallback; at most one free plan may be active.
+- A `PlanProduct` row grants base product access for its plan.
+- Product features are either `flag` or `limit`. A feature entitlement has an
+  explicit `enabled` value; a limit is either a finite non-negative integer or
+  explicitly unlimited.
+- Missing or disabled feature entitlement denies the feature. Flag features do
+  not carry numeric or unlimited values. A limit keeps exactly one valid finite
+  or unlimited capacity even when disabled; `enabled` remains the master grant
+  switch.
+- `PlanPrice` stores local price display data and Lemon catalog identifiers.
+  Its presence, activation, or selection never assigns a plan, changes a local
+  subscription, or grants product access.
 - Numeric limits apply per organization. Each consuming product action defines
   its unit and authoritative organization-scoped usage query.
 - Reaching a numeric limit blocks only consuming/increasing operations; reads
@@ -171,7 +185,8 @@ has no explicit deny permission and no tenant-defined custom roles.
 
 ### 6.4 Billing
 
-- Server-side checkout creation for an allowlisted local billing price.
+- Server-side checkout creation for an allowlisted local `PlanPrice` only after
+  Billing adds exact environment/store mapping.
 - Only owner/billing may initiate checkout or open provider subscription
   management.
 - At most one current non-superseded subscription and one pending checkout per
@@ -240,7 +255,8 @@ has no explicit deny permission and no tenant-defined custom roles.
 
 ### 7.3 Subscribe
 
-1. Owner/billing selects an active local billing price.
+1. Owner/billing selects an active local `PlanPrice` whose future Billing
+   mapping matches the configured environment/store.
 2. The server creates a tenant-scoped checkout attempt and a provider checkout.
 3. The browser returns to a pending page after payment.
 4. A valid Lemon Squeezy webhook is verified and durably recorded.
@@ -249,8 +265,8 @@ has no explicit deny permission and no tenant-defined custom roles.
    non-authoritative provider locator, establishes
    `Current.organization`, validates tenant/provider mappings, and updates the
    local subscription in a transaction. Plaintext token is never persisted.
-6. Subsequent requests resolve the exact local plan version; no request calls
-   Lemon Squeezy for authorization.
+6. Subsequent requests resolve the exact local plan by its stable identity; no
+   request calls Lemon Squeezy for authorization.
 
 ### 7.4 Consume a limited feature
 
@@ -268,8 +284,9 @@ has no explicit deny permission and no tenant-defined custom roles.
   coupons, tax calculation, invoice accounting, or a custom payment UI.
 - Runtime provider lookups, access changes from redirects, or access changes
   from unverified/manual database edits.
-- Free plans, manual entitlement grants, trials not represented by Lemon
-  Squeezy, or multiple simultaneous subscriptions per organization.
+- Automatic free-plan fallback/access, manual entitlement grants, trials not
+  represented by Lemon Squeezy, or multiple simultaneous subscriptions per
+  organization. `Plan.free` remains non-authoritative catalog metadata.
 - Tenant-defined products, plans, roles, permissions, or arbitrary policy
   scripting.
 - Explicit deny permissions, resource-level ACL sharing, or organization role
@@ -277,8 +294,9 @@ has no explicit deny permission and no tenant-defined custom roles.
 - SSO/SAML, SCIM, social login, MFA, passkeys, or enterprise identity lifecycle.
 - Custom domains, subdomain tenancy, database-per-tenant, or row-level security
   in the MVP.
-- Metered/rolling usage windows and provider-reported usage. Numeric MVP limits
-  are local finite capacity limits.
+- Metered/rolling usage windows and provider-reported usage. MVP limits are
+  local finite capacity or explicit unlimited capacity, never an implicit
+  sentinel.
 - A global back-office catalog editor. Catalog changes ship through reviewed,
   idempotent application data tasks.
 - User file uploads unless a concrete product module requires them; local
@@ -314,8 +332,8 @@ The MVP is acceptable when all of the following are demonstrated:
 4. A user with an organization role but no product membership/permission is
    denied product access, including owner/admin.
 5. A product member with permission but no plan entitlement is denied.
-6. Boolean and numeric feature decisions behave as documented, including an
-   atomic numeric boundary under concurrency.
+6. Flag, finite-limit, and unlimited feature decisions behave as documented,
+   including an atomic finite numeric boundary under concurrency.
 7. All subscription status and time-boundary cases match the canonical billing
    matrix.
 8. A checkout redirect, outbound API success, duplicate webhook, stale webhook,
@@ -340,7 +358,8 @@ dependent implementation PR:
 - Product name and whether the existing `RailsSass`/`rails_sass` identifiers
   are intentional or a `SaaS` naming correction is required.
 - Initial product, feature, role, and permission keys.
-- Unit and authoritative usage query for every numeric feature.
-- Initial immutable plan versions and the Lemon Squeezy test/live variant map.
+- Unit and authoritative usage query for every limit feature.
+- Initial plans, plan-product rows, feature entitlement values, local price
+  display data, and the Lemon Squeezy test/live variant map.
 - Production domain, hosting topology, PostgreSQL service, email delivery
   provider, backup target, and alert destination.

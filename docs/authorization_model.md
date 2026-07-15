@@ -26,7 +26,7 @@ subscription predicate is in
 7. Owner/admin/billing/member never bypass product RBAC or entitlements.
 8. A product membership without a role grants no permission.
 9. A permission without a product membership grants nothing.
-10. Missing entitlement rows, boolean false, exhausted numeric capacity for a
+10. Missing or disabled entitlement rows, exhausted finite capacity for a
     consuming/increasing action, unknown billing state, and mapping/sync errors
     deny.
 11. UI hiding is never a security boundary.
@@ -150,17 +150,19 @@ applicable step succeeds:
 2. active Current.organization
 3. active Current.membership for Current.organization
 4. current local Billing::Subscription is synchronized and access-granting now
-5. subscription's exact Plan has PlanProductEntitlement for the product
+5. subscription's exact Plan has a PlanProduct row for the product
 6. when feature is required:
    a. PlanFeatureEntitlement exists for that product feature
-   b. boolean value is true, or numeric limit is present
+   b. enabled is true
+   c. a flag carries no capacity, or a limit has one valid finite/unlimited
+      capacity representation
 7. ProductMembership exists for current organization membership and product
 8. union of assigned ProductRoles includes the required ProductPermission
 ```
 
 Any false, null, unknown, malformed, or exceptional result denies. The decision
 returns a structured grant containing `allowed?`, a stable internal reason code,
-and the typed numeric limit when applicable. It does not load product records,
+and finite/unlimited capacity when applicable. It does not load product records,
 measure usage, or mutate product data.
 
 Final server authorization composes three owned layers:
@@ -182,24 +184,34 @@ An action that is not feature-specific still requires common steps 1-5 and 7-8,
 then its product policy. A plan product row does not imply every feature, and a
 feature row is not required for the base product shell.
 
-### 5.4 Boolean features
+`Plan.free`, `Plan.active`, and `PlanPrice.active` never replace step 4. They are
+catalog/selection metadata, not an organization grant or billing projection.
+
+### 5.4 Flag features
 
 - Missing row: deny.
-- Explicit `false`: deny.
-- Explicit `true`: continue through product membership and permission checks.
+- `enabled = false`: deny.
+- `enabled = true`: continue through product membership and permission checks.
+- A flag entitlement never has `limit_value` or `unlimited` capacity.
 
 ### 5.5 Numeric limits
 
-- Limits are finite, integer, non-negative, and organization-wide.
+- A limit entitlement is configured as exactly one of a finite non-negative
+  integer or explicit `unlimited = true`, regardless of its enabled state.
+- `enabled = false` always denies while retaining the configured capacity.
+- `enabled = true, unlimited = true` has no numeric ceiling, but still requires
+  every subscription, product-membership, permission, record-policy, and
+  transactional command check.
+- Finite limits are organization-wide.
 - `0` permits no consuming delta but does not inherently block read operations.
-- An exact boundary where `usage + delta == limit` is allowed.
-- `usage + delta > limit` is denied.
+- For finite limits, an exact boundary where `usage + delta == limit` is allowed
+  and `usage + delta > limit` is denied.
 - Downgrade below current usage preserves reads and non-consuming mutations but
   blocks further consumption until usage is reduced or entitlement increases.
 - Check and mutation occur under a product-owned lock, conditional update, or
   equivalent database-atomic operation. A preflight UI check is not the final
   authorization.
-- Each numeric feature has a code-reviewed registry entry defining unit,
+- Each limit feature has a code-reviewed registry entry defining unit,
   authoritative query/counter, lock strategy, and which actions consume or
   release capacity.
 
@@ -383,8 +395,8 @@ invalidate:
 
 Every variation must deny. Additional positive/negative cases cover multiple
 role permission union, identical keys in another product, owner/admin no-bypass,
-boolean false, limit zero, exact boundary, over-limit downgrade, and concurrent
-final-unit consumption. Action-registry tests prove a client cannot omit or
+disabled flag/limit, finite limit zero, explicit unlimited, exact boundary,
+over-limit downgrade, and concurrent final-unit consumption. Action-registry tests prove a client cannot omit or
 change the required permission, feature, consumption flag, or delta calculator.
 
 Separate unit tests cover the pure common gate, product policy record rules, and

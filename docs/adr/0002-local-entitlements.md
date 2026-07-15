@@ -6,7 +6,7 @@ Date: 2026-07-15
 ## Context
 
 Product access depends on an organization's Lemon Squeezy subscription, exact
-plan version, product/feature entitlements, product membership, and permission.
+local plan, product/feature entitlements, product membership, and permission.
 Calling Lemon Squeezy while authorizing a request would add network latency,
 provider availability, rate limiting, and inconsistent point-in-time behavior
 to every protected action.
@@ -21,14 +21,18 @@ Use PostgreSQL as the only runtime source for subscription eligibility and plan
 entitlements.
 
 - `Billing::Subscription` is a local projection of the provider subscription
-  and references an exact immutable `Plan` version through an exact
-  `Billing::Price` mapping.
-- Plan retirement stops new mappings/checkouts but does not revoke an already
-  synchronized subscription's immutable plan version.
+  and references an exact `PlanPrice` and `Plan` through an exact
+  environment-qualified provider mapping.
+- The current catalog `PlanPrice` fields are not sufficient production mapping
+  evidence because they have no test/live environment dimension. Billing must
+  add that isolation before checkout or webhook projection is exposed.
+- Plan and price `active` flags stop new selection but do not revoke or rewrite
+  an already synchronized subscription.
 - The current synchronized subscription plus the canonical status/time matrix in
   [Billing Model](../billing_model.md#8-subscription-access-matrix) yields either
   one effective plan or no plan.
-- There is no free/manual fallback plan in the MVP.
+- `Plan.free` is catalog metadata only. There is no automatic free/manual
+  fallback plan in the MVP.
 - Product authorization composes the local subscription result with plan
   product/feature entitlements and product RBAC.
 - Runtime authorization makes no provider HTTP request.
@@ -45,8 +49,9 @@ entitlements.
   alone does not write subscription state.
 
 Unknown/malformed status, variant, plan, environment, timestamp, or conflicting
-projection fails closed. Published plan entitlements are immutable; changes use
-a new plan version and explicit provider variant/subscription transition.
+projection fails closed. Catalog entitlement changes are reviewed,
+deployment-controlled local changes; they never mutate subscription state or
+derive authority from a browser redirect/provider command response.
 
 ## Consequences
 
@@ -56,8 +61,8 @@ a new plan version and explicit provider variant/subscription transition.
   Squeezy outages.
 - Redirect spoofing and provider latency cannot grant access.
 - One transaction can update subscription projection and event state.
-- Historical exact plan versions make entitlement changes reviewable and avoid
-  silent changes to existing customers.
+- Stable plan/product/feature keys keep authorization independent of display
+  names and provider availability.
 - Duplicate/out-of-order webhook behavior is reproducible in Minitest.
 
 ### Negative
@@ -66,6 +71,10 @@ a new plan version and explicit provider variant/subscription transition.
 - Webhook receipt, queue health, retries, quarantine, and drift monitoring become
   production-critical.
 - Fail-closed mapping errors can temporarily deny legitimate customers.
+- Because the flat plan catalog is not versioned, changing a plan's entitlement
+  rows affects every synchronized subscription that references that plan. Such
+  changes require explicit review and audit; future immutable plan versioning
+  would require a separate migration and ADR update.
 - Status time bounds and the 15-day past-due policy require consistent clocks and
   deterministic boundary tests.
 - Operators cannot “quick fix” access with an unverified database edit.
@@ -100,13 +109,16 @@ path with different provenance and replay semantics.
 ### Copy all entitlements onto each organization
 
 Rejected for MVP because it creates duplicated mutable entitlement truth.
-Subscriptions reference an immutable plan version; authorization reads its
-normalized entitlement graph.
+Subscriptions reference one stable-keyed local plan through the verified
+provider projection; authorization reads that plan's normalized entitlement
+graph.
 
 ## Revisit triggers
 
 - Supporting free/manual grants requires a separate, auditable local grant model
   and ADR; it must not overload subscription state.
+- Requiring immutable historical offerings would add plan versions and an
+  explicit subscription/price migration rather than renaming a stable key.
 - Extracting Billing requires a durable local projection with the same runtime
   contract.
 - Provider migration requires dual-ingestion and explicit plan mapping; runtime

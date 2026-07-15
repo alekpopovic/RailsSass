@@ -38,7 +38,7 @@ not a control.
 | Sensitive signed URL | Checkout URL, customer portal/payment-method URL | Return only after authorization; short-lived; do not log; portal URL not persisted; checkout URL encrypted and short-retained only if necessary |
 | PII | Email address, optional billing/customer identifiers, IP/user agent | Minimize, access-control, redact logs, retain only for defined purpose |
 | Tenant business data | Organization memberships, product resources, assignments, usage | Non-null tenant ownership, scoped query, policy, database constraints, backup encryption |
-| Authorization catalog | Plans, entitlements, roles, permissions, billing-price mappings | Reviewed system-owned changes, immutable published versions, audit trail |
+| Authorization catalog | Stable-keyed plans, entitlements, roles, permissions, local plan prices | Reviewed deployment-controlled changes, database constraints, audit trail; display names and `free`/`active` metadata never grant access |
 | Operational metadata | Event fingerprint, status reason code, timestamps, request/job IDs | Retain for diagnosis without raw payloads or secrets |
 
 The webhook ledger stores an allowlisted normalized envelope and digest, not raw
@@ -166,6 +166,10 @@ The normative decision flow is in
 - Enable Pundit verification hooks in authenticated controllers.
 - Treat every submitted organization/member/product/role/permission/price ID as
   untrusted and re-resolve it through owned associations/catalog allowlists.
+- Treat `PlanPrice` and its Lemon identifiers as catalog input only. Checkout
+  and webhook processing remain unavailable until Billing validates an exact
+  server-owned test/live environment and configured-store mapping; the price
+  row itself never proves payment or subscription eligibility.
 - Do not use organization role as a product permission shortcut.
 - Do not cache authorization across requests in the MVP.
 - Put active-owner role/status checks, access-eligible-owner account-disable
@@ -391,6 +395,9 @@ and reprocess only verified events. Direct subscription edits are prohibited.
   guessable; membership-scoped resolution prevents this from granting access.
 - Product/catalog management is deployment-controlled; operator access remains
   a privileged trust boundary.
+- Flat plan entitlements are not historical versions. A reviewed catalog change
+  can affect every synchronized subscription referencing that plan, so catalog
+  write access and audit evidence are production-sensitive.
 - The 15-day local past-due grace policy accepts bounded overgrant risk to avoid
   immediate interruption during provider retries.
 - A completely missed terminal webhook can leave local `active` access in place

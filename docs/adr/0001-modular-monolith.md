@@ -51,7 +51,8 @@ all required modules -> Web/job delivery
 ```
 
 Arrows mean “is used by.” Product modules call the Access Control API and do not
-query billing tables. Billing references exact catalog plan versions but does
+query billing tables. Billing references exact stable-keyed plans through local
+plan prices and an environment-qualified provider mapping, but does
 not own product permissions. Cross-module writes go through the owning service.
 
 Use synchronous Ruby calls and database transactions for in-process domain
