@@ -1,0 +1,1101 @@
+# Production MVP Execution Plan
+
+Status: Proposed and implementation-ready
+Last updated: 2026-07-15
+Owner: Engineering
+
+## 1. Objective
+
+Deliver the Rails modular-monolith SaaS MVP defined by:
+
+- [Product Requirements](../product_requirements.md)
+- [Architecture](../architecture.md)
+- [Data Model](../data_model.md)
+- [Authorization Model](../authorization_model.md)
+- [Billing Model](../billing_model.md)
+- [Security Model](../security_model.md)
+- [ADR 0001](../adr/0001-modular-monolith.md)
+- [ADR 0002](../adr/0002-local-entitlements.md)
+- [ADR 0003](../adr/0003-path-based-tenancy.md)
+
+This plan is intentionally split into small, sequential PRs. Each PR must leave
+`main` deployable, add tests for every behavior it introduces, and avoid relying
+on a later PR to make an insecure endpoint safe.
+
+No application code or migration is part of this planning change.
+
+## 2. Locked decisions
+
+Implementation PRs may not silently change these decisions:
+
+- Rails 8.1, PostgreSQL, Hotwire, Tailwind, Pundit, Solid Queue, and Minitest.
+- One modular-monolith codebase and release artifact.
+- Tenant UI under `/o/:organization_slug/`.
+- All tenant-owned child queries explicitly rooted in `Current.organization`;
+  global locator infrastructure selects only a candidate root and never
+  authorizes.
+- Organization roles: owner/admin/billing/member with the canonical matrix.
+- Owner/admin have no product-access bypass.
+- Product access requires local subscription eligibility AND plan entitlement
+  AND product membership/permission.
+- Published plan versions and entitlements are immutable.
+- No free/manual fallback plan in MVP.
+- Only verified `expired` is terminal for replacement checkout; resubscription
+  atomically supersedes the expired historical row.
+- Local database is runtime authorization truth; runtime performs no Lemon
+  Squeezy call.
+- Redirect/API command success never grants access.
+- Only verified-webhook-rooted processing mutates local subscription state.
+- Canonical subscription matrix is defined only in
+  [Billing Model](../billing_model.md#8-subscription-access-matrix).
+- Global catalog/roles/permissions are system-managed; tenant-custom catalog and
+  roles are out of scope.
+- The common Access gate is pure entitlement+RBAC; product policies own record
+  rules and product commands own atomic capacity/mutation via server action
+  contracts.
+
+A change to one of these requires an ADR/document update before or in the same
+PR as implementation.
+
+## 3. Current-state audit
+
+Observed on 2026-07-15:
+
+- Git branch `main` has no commits and no tracked files; the whole generated
+  application is untracked.
+- Rails resolves to 8.1.3 and Ruby is configured as 4.0.5.
+- PostgreSQL, Hotwire/importmap, Tailwind, Solid Queue/Cache/Cable, Docker, and
+  Kamal dependencies/scaffolding exist.
+- There are no domain models, tenant routes, primary migrations/schema, or
+  tests.
+- `rails/test_unit/railtie` is commented out.
+- Pundit and authentication dependencies/implementation are absent.
+- CI runs lint/security scans only; it has no PostgreSQL service or test step.
+- Kamal uses placeholder hosts/registry and does not yet supply the database
+  configuration expected by production.
+- `bundle check`, `bin/rails --version`, and Rails task discovery could not run
+  because several locked gems are not installed locally. No application tests
+  exist.
+
+The first implementation work must establish a reviewable baseline and an
+executable test foundation. No later milestone may claim existing behavior from
+the generator skeleton.
+
+## 4. External inputs and decisions
+
+Resolve each input by the listed deadline; do not embed a guessed production
+value in code.
+
+| Input | Required before | Safe default for planning |
+| --- | --- | --- |
+| Whether `RailsSass`/`rails_sass` naming is intentional or should be `SaaS`/product-specific | PR-00 | Preserve current identifiers until explicitly decided |
+| Initial product, feature, permission, and role keys | PR-07 | Synthetic test fixtures only |
+| Numeric feature units and authoritative usage queries | PR-15 | No production numeric feature enabled |
+| Initial plan versions and entitlement values | PR-08 | Synthetic draft fixtures until product approval |
+| Test/live Lemon variant mappings | PR-11/PR-16 | Test mappings only outside production |
+| Production host, registry, PostgreSQL, backup target, and alert destination | PR-20 | No deploy |
+| Email delivery provider/from-domain | PR-06 | Test delivery only |
+| Legal/privacy retention approval | PR-18A | Minimize collection; proposed retention in security doc |
+
+## 5. Delivery rules for every PR
+
+1. Read `AGENTS.md` and affected docs first.
+2. Re-audit overlapping implementation, migrations, tests, and git status.
+3. State a short PR plan and the invariant being added.
+4. Keep schema + behavior + tests coherent; do not add an insecure placeholder
+   endpoint that later becomes safe.
+5. Add foreign keys, required unique indexes, and check constraints with the
+   table migration.
+6. Scope all tenant data through `Current.organization`; add negative two-tenant
+   tests with the first tenant behavior.
+7. Add server-side Pundit authorization for every UI/request behavior.
+8. Use synthetic data and local test secrets only.
+9. Run and report only commands actually executed.
+10. Update affected docs/ADR when implementation discovers a contract change.
+11. Include forward deploy, rollback, and data compatibility notes.
+12. Do not combine unrelated refactoring or styling.
+
+## 6. Milestone and PR map
+
+| Milestone | PRs | Exit outcome |
+| --- | --- | --- |
+| 0. Baseline | PR-00 | Reviewable, secret-safe repository and accepted docs |
+| 1. Executable foundation | PR-01–02 | Rails/Minitest/system/PostgreSQL CI and boundary check are green before domain behavior |
+| 2. Accounts and tenancy | PR-03–06 | Authentication, organizations, scoped routing, invitations and role policies |
+| 3. Catalog and RBAC data | PR-07–10 | Immutable plan graph and constrained product assignments |
+| 4. Billing synchronization | PR-11–14B | Signed durable webhook projection and canonical local subscription state |
+| 5. Runtime access and checkout | PR-15–17 | Full entitlement+permission gate, atomic limit slice, safe checkout/portal UX |
+| 6. Security and production | PR-18A–20 | Hardened app, operable Kamal/PostgreSQL topology, launch evidence |
+| 7. Acceptance | PR-21 | End-to-end production MVP criteria demonstrated |
+
+## 7. Detailed PR sequence
+
+### PR-00: Establish repository baseline and documentation
+
+**Goal:** create a reviewable starting point without application behavior.
+
+Scope:
+
+- Confirm the generated Rails skeleton is intentional and record the naming
+  decision before durable class/database/deploy identifiers multiply.
+- Track the clean generator baseline and the ten architecture/planning documents.
+- Audit `.gitignore`, Docker context, Kamal files, and credentials by filename;
+  do not expose values.
+- Ensure `config/master.key`, environment files, local storage/logs, and any
+  populated secret file remain untracked. If `.kamal/secrets` contains anything
+  but safe lookup/template logic, replace it with a value-free example and keep
+  the real file ignored.
+- Document that there are no migrations/tests/domain behaviors yet.
+
+Checks/acceptance:
+
+- Secret scan and `git ls-files` prove no key/real credential is tracked.
+- Markdown links and formatting checks pass.
+- Fresh clone contains only synthetic/generator data.
+- No application behavior, migration, or provider configuration is introduced.
+
+Rollback: revert documentation/baseline files; there is no data effect.
+
+### PR-01: Restore an executable Rails/Minitest foundation
+
+Depends on: PR-00.
+
+**Goal:** make behavioral work test-first and locally executable.
+
+Scope:
+
+- Install locked dependencies and verify the declared Ruby/Rails toolchain.
+- Enable `rails/test_unit/railtie` and Minitest generators.
+- Add `test/test_helper.rb` and empty model/request/job/policy/system test
+  structure as needed, with parallel-test/database behavior explicitly chosen.
+- Re-enable Rails system tests and add the required Capybara/browser driver;
+  critical system flows are mandatory, not an optional later choice.
+- Add Pundit and its base policy/scoping structure, but no tenant policy yet.
+- Add `test/architecture/module_boundaries_test.rb` with the documented allowed
+  dependency map and a lightweight forbidden-reference check; each later module
+  PR extends its fixtures/contract.
+- Add `bin/rails zeitwerk:check` and `bin/rails test` to `config/ci.rb`.
+
+Migrations: none.
+
+Tests/checks:
+
+- `bundle check`
+- `bin/rails --version`
+- `bin/rails db:prepare`
+- `bin/rails test`
+- `bin/rails test:system`
+- `bin/rails zeitwerk:check`
+- existing RuboCop/Brakeman/audit commands
+
+Acceptance: a fresh environment can prepare PostgreSQL and run known unit,
+request, architecture, and system Minitests; failures are not hidden by an
+empty/disabled task.
+
+Rollback: remove foundation configuration/dependencies; no business data.
+
+### PR-02: Add PostgreSQL-backed CI and image smoke
+
+Depends on: PR-01.
+
+**Goal:** require executable evidence on every PR.
+
+Scope:
+
+- Add an ephemeral PostgreSQL service and synthetic CI credentials.
+- Run database prepare, Minitest, eager-load/zeitwerk, RuboCop, Brakeman,
+  Bundler Audit, and Importmap audit.
+- Add a production Docker build smoke. Add web boot smoke without real
+  credentials by using safe dummy build/runtime values where Rails supports it.
+- Cache dependencies without caching secrets or database state.
+- Pin/review third-party CI action versions.
+
+Migrations: none.
+
+Tests/checks: run the workflow locally where supported or validate each command
+in the same container/toolchain. CI must fail if the test task is missing or has
+load errors.
+
+Acceptance: required checks are green on the baseline and a deliberately failing
+test proves the test job is enforced before the PR is finalized.
+
+### PR-03: Add account authentication and session lifecycle
+
+Depends on: PR-02.
+
+**Goal:** establish secure global user identity before tenant routing.
+
+Scope:
+
+- Use Rails-native authentication primitives for `User`, `Session`, login,
+  logout, password reset, and account disable checks.
+- Normalize `email_address`; add password digest and session rotation/revocation.
+- Keep account routes outside `/o/:organization_slug`.
+- Add generic non-enumerating authentication/reset responses and enforce
+  endpoint-specific login/reset rate limits in this PR.
+- Ship responsive Tailwind authentication/reset forms with semantic labels,
+  keyboard operation, focus handling, and clear inline/error-summary feedback.
+- Add concrete nullable `disabled_at` and deny disabled authentication. Do not
+  expose account disable mutation until PR-04 adds the cross-organization
+  eligible-owner guard.
+
+Migrations:
+
+- `users`: unique normalized email, non-blank/normalization checks, password
+  digest, nullable `disabled_at`.
+- `sessions`: user FK/index and unique token/digest fields per chosen Rails
+  implementation.
+
+Tests:
+
+- database constraints and duplicate/case-normalized email;
+- login/logout/session rotation/revocation;
+- disabled user denial;
+- reset expiry/single use/non-enumeration;
+- CSRF and secure cookie configuration behavior;
+- system test for keyboard-only login/reset and responsive error presentation.
+
+Acceptance: authentication establishes `Current.user` only; it grants no
+organization access.
+
+### PR-04: Add organizations and membership invariants
+
+Depends on: PR-03.
+
+**Goal:** create the tenant root and organization role source of truth.
+
+Scope:
+
+- Add `Organization`, `OrganizationMembership`, global non-authoritative
+  `OrganizationAccessLocator`, and the `Current` attributes needed by existing
+  tenant services.
+- Add transactional global organization creation that creates the first eligible
+  owner and its locator atomically.
+- Add locked role/status and account-disable services. Reject any transition
+  that leaves an organization without another enabled active owner;
+  enumerate candidates only through account locators, then reload each tenant's
+  memberships through `Current.organization` and lock affected organizations in
+  stable ID order.
+- Create/remove locators atomically with membership activation/deactivation.
+  Account disable retains the non-authoritative locator but revokes sessions and
+  fails the enabled-user check; locator presence never replaces a tenant-owned
+  membership reload.
+- Keep slug immutable. Organization archive/hard deletion is outside the MVP;
+  add no endpoint or lifecycle column.
+- Add the concrete append-only `AuditEvent` table/service now so organization
+  and membership security transitions have durable audit from their first PR.
+
+Migrations: organization, membership, access-locator, and audit-event tables;
+organization/user/composite locator FKs, unique slug and org/user/locator
+identities, role/status/slug/timestamp/metadata checks, explicit delete behavior.
+
+Tests:
+
+- model/database constraint suite;
+- multiple owners allowed;
+- final eligible owner cannot be deactivated/demoted or account-disabled by
+  sequential/concurrent calls across one or multiple organizations;
+- successful account disable revokes every server-side session and an old
+  cookie cannot authenticate, while retained locators still authorize nothing;
+- stale/missing locator authorizes nothing and locator transitions are atomic;
+- organization creation and initial audit are atomic.
+
+Acceptance: services can create and safely administer tenant roots, but there is
+still no URL tenant context until PR-05.
+
+### PR-05: Add path tenant context, organization shell, and Pundit enforcement
+
+Depends on: PR-04.
+
+**Goal:** make `/o/:organization_slug/` the safe tenant boundary.
+
+Scope:
+
+- Add request reset lifecycle for the PR-04 `Current` attributes.
+- Add global authenticated organization-create endpoint plus path-scoped
+  show/update routes, organization switcher, and base Pundit policies.
+- Build the organization shell/switcher with responsive Tailwind layout,
+  keyboard-visible focus, semantic navigation, and clear 403/404 states.
+- Resolve a candidate through the authenticated user's global access locator,
+  set `Current.organization`, then reload the active membership through that
+  organization before any tenant child query.
+- Enable `verify_authorized`/`verify_policy_scoped` with reviewed global-route
+  exclusions.
+- Add a reusable tenant job context wrapper.
+
+Migrations: none unless an implementation-discovered index is justified and
+added with query evidence.
+
+Tests:
+
+- two users/two organizations: non-member slug 404 and no cross-tenant leakage;
+- organization role matrix for create/shell/update;
+- stale/mismatched locator and global-switcher candidate cannot authorize;
+- direct POST denied regardless of hidden UI;
+- `Current` reset after success, exception, and sequential job execution;
+- route helpers always carry explicit slug.
+- system test covers keyboard organization switching and narrow viewport.
+
+Acceptance: every ordinary tenant request has verified
+user+membership+organization context before any tenant-owned child query.
+
+### PR-06: Add invitations and membership administration
+
+Depends on: PR-05 and email-provider choice for production configuration.
+
+**Goal:** provide production-usable member onboarding and role management.
+
+Scope:
+
+- Add `OrganizationInvitation`, creation/revocation/acceptance services, mailer,
+  and responsive, keyboard-operable Hotwire/Tailwind administration UI with
+  accessible validation/status messages.
+- Owner may manage all roles; admin may manage member/admin only and cannot alter
+  owner/billing memberships.
+- Bind acceptance to authenticated normalized email; token is expiring,
+  single-use, and stored as a digest.
+- Use the special slug-scoped pre-membership flow: set the tentative
+  `Current.organization`, query only its invitation association, then verify
+  token digest/email/state/expiry.
+- Acceptance creates or reactivates the unique membership and access locator
+  atomically. Enforce invitation-create and acceptance rate limits in this PR.
+
+Migrations: invitation table with organization/inviter composite FKs, unique
+token digest, status-based pending-email uniqueness, role/status/timestamp
+checks.
+
+Tests:
+
+- exact role matrix and direct requests;
+- guessed/expired/revoked/reused/wrong-email token denial;
+- concurrent accept creates one membership;
+- stale locator and candidate slug/token mismatch expose no tenant data;
+- cross-tenant invite/member ID isolation;
+- mail contains no secret in logs and uses correct explicit tenant URL;
+- keyboard/narrow-viewport invitation administration and accessible validation
+  status in a system test.
+
+Acceptance: an owner/admin can onboard allowed roles without any pre-created
+production user data.
+
+### PR-07: Add global product, feature, and versioned plan catalog
+
+Depends on: PR-02; initial catalog keys decided before production data task.
+
+**Goal:** establish stable global catalog identities without tenant behavior.
+
+Scope:
+
+- Add `Product`, `ProductFeature`, and `Plan`.
+- Add deployment-controlled, idempotent catalog data task using synthetic
+  development/test values and separately supplied production identifiers.
+- Add draft-plan create/edit services and lifecycle schema, but expose no
+  publish/retire transition before PR-08 can validate the complete entitlement
+  graph.
+- Add active/retired lifecycle to product and feature. Retirement blocks new
+  references but does not silently revoke existing published-plan behavior.
+- Add explicit numeric feature unit registry contract; do not enable a numeric
+  production feature until its usage query is specified.
+
+Migrations: catalog tables with FKs, exact snake-case key checks, unique stable
+keys/plan key+version, state, type, version, explicit typed unit nullability,
+lifecycle, and non-blank checks plus composite feature key.
+
+Tests:
+
+- duplicates and invalid keys/types/units/version/state fail at DB;
+- attempts to publish/retire before the PR-08 graph service are unavailable;
+- retired catalog objects are unavailable for new assignments;
+- data task is repeatable.
+
+Acceptance: catalog reads are global/read-only to tenant users; no global admin
+UI exists.
+
+### PR-08: Add plan product and typed feature entitlements
+
+Depends on: PR-07.
+
+**Goal:** encode the immutable entitlement graph with database-enforced type and
+product consistency.
+
+Scope:
+
+- Add plan-product and plan-feature entitlement models.
+- Publish the entire plan graph atomically; only drafts are editable.
+- Add one-way publish/retire services and published-field immutability. Plan
+  retirement is a sales stop, not an entitlement revoke; existing synchronized
+  subscribers retain the immutable version.
+- Add catalog query returning product/feature entitlement for an exact plan.
+- Implement boolean and finite integer value semantics without an unlimited
+  sentinel.
+
+Migrations: both entitlement tables, composite parent/feature FKs and supporting
+unique indexes, exact-one-typed-value checks including explicit non-null numeric
+limit, and non-negative checks.
+
+Tests:
+
+- reject feature without product, wrong product/type, duplicate, malformed
+  boolean, negative/null numeric value;
+- missing and false boolean deny in catalog resolver;
+- published entitlement graph cannot mutate through write paths.
+
+Acceptance: given a plan version and product/feature, Catalog returns one
+deterministic local answer without tenant/provider input.
+
+### PR-09: Add system product roles and permissions
+
+Depends on: PR-07.
+
+**Goal:** create the product-specific positive permission catalog.
+
+Scope:
+
+- Add `ProductRole`, `ProductPermission`, and `ProductRolePermission`.
+- Add idempotent system catalog task for reviewed roles/permissions.
+- Implement role permission union query; no explicit deny or tenant custom role.
+- Add active/retired lifecycle. Retirement blocks new role mappings/assignments
+  but existing reviewed mappings continue until explicit migration.
+
+Migrations: product FKs, snake-case role and dot-separated permission key checks,
+per-product uniqueness/state checks, composite supporting keys,
+role-permission composite FKs, duplicate checks.
+
+Tests: reject cross-product/duplicate joins and verify union semantics, retired
+role assignment rules, and same key in different products cannot cross-grant.
+
+Acceptance: product permission catalog is deterministic and independent of
+organization roles.
+
+### PR-10: Add tenant product memberships and role assignments
+
+Depends on: PR-06 and PR-09.
+
+**Goal:** let owner/admin assign active organization members to products safely.
+
+Scope:
+
+- Add `ProductMembership` and `ProductMembershipRole`.
+- Add tenant-scoped assignment services, policies, and focused Hotwire UI.
+- Make assignment controls keyboard-operable and responsive, with semantic
+  dormant/denied state messaging.
+- Allow assignments to exist without a current plan entitlement; label them
+  dormant rather than deleting on downgrade.
+- A role-less product membership grants no action.
+- Extend the PR-04 membership-deactivation transaction to delete that
+  membership's product memberships/role joins and audit it; reactivation never
+  resurrects product access.
+
+Migrations: explicit organization FKs, membership/product FKs, composite
+cross-tenant/product FKs, unique assignment indexes.
+
+Tests:
+
+- owner/admin allowed; billing/member denied;
+- cross-tenant member ID and cross-product role rejected by request and DB;
+- duplicate assignments fail;
+- inactive organization membership grants nothing;
+- deactivate then re-invite/reactivate requires explicit product reassignment;
+- UI-hidden direct POST remains denied;
+- keyboard/narrow-viewport assignment and dormant-state system flow.
+
+Acceptance: RBAC assignment data is safe but does not yet imply runtime product
+access.
+
+### PR-11: Add billing price and checkout-attempt persistence
+
+Depends on: PR-05, PR-07–08; initial Lemon test mappings available.
+
+**Goal:** establish constrained provider mapping and checkout correlation state
+without an external endpoint.
+
+Scope:
+
+- Add `Billing::Price` and `Billing::CheckoutAttempt` exactly as documented.
+- Add test/live mapping loader with no credentials or real customer data.
+- Permit new mappings/checkout selection only for published plans; plan
+  retirement blocks selection while preserving historical subscription
+  resolution, even before optional price-flag cleanup.
+- Generate checkout correlation plaintext only in memory and persist a SHA-256
+  digest; no API checkout is created yet.
+- Add locked/lazy and sweeper transition for pending attempts at
+  `expires_at + 10 minutes`, including static partial-unique behavior.
+
+Migrations: price and checkout-attempt tables; exact price mapping/composite
+supporting keys, tenant/initiator/billing-price FKs, token-digest/provider-ID
+unique indexes, pending partial unique, state/environment/timestamp constraints,
+and explicit delete restrictions.
+
+Tests:
+
+- mapping uniqueness and exact immutable plan version;
+- retired plans reject new mappings/checkout selection even if a price flag is
+  stale-active, while historical mapping remains queryable;
+- concurrent pending attempts yield one winner;
+- plaintext token never persists/logs and digest uniqueness holds;
+- lazy and swept expiry release the unique slot only after delivery grace;
+- checkout-attempt state/timestamp/origin tuple constraints.
+
+Acceptance: constrained synthetic mappings/attempts exist, but no public path or
+subscription grant exists.
+
+### PR-12: Add subscription, provider locator, and verified-event ledger
+
+Depends on: PR-11.
+
+**Goal:** complete local authorization projection and global discovery/receipt
+infrastructure before accepting provider traffic.
+
+Scope:
+
+- Add `Billing::Subscription`, global non-authoritative
+  `Billing::ProviderLocator`, and `Billing::WebhookEvent`.
+- Bind subscriptions to immutable origin attempt/price while allowing verified
+  current price changes; derive the exact plan only through current
+  `Billing::Price`.
+- Add atomic checkout-attempt + checkout-locator creation service and provider
+  subscription locator transitions. Checkout locators distinguish unresolved,
+  webhook-consumed, and definitive-creation-failure correlation; expiry alone
+  stays unresolved.
+- Add services for pending-attempt serialization and event claiming/state
+  transition, with no external endpoint.
+- Define filtered provider envelope DTO and log filtering.
+- Implement pure local subscription access predicate matching every matrix row.
+
+Migrations: subscription, provider-locator, and webhook-event tables; exact
+current price composite FK, immutable origin attempt/price composite FK, one
+current subscription partial unique, provider/token-digest locator composites,
+event fingerprint unique, all status/sync/environment/timestamp/JSON shape
+checks, and sweeper indexes.
+
+Tests:
+
+- one current subscription per organization;
+- one attempt cannot be associated with two subscriptions;
+- locator and fingerprint uniqueness/shape/transition constraints;
+- event storage rejects raw/unallowlisted fixture fields at the service boundary;
+- malformed/test-live/unknown mapping fails closed without violating exact
+  current mapping FK;
+- table-driven matrix with exact trial/cancelled/past-due boundaries;
+- an existing synchronized subscription retains its immutable retired-plan
+  entitlement while new checkout remains blocked;
+- provider timestamps beyond the five-minute future-skew allowance fail closed;
+- access predicate performs zero network calls.
+
+Acceptance: synthetic local records produce deterministic plan/no-plan answers;
+no public path can create/mutate a subscription.
+
+### PR-13: Add signed webhook ingress and durable receipt
+
+Depends on: PR-12.
+
+**Goal:** accept only authentic, bounded Lemon Squeezy subscription notifications
+and acknowledge after durable receipt.
+
+Scope:
+
+- Add global `POST /webhooks/lemon_squeezy` with only action-specific CSRF
+  exemption.
+- Implement exact raw-body HMAC verifier with constant-time comparison and
+  bounded current/previous key rotation.
+- Enforce webhook-specific rate/body limits in this PR; validate content type,
+  use signed `meta.event_name` as authority, compare the unsigned header only for
+  anomaly telemetry, and validate the exact created+updated processing
+  allowlist, resource type, store, and environment/test mode.
+- Hash allowlisted checkout custom token after HMAC; persist only its digest.
+- Fingerprint only provider + configured environment + exact raw body; exclude
+  signature and unsigned headers so a mutated header cannot create a new event.
+- Implement the exact HTTP outcome table from the billing model: 401/413/415,
+  rate-limit 429, durable 200 ignored/quarantined/supported/duplicate, and 503
+  transient persistence failure.
+- Compute local fingerprint and insert only the filtered event. Keep the route
+  environment-gated and production webhook unregistered; enqueue/processing is
+  enabled only when PR-14B deploys the complete projection.
+
+Migrations: none unless measured indexes are missing.
+
+Tests: valid signature, byte mutation, malformed/missing key, rotation, 429
+rate/body limits, each HTTP outcome, unsupported and envelope/store/environment
+mismatch, mutated-header same-body deduplication, custom-token digest/no
+plaintext, duplicate, DB failure, and log redaction.
+
+Acceptance: no subscription row can be changed by this PR; production provider
+webhook is not enabled yet.
+
+### PR-14A: Add the Lemon subscription client and DTO contract
+
+Depends on: PR-13.
+
+**Goal:** isolate provider HTTP/JSON:API behavior before it can mutate tenant
+state.
+
+Scope:
+
+- Add fixed-origin, timeout-bounded Lemon API client and response DTO mapping.
+- Enforce a small bounded response-body limit before parsing provider JSON.
+- Build only fixed `/v1/subscriptions/:id` requests; never follow payload URLs.
+- Validate response type/ID/store/environment/test mode and map an allowlisted
+  normalized snapshot without PII/signed URLs.
+- Classify timeout/429/404-propagation/5xx as retryable and auth/malformed as
+  permanent, with redacted errors.
+- Add a job shell that can fetch/validate a claimed verified event but cannot
+  write `Billing::Subscription`; production ingress remains disabled.
+
+Migrations: none expected; any normalized snapshot shape field is additive,
+constrained, and justified in this PR.
+
+Tests: exact URL/origin/headers, DTO field allowlist, response mismatch, payload
+URL SSRF attempt, oversized/truncated response, timeouts, 429, bounded 404, 5xx,
+permanent failures, rate-limit handling, and log redaction. Assert zero
+subscription mutations.
+
+Acceptance: provider behavior is contract-tested but no subscription mutation or
+production webhook enablement exists.
+
+### PR-14B: Add webhook-rooted tenant resolution and projection
+
+Depends on: PR-14A.
+
+**Goal:** make verified webhooks the only subscription mutation path.
+
+Scope:
+
+- Enable after-commit enqueue/sweeper for supported verified receipts and keep
+  provider registration restricted to created+updated.
+- Resolve candidates only through `Billing::ProviderLocator` by external
+  subscription ID or checkout-token digest, then reload every tenant row through
+  `Current.organization`.
+- Validate exact store/environment/test mode/current+origin price/variant/plan,
+  provider-created time, checkout-locator resolution, and subscription
+  cardinality.
+- Lock and atomically project normalized state, locator, attempt completion,
+  event completion, and expired-current supersession.
+- Implement `last_seen_provider_updated_at`, stale ignore, equal conflict,
+  fail-closed existing-subscription `mapping_error`/`invalid`, and safe recovery.
+- A first unknown mapping creates no subscription; a second non-terminal
+  subscription quarantines; trusted first-correlation still consumes the
+  checkout locator and creates an unresolved subscription locator for safe
+  replay. Superseded rows never reactivate.
+
+Migrations: only focused additive constraints/indexes discovered necessary
+during projection, each with direct database tests.
+
+Tests:
+
+- locator candidate plus tenant reload and every token/store/price/environment
+  mismatch;
+- delayed expired-attempt success, post-expiry provider creation denial, and
+  competing old/new attempts;
+- duplicate, stale, equal-conflicting, reordered, and concurrent events;
+- expired-current atomic supersession and later superseded event isolation;
+- unknown/malformed first vs existing subscription fail-closed behavior;
+- verified same-snapshot replay recovers only after a mapping/code repair and
+  cannot bypass timestamp or fingerprint conflict checks;
+- every matrix transition including recovery/plan change;
+- all tenant mutations occur through `Current.organization`;
+- enqueue failure+sweeper recovery.
+
+Acceptance: enable test-mode provider webhook only after automated suite is
+green; complete dashboard resend/simulation contract test with sanitized output.
+
+### PR-15: Add central product authorization and a thin vertical slice
+
+Depends on: PR-08, PR-10, PR-12, PR-14B, and chosen initial product contract.
+
+**Goal:** enforce the complete entitlement AND permission decision on a real
+server-side action.
+
+Scope:
+
+- Add `Access::Decision` with structured internal reason codes.
+- Add server-owned action registry mapping product action to permission,
+  required feature, and consumption contract; clients cannot supply/omit those
+  semantics.
+- Keep `Access::Decision` pure: compose active tenant membership, local
+  subscription plan, product/feature entitlement/typed limit, product
+  membership, and permission only.
+- Add product-owned Pundit record rules and a minimal product route/action
+  demonstrating base, boolean-feature, and numeric-capacity behavior.
+- Implement a product command that revalidates the common grant and atomically
+  enforces its authoritative usage plus server-calculated delta with mutation;
+  do not add a generic metering ledger.
+- Keep UI predicate and request authorization on the same decision API.
+
+Migrations: only the selected product vertical-slice tenant table/counter, with
+organization FK, composite ownership, uniqueness, and capacity constraints.
+
+Tests:
+
+- full one-factor-at-a-time denial truth table;
+- owner/admin no bypass, permission union, same key wrong product;
+- boolean missing/false/true;
+- numeric zero/exact/over boundary and downgrade behavior;
+- concurrent final-unit consumption commits once;
+- client attempts to omit/change permission, feature, consuming flag, or delta
+  cannot bypass the server action contract;
+- two-tenant guessed IDs and direct POST;
+- zero Lemon Squeezy calls during every decision.
+
+Acceptance: no product action is possible unless every canonical gate succeeds.
+
+### PR-16: Add server-authorized checkout and pending return
+
+Depends on: PR-15 and PR-11/12 production catalog inputs (test mode first).
+
+**Goal:** create safe Lemon Squeezy checkout without making it an access path.
+
+Scope:
+
+- Add tenant checkout create and return/status endpoints.
+- Authorize owner/billing only; enforce CSRF, tenant scope, and checkout-specific
+  rate limit in this PR.
+- Accept local price ID, serialize attempt, send one allowlisted variant,
+  canonical return, short expiry, and transient opaque token; create attempt and
+  global digest locator atomically and persist/log no plaintext token.
+- Validate provider response and handle every outcome that lacks proof of remote
+  non-creation (timeout/reset/5xx/truncated/malformed/invalid 2xx) as
+  `creation_unknown` without blind duplicate. Only pre-transmission or
+  documented definitive no-create rejection may become `failed`.
+- Render pending/synchronized states with Turbo refresh.
+- Provide accessible live-region/status semantics, focus-safe errors, and a
+  responsive no-JavaScript fallback for the pending page.
+- Lazily expire pending attempts only after expiry plus delivery grace. Block a
+  non-terminal current subscription; permit replacement only after verified
+  `expired` and let PR-14B atomically supersede it. Attempt expiry releases the
+  one-pending slot but does not resolve its correlation locator.
+
+Migrations: none expected.
+
+Tests: exact role matrix, CSRF/rate limit, client field tampering, provider
+response validation, token digest/no plaintext, concurrent/lazy-expired
+checkout, timeout/reset/5xx/malformed/invalid-2xx ambiguity versus definitive
+no-create failure, terminal/non-terminal replacement, return spoofing, and
+explicit proof that redirect/API success leaves subscription/access unchanged;
+system coverage for status live-region/focus behavior and no-JavaScript pending
+fallback.
+
+Acceptance: test-mode purchase remains pending until the deployed PR-14B
+processor consumes a verified webhook, then the local product gate changes on a
+later request.
+
+### PR-17: Add subscription management portal and billing UI
+
+Depends on: PR-16.
+
+**Goal:** complete owner/billing subscription UX without a second state mutation
+path.
+
+Scope:
+
+- Add tenant billing status page using only local projection.
+- Fetch signed portal/payment-management URL just in time after owner/billing
+  authorization and portal-specific rate limit; validate origin and redirect
+  without storing/logging it.
+- Add pending command display for plan change/cancel/resume if exposed directly;
+  provider response never updates local subscription.
+- Show status, grace/time boundary, sync issue support code, and safe recovery
+  messaging without leaking provider internals; keep it responsive and
+  keyboard/screen-reader operable.
+
+Migrations: none unless a non-authoritative command-attempt audit table is
+explicitly justified; do not overload `Billing::Subscription`.
+
+Tests: roles, tenant isolation, portal URL SSRF/open-redirect validation,
+no-persistence/logging, provider failure, command/portal no-grant, and
+keyboard/screen-reader-oriented billing status semantics.
+
+Acceptance: cancel/resume/pause/plan-change UI reflects changes only after a
+verified `subscription_updated` webhook.
+
+### PR-18A: Complete audit coverage, redaction, and retention
+
+Depends on: PR-06, PR-10, PR-14B, and PR-15–17.
+
+**Goal:** finish the concrete PostgreSQL audit contract without mixing network/
+header work.
+
+Scope:
+
+- Extend the PR-04 append-only `AuditEvent` service to every required
+  organization, invitation, assignment, checkout, tenant-resolved webhook
+  projection, and subscription transition. Keep pre-tenant ingress evidence in
+  bounded security metrics/redacted logs and the global verified-event ledger;
+  never guess an audit tenant.
+- Enforce create/read-only application behavior, allowlisted metadata, actor/
+  organization correlation, and reason-code errors.
+- Complete log/parameter/header filtering and automated capture tests.
+- After the required legal/privacy approval, add the dedicated 180-day audit
+  retention job; it is the only `AuditEvent` application delete path and is
+  separately audited.
+- Implement the approved 30-day expired/revoked invitation cleanup and 180-day
+  normalized webhook/billing-operational cleanup, preserving active billing
+  evidence and tenant/provider idempotency keys as required. Configure 30-day
+  request-log retention; backup retention remains PR-19 infrastructure scope.
+
+Migrations: focused additive audit indexes/constraints only if PR-04 evidence
+shows they are needed; the sink choice is already fixed to PostgreSQL.
+
+Tests: event coverage, actor/system shapes, update prohibition, metadata/log
+redaction, tenant scope, per-record retention boundaries/idempotency, active
+billing-evidence preservation, and retention audit.
+
+Acceptance: sensitive lifecycle events are durable and no captured log/audit row
+contains secrets, raw billing payload, plaintext token, PII, or signed URL.
+
+### PR-18B: Enforce web security policy
+
+Depends on: PR-18A and all public endpoint PRs.
+
+**Goal:** enforce cross-cutting browser/HTTP defenses while preserving the
+endpoint-specific rate/body limits that shipped with each endpoint.
+
+Scope:
+
+- Review and regression-test authentication, invitation, checkout, portal, and
+  webhook limits; add only missing global abuse controls.
+- Stage CSP in report-only, remove required inline dependencies, then enforce.
+- Configure frame/content-type/referrer/permissions headers, safe production
+  errors, secure cookies, and trusted proxy assumptions for staging.
+- Re-run CSRF/open-redirect/SSRF/body-limit tests across HTML, Turbo, and webhook
+  entry points.
+- Run a final responsive/accessibility pass over authentication, organization
+  switching, invitations, product assignments, checkout pending, and billing
+  status: semantic labels/errors/status, logical focus, keyboard operation, and
+  narrow/wide viewport system flows.
+
+Migrations: none expected.
+
+Tests: CSP/headers, existing endpoint limits, CSRF, safe errors, cookies,
+redirect/SSRF, direct high-risk denial, keyboard flows, focus/error semantics,
+and representative responsive viewports.
+
+Acceptance: staging browser/header evidence matches the security model.
+
+### PR-18C: Add billing/queue observability and drift operations
+
+Depends on: PR-14B and PR-18A.
+
+**Goal:** make asynchronous local entitlement synchronization operable.
+
+Scope:
+
+- Add metrics/alerts for webhook age, duplicates, retries, quarantine, sync-state
+  changes, mapping conflicts, checkout expiry, queue depth/heartbeat, and worker
+  recovery.
+- Add read-only provider reconciliation at least every six hours. It alerts but
+  never writes subscription state.
+- Encode launch SLO: drift acknowledgement within 30 minutes and provider resend
+  or verified-event replay within four hours.
+- Add runbooks and a drill for a completely missed terminal webhook, enqueue
+  failure, worker outage, secret rotation, and verified replay.
+
+Migrations: operational state only if required, with bounded fields and
+retention; prefer metrics over duplicating billing truth.
+
+Tests/drills: reconciliation no-write assertion, queue/sweeper recovery, alert
+thresholds, missed-event response, and redacted runbook output.
+
+Acceptance: staging evidence shows no secret/PII billing payloads in logs and
+every production-critical billing failure has an actionable signal.
+
+### PR-19: Harden database and migration operations
+
+Depends on: all schema PRs.
+
+**Goal:** make schema lifecycle and recovery production-safe.
+
+Scope:
+
+- Review all FKs, unique/partial/composite indexes, checks, and delete behavior
+  against `data_model.md` using PostgreSQL introspection.
+- Decide and document primary/cache/queue/cable database topology and initialize
+  all schemas in staging.
+- Add deployment migration/preparation step with backward-compatible policy.
+- Configure least-privilege runtime/migration credentials and TLS database
+  connections.
+- Configure automated encrypted backups and perform isolated restore drill.
+
+Migrations: only focused corrective migrations; no large cleanup bundle without
+per-constraint tests and rollout notes.
+
+Tests/checks: clean `db:prepare`, migrate from previous release, rollback where
+safe, schema load, constraint suite, backup restore, and web/worker compatibility
+during rolling deploy.
+
+Acceptance: recorded staging restore and migration rollback/forward evidence.
+
+### PR-20: Make Docker/Kamal production-ready
+
+Depends on: PR-18A–18C, PR-19, and production infrastructure inputs.
+
+**Goal:** replace deployment placeholders with a secret-safe, operable topology.
+
+Scope:
+
+- Configure real environment-specific hosts/registry through non-secret reviewed
+  configuration; never commit real credentials.
+- Run separate `web` and `job` roles; remove dependence on queue-in-Puma for
+  production.
+- Supply database URLs/passwords, Rails master key, Lemon keys/secrets, host, and
+  mail settings through Kamal/environment secrets.
+- Enable proxy TLS, `assume_ssl`, `force_ssl`, HSTS, allowed hosts, secure cookies,
+  canonical URLs, readiness, and health checks.
+- Remove or document local storage volume; no customer uploads rely on it.
+- Add image build/scan, non-root boot, predeploy migration, web/worker smoke,
+  rollback, logs, and console access runbooks.
+
+Migrations: none expected.
+
+Checks:
+
+- production image builds without secret layers;
+- configuration renders with placeholders in CI and real values only in secured
+  deployment environment;
+- staging web/worker/database/queue/readiness work;
+- rolling deploy and rollback drills pass.
+
+Acceptance: staging topology matches production shape and survives worker/web
+restart independently.
+
+### PR-21: Production acceptance and launch gate
+
+Depends on: PR-20.
+
+**Goal:** demonstrate, not assume, the complete MVP contract.
+
+Scope:
+
+- Run automated full suite and all quality/security/image checks.
+- Run two-tenant adversarial test, role matrix, full product gate, and numeric
+  concurrency scenario.
+- Run Lemon Squeezy live-shaped test-mode checkout, redirect-before-webhook,
+  duplicate/resend, reorder, cancel/resume/pause/expire, unknown mapping, and
+  secret rotation drills.
+- Confirm runtime authorization makes no provider calls during provider outage.
+- Run worker outage/recovery, queue alert, database backup restore, deploy
+  rollback, credential revoke/rotate, and incident runbook exercises.
+- Record product/legal/operations sign-off and known residual risks.
+
+Migrations/application behavior: none; fix failures in focused prerequisite PRs,
+not inside a broad launch bundle.
+
+Acceptance: every criterion in section 10 has linked automated output or dated
+manual evidence and an owner.
+
+## 8. Test strategy by layer
+
+| Layer | Required coverage |
+| --- | --- |
+| Database | Every FK, unique/partial index, enum/type/range check, composite tenant/product mismatch, delete behavior |
+| Model/service | Normalization, lifecycle transitions, immutable publish, last owner, idempotency |
+| Policy/access | Exact organization role matrix and one-factor-at-a-time product denial truth table |
+| Request | Authentication, CSRF, tenant bootstrap, two-tenant IDOR, Turbo/direct POST parity, checkout/webhook codes |
+| Job | Current setup/reset, retries, duplicate/reordered event projection, sweeper recovery, quarantine |
+| Provider contract | Sanitized official-style payloads, exact HMAC, DTO mapping, fixed-origin HTTP, test/live separation |
+| Concurrency | Last owner, pending checkout uniqueness, subscription projection locks, final numeric unit |
+| System | Organization switch, invitation, product assignment, checkout pending-to-active, billing status |
+| Security/quality | RuboCop, Brakeman, dependency/import audits, redaction, CSP/headers/rate/body limits |
+| Operations | DB prepare/migrate/restore, eager load, image build/boot, worker recovery, deploy/rollback |
+
+Tests use at least two organizations and two products wherever an ownership or
+product boundary is relevant. A positive fixture is insufficient without the
+corresponding cross-boundary negative request.
+
+## 9. Standard verification commands
+
+Once PR-01/02 establish them, the default local/CI command set is:
+
+```bash
+bundle check
+bin/rails db:prepare
+bin/rails test
+bin/rails test:system
+bin/rails zeitwerk:check
+bin/rubocop
+bin/brakeman --no-pager
+bin/bundler-audit
+bin/importmap audit
+docker build -t rails_sass:ci .
+```
+
+Use the actual final image name after PR-00 naming resolution. A PR may add a
+focused command, such as a concurrency or provider contract test, but may not
+silently omit a failing standard check. If a check cannot run, report the exact
+blocker; do not report it as passing.
+
+Current planning-time results are recorded in section 3 and are not green
+baseline evidence.
+
+## 10. Production MVP acceptance matrix
+
+| ID | Acceptance criterion | Primary evidence/PR |
+| --- | --- | --- |
+| A1 | Fresh setup prepares PostgreSQL and runs Minitest/quality checks | PR-01–02 CI |
+| A2 | User authenticates, resets password, and session revokes safely | PR-03 tests/system flow |
+| A3 | User belongs to/switches multiple organizations through path tenancy | PR-04–06 request/system tests |
+| A4 | Non-member slug and guessed cross-tenant IDs expose/mutate nothing | PR-05 plus every tenant PR |
+| A5 | Role matrix and concurrent last-owner invariant are exact | PR-04/06 policy+concurrency tests |
+| A6 | Catalog/plan versions are stable, typed, constrained, and published immutable | PR-07–08 DB/service tests |
+| A7 | Cross-product roles/permissions/assignments are impossible | PR-09–10 DB/request tests |
+| A8 | Owner/admin have no product bypass; all entitlement+RBAC factors are required | PR-15 truth table |
+| A9 | Boolean/numeric limits and concurrent final-unit consumption are correct | PR-15 service/concurrency tests |
+| A10 | Every billing status/time boundary matches the one canonical matrix | PR-12/14B table tests |
+| A11 | Redirect/API/portal success never changes access | PR-16–17 request/integration tests |
+| A12 | Forged/mutated/replayed/reordered/mismatched webhooks cannot over-grant | PR-13–14B tests/drills |
+| A13 | Verified webhook activates/changes/cancels/recovers/expires local plan | PR-14B test-mode contract |
+| A14 | Runtime access works with Lemon unavailable and performs zero provider calls | PR-14B/15 outage assertion |
+| A15 | Test/live keys, events, mappings, and data cannot cross | PR-11–14B tests + staging drill |
+| A16 | Logs/events contain no secrets, raw billing payload, PII, or signed URLs | PR-18A–18C capture tests/review |
+| A17 | Web and worker images build/boot non-root with TLS/host/security settings | PR-20 staging evidence |
+| A18 | Queue backlog alerts/recovery and webhook replay runbooks work | PR-18C/21 drill |
+| A19 | Database migration, backup restore, and deployment rollback are proven | PR-19–21 evidence |
+| A20 | No real secrets/customer data are committed and all open launch inputs have owners | PR-00/21 review |
+| A21 | Critical Hotwire/Tailwind flows are responsive, keyboard-operable, and expose clear semantic errors/status | PR-03/05/06/10/16/17/18B system evidence |
+
+## 11. Rollout strategy
+
+1. Deploy foundation, account, tenancy, and catalog tables with no provider
+   endpoint enabled.
+2. Deploy billing schema and webhook receiver/projection behind missing/disabled
+   production configuration; validate with local fixtures.
+3. Enable Lemon test-mode webhook and checkout in staging only.
+4. Complete lifecycle, duplicate/order, rotation, and worker recovery drills.
+5. Load reviewed live billing mappings without customer data; configure live
+   webhook after the capable release is healthy.
+6. Enable checkout for internal pilot organization(s).
+7. Observe queue/billing/authorization signals through at least one lifecycle
+   cycle or agreed pilot window.
+8. Expand availability only after launch matrix evidence is complete.
+
+Do not seed a subscription or plan grant to simulate payment. Test and pilot
+access must arrive through the same verified webhook path as production.
+
+## 12. Rollback and forward-fix principles
+
+- Schema changes are backward-compatible with the previously deployed web and
+  worker image during rollout.
+- Do not roll back a migration that would discard billing/tenant history; deploy
+  a forward fix and disable the affected entry point.
+- Webhook ingestion may remain enabled during processor incidents only when
+  durable receipt is healthy; otherwise return 503 so provider retries and alert.
+- Disabling checkout/portal UI cannot be used as authorization mitigation;
+  server policy remains enforced.
+- On ambiguous billing state, fail closed, preserve verified ledger evidence,
+  stop new checkout if necessary, and repair by provider resend/verified-event
+  reprocessing.
+- Rollback never rewrites local subscription state from redirect/API response.
+
+## 13. Definition of done for the program
+
+The production MVP is done only when:
+
+- PR-00 through PR-21 outcomes are merged or consciously superseded by an
+  updated plan/ADR;
+- all acceptance matrix rows have objective evidence;
+- all relevant automated and manual checks were actually run and results stored;
+- no severity-critical/high security finding remains open;
+- no unresolved cross-document model, role, status, or tenancy contradiction
+  exists;
+- production credentials and customer data remain outside code/repository;
+- product, engineering, security, and operations owners accept the residual
+  risks and rollback/runbook responsibilities.

@@ -1,0 +1,15 @@
+<% visible_flashes = flashes.to_h.select { |_type, message| message.present? } %>
+
+<% if visible_flashes.any? %>
+  <section class="mx-auto mt-6 grid w-full max-w-7xl gap-3 px-5" aria-label="Notifications">
+    <% visible_flashes.each do |type, message| %>
+      <% alert = type.to_s == "alert" %>
+      <div
+        role="<%= alert ? "alert" : "status" %>"
+        class="rounded-xl border px-4 py-3 text-sm <%= alert ? "border-red-200 bg-red-50 text-red-900" : "border-emerald-200 bg-emerald-50 text-emerald-900" %>"
+      >
+        <%= message %>
+      </div>
+    <% end %>
+  </section>
+<% end %>
