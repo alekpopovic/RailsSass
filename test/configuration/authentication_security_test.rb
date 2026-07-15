@@ -33,4 +33,13 @@ class AuthenticationSecurityTest < ActiveSupport::TestCase
     assert_equal "/email_verification/edit",
       Rails.application.routes.url_helpers.edit_email_verification_path
   end
+
+  test "internal return paths reject encoded protocol-relative and backslash forms" do
+    controller = ApplicationController.new
+
+    assert_equal "/active_sessions", controller.send(:safe_internal_path, "/active_sessions")
+    assert_nil controller.send(:safe_internal_path, "/%2f%2fattacker.example")
+    assert_nil controller.send(:safe_internal_path, "/%5cattacker.example")
+    assert_nil controller.send(:safe_internal_path, "https://attacker.example")
+  end
 end

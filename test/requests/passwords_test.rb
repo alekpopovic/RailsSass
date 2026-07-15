@@ -98,6 +98,23 @@ class PasswordsTest < ActionDispatch::IntegrationTest
     refute user.authenticate(NEW_PASSWORD)
   end
 
+  test "an invalid password confirmation changes nothing and keeps sessions" do
+    user = create_user
+    session_record, = Session.issue_for!(user, ip_address: "127.0.0.1", user_agent: "Password test")
+    token = user.password_reset_token
+    password_digest = user.password_digest
+
+    patch password_path, params: {
+      token: token,
+      user: { password: NEW_PASSWORD, password_confirmation: "does-not-match" }
+    }
+
+    assert_response :unprocessable_content
+    assert_equal password_digest, user.reload.password_digest
+    assert Session.exists?(session_record.id)
+    assert_equal user, User.find_by_password_reset_token(token)
+  end
+
   private
     def create_user
       User.create!(

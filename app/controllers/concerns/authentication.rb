@@ -63,7 +63,10 @@ module Authentication
     def safe_internal_path(candidate)
       return unless candidate.is_a?(String)
       return unless candidate.start_with?("/") && !candidate.start_with?("//")
-      return if candidate.include?("\\") || candidate.match?(/[\u0000-\u001f\u007f]/)
+
+      decoded_candidate = URI::DEFAULT_PARSER.unescape(candidate)
+      return if decoded_candidate.start_with?("//")
+      return if decoded_candidate.include?("\\") || decoded_candidate.match?(/[\u0000-\u001f\u007f]/)
 
       uri = URI.parse(candidate)
       candidate if uri.scheme.nil? && uri.host.nil?
