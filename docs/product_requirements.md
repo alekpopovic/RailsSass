@@ -26,9 +26,10 @@ catalog also exist. Billing now has constrained local persistence/history
 primitives and an offline-tested Lemon API adapter, but no checkout/webhook
 endpoint, provider mapping/locator, or verified projection. A read-only local
 Entitlements resolver now covers paid status, free fallback, and catalog typing;
-product-RBAC persistence and transactional assignment commands also exist.
-Pundit/UI integration, the complete runtime Access decision, billing workflows,
-and deployment hardening remain separate execution-plan milestones.
+product-RBAC persistence, transactional assignment commands, and the central
+runtime Access decision/Pundit integration also exist. Product-domain routes,
+UI/action registry, atomic capacity commands, billing workflows, and deployment
+hardening remain separate execution-plan milestones.
 
 Each milestone must inspect and test existing behavior rather than assume an
 earlier prompt was implemented perfectly.
@@ -71,13 +72,17 @@ An `OrganizationMembership` has exactly one organization role:
 | Assign product memberships and product roles | Yes | Yes | No | No |
 | View subscription and billing screens | Yes | No | Yes | No |
 | Start checkout or open the customer portal | Yes | No | Yes | No |
-| Use an entitled product | Product gate | Product gate | Product gate | Product gate |
+| Use an entitled product | Product gate | Product gate | No | Product gate |
 
 Multiple owners are allowed, but every organization must retain at least one
 active owner membership. Runtime tenant access additionally requires that the
 owner's global user account is enabled; the account-disable command must not
 leave an organization without such an access-eligible owner. No organization
-role bypasses product membership, product permission, or plan entitlement.
+role bypasses product membership, product permission, or plan entitlement for
+product-data access. The billing role is deliberately ineligible for product
+data even if stale product assignment rows exist. When one account needs both
+billing and product responsibilities, it must use the owner organization role
+and still receive an explicit product membership and product role.
 
 Organization membership administration is performed by the Tenancy-owned
 `Organizations::Memberships::ChangeRole` and
@@ -104,11 +109,11 @@ explicit deny permission.
 3. After a candidate root is set, every tenant-owned child query is rooted at
    `Current.organization`.
 4. Organization role and product RBAC are independent.
-5. Product access requires an effective local plan (accessible paid
-   subscription or active free fallback), plan product entitlement, product
-   membership, and product permission. The organization membership and product
-   membership must be active, and only active system or same-organization roles
-   contribute permissions.
+5. Product access requires a non-billing organization role, an effective local
+   plan (accessible paid subscription or active free fallback), plan product
+   entitlement, product membership, and product permission. The organization
+   membership and product membership must be active, and only active system or
+   same-organization roles contribute permissions.
 6. A feature-specific action additionally requires the enabled typed feature
    entitlement. A consuming finite-limit action additionally requires capacity;
    explicit unlimited still requires every other access factor.
@@ -136,8 +141,10 @@ explicit deny permission.
   expire after 24 hours. Token-bearing `GET` requests only render confirmation;
   CSRF-protected `PATCH` requests perform the mutation.
 - Sessions are server-side, rotate on authentication, expire after 30 days,
-  and store only a SHA-256 digest of the opaque cookie token. Redirects after
-  authentication accept only validated internal application locations.
+  and store only a SHA-256 digest of the opaque cookie token. Runtime access
+  decisions revalidate the live unexpired session and verified/enabled account
+  state. Redirects after authentication accept only validated internal
+  application locations.
 - Explicit onboarding for a verified and authenticated user; registration and
   email verification never create an organization automatically.
 - Organization creation with a database-generated unique public UUID for
@@ -184,8 +191,8 @@ explicit deny permission.
 
 ### 6.3 Product access management
 
-- Owner/admin can add an active organization member to an entitled or
-  non-entitled product and assign one or more system product roles.
+- Owner/admin can add an active organization member to a currently entitled
+  product and assign one or more system product roles.
 - Product-level suspension preserves assigned roles but grants no access until
   an explicit reactivation; removal deletes the product assignment and joins.
 - Assignments may remain dormant after a downgrade or subscription loss; they
@@ -277,7 +284,8 @@ explicit deny permission.
 3. Acceptance atomically creates or reactivates one membership for that user
    and organization.
 4. Owner/admin creates a product membership and assigns product roles.
-5. The member can act only if the plan and product permission gates also pass.
+5. The non-billing member can act only if the plan and product permission gates
+   also pass.
 
 ### 7.3 Subscribe
 

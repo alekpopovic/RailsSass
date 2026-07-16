@@ -37,6 +37,28 @@ class ApplicationPolicy
     false
   end
 
+  protected
+    def product_access_decision(product_key:, permission_key:, feature_key: nil, now: Time.current)
+      Access::Gate.new(
+        context: context,
+        product_key: product_key,
+        permission_key: permission_key,
+        feature_key: feature_key,
+        now: now
+      ).call
+    end
+
+    def product_access_allowed?(**attributes)
+      product_access_decision(**attributes).allowed?
+    end
+
+    def record_owned_by_current_organization?
+      organization&.persisted? &&
+        Current.organization&.id == organization.id &&
+        record&.respond_to?(:organization_id) &&
+        record.organization_id == organization.id
+    end
+
   class Scope
     attr_reader :context, :user, :organization, :membership, :scope
 
@@ -51,5 +73,20 @@ class ApplicationPolicy
     def resolve
       raise NoMethodError, "Define #resolve in #{self.class}"
     end
+
+    protected
+      def product_access_decision(product_key:, permission_key:, feature_key: nil, now: Time.current)
+        Access::Gate.new(
+          context: context,
+          product_key: product_key,
+          permission_key: permission_key,
+          feature_key: feature_key,
+          now: now
+        ).call
+      end
+
+      def product_access_allowed?(**attributes)
+        product_access_decision(**attributes).allowed?
+      end
   end
 end

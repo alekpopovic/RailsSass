@@ -13,11 +13,7 @@ class ApplicationController < ActionController::Base
 
   private
     def pundit_user
-      AuthorizationContext.new(
-        user: Current.user,
-        organization: Current.organization,
-        membership: Current.membership
-      )
+      AuthorizationContext.current
     end
 
     def render_not_found

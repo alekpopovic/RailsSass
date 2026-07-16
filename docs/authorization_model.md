@@ -15,12 +15,12 @@ subscription predicate is in
 
 The read-only `Entitlements::Resolver` now implements local subscription status,
 effective-plan selection, and typed catalog entitlement results. Product-RBAC
-persistence and tenant-scoped transactional assignment commands also exist.
-They are not yet a public authorization surface: Pundit/controller integration,
-customer-facing UI, and the complete `Access::Decision` composition are the
-next Access milestone. The application still has no production subscription
-writer; only the future verified-webhook projection may create or change paid
-local state.
+persistence, tenant-scoped transactional assignment commands,
+`Access::Gate`/`PermissionChecker`/`Decision`, and base Pundit integration also
+exist. Product-domain controllers/UI and atomic capacity commands remain later
+vertical slices. The application still has no production subscription writer;
+only the future verified-webhook projection may create or change paid local
+state.
 
 ## 2. Security invariants
 
@@ -32,7 +32,8 @@ local state.
 4. Organization role and product access are orthogonal.
 5. Product entitlement and product permission are both required.
 6. `ProductFeature` and `ProductPermission` are different concepts and keys.
-7. Owner/admin/billing/member never bypass product RBAC or entitlements.
+7. Owner/admin/member never bypass product RBAC or entitlements; billing
+   membership is ineligible for product-data access.
 8. A product membership without a role grants no permission.
 9. A permission without a product membership grants nothing.
 10. A suspended product membership or inactive product role grants nothing;
@@ -121,7 +122,8 @@ Additional rules:
 - A disabled user authorizes nothing even if membership rows remain active.
 - Membership suspension atomically removes its access locator and product
   memberships/roles; later reactivation requires explicit product reassignment.
-- Product usage for every role proceeds through the product gate below.
+- Product usage for owner/admin/member proceeds through the product gate below;
+  billing membership has billing access but no product-data access.
 
 The Tenancy module exposes the commands as `Organizations::Create`,
 `Organizations::Memberships::ChangeRole`,
@@ -153,8 +155,8 @@ deterministic subscription boundaries.
 
 ### 5.2 Decision flow
 
-`Access::Decision` is a pure, non-mutating common gate. It grants only when every
-applicable step succeeds:
+`Access::Gate` is a read-only common gate returning an immutable
+`Access::Decision`. It grants only when every applicable step succeeds:
 
 ```text
 1. authenticated, enabled Current.user
@@ -170,29 +172,36 @@ applicable step succeeds:
       capacity representation
 7. an active ProductMembership exists for the current active organization
    membership and product
-8. union of assigned active ProductRoles, limited to system roles or roles
+8. the organization role is eligible for product data; billing denies even if
+   stale product assignment rows remain
+9. union of assigned active ProductRoles, limited to system roles or roles
    owned by Current.organization, includes the required ProductPermission
 ```
+
+Step 1 revalidates the persisted session row, its expiry, and the current
+verified/enabled user state in PostgreSQL. A deleted session or stale in-memory
+`Session`/`User` object cannot satisfy the gate.
 
 Any false, null, unknown, malformed, or exceptional result denies. The
 Entitlements layer returns an immutable `Entitlements::Result` containing
 `allowed?`, a stable internal reason code, paid/free plan source, and
-finite/unlimited capacity when applicable. `Access::Decision` later composes
-that result with organization and product RBAC. Neither layer measures usage or
-mutates product data.
+finite/unlimited capacity when applicable. `Access::Gate` preserves that result
+metadata and composes it with live tenant/product RBAC through
+`Access::PermissionChecker`. Neither layer measures usage or mutates product
+data.
 
-The persistence layer enforces the same tenant/product shape before this
-runtime gate exists: composite foreign keys reject cross-product joins, and a
+The persistence layer enforces the same tenant/product shape beneath the
+runtime gate: composite foreign keys reject cross-product joins, and a
 database trigger permits an organization-specific role only for a product
 membership from that organization. System roles have null organization scope.
-Inactive roles cannot receive new assignments and will be ignored by the
-runtime permission union. A product-level suspension preserves its role joins;
+Inactive roles cannot receive new assignments and are ignored by the live
+permission union. A product-level suspension preserves its role joins;
 removing the product membership or suspending its parent organization
 membership deletes the assignment set.
 
 Final server authorization composes three owned layers:
 
-1. `Access::Decision` performs steps 1-8.
+1. `Access::Gate` performs steps 1-9 and returns `Access::Decision`.
 2. The product Pundit policy loads the record through `Current.organization`,
    requires the common grant, and applies product-owned record rules.
 3. For a consuming action, the product command repeats/revalidates the common
@@ -205,7 +214,7 @@ without a module dependency cycle.
 
 ### 5.3 Base product actions
 
-An action that is not feature-specific still requires common steps 1-5 and 7-8,
+An action that is not feature-specific still requires common steps 1-5 and 7-9,
 then its product policy. A plan product row does not imply every feature, and a
 feature row is not required for the base product shell.
 
@@ -260,15 +269,29 @@ different organization raises not found. Its stable-key API is:
 Representative denial codes are `no_effective_plan`, `product_not_found`,
 `product_not_in_plan`, `feature_not_found`, `feature_not_entitled`,
 `feature_disabled`, `invalid_limit_configuration`, and the explicit
-`subscription_*` matrix codes. `feature_enabled?` fails closed for a missing
-feature key. The resolver has no user, membership, ProductRole,
-ProductPermission, usage, or provider-HTTP logic.
+`subscription_*` matrix codes. Access-specific codes include
+`authentication_required`, `organization_inactive`,
+`organization_membership_inactive`,
+`organization_role_not_product_eligible`, `product_membership_missing`,
+`product_membership_suspended`, `permission_not_granted`, and
+`access_granted`. `feature_enabled?` fails closed for a missing feature key. The
+resolver has no user, membership, ProductRole, ProductPermission, usage, or
+provider-HTTP logic.
 
 ## 6. Pundit integration
 
 Pundit policies compose the common decision with product-owned record-specific
 rules. They do not duplicate the billing matrix, entitlement/RBAC logic, or
 SQL-scoping contract.
+
+`ApplicationPolicy` and its base `Scope` expose protected helpers backed by the
+same `Access::Gate` used by UI predicates. Concrete product policies must still
+assert record ownership and start collection queries at
+`Current.organization`. `ProductMembershipPolicy` is the distinct product
+assignment policy: active owner/admin plus plan product entitlement may
+manage members without requiring the administrator's own product seat;
+billing/member deny. The assignment services remain internal until controllers
+apply that policy.
 
 Controller requirements:
 
@@ -448,6 +471,7 @@ invalidate:
 
 Every variation must deny. Additional positive/negative cases cover multiple
 role permission union, identical keys in another product, owner/admin no-bypass,
+billing-role product-data denial,
 disabled flag/limit, finite limit zero, explicit unlimited, exact boundary,
 over-limit downgrade, and concurrent final-unit consumption. Action-registry tests prove a client cannot omit or
 change the required permission, feature, consumption flag, or delta calculator.

@@ -9,10 +9,10 @@ This document is the canonical relational model for the production MVP. It
 defines ownership, names, relationships, indexes, foreign keys, and database
 constraints. Account/session, organization, invitation/audit, and local catalog
 migrations exist. A constrained Billing persistence foundation, read-only
-Entitlements resolver, and product-RBAC persistence/services also exist, but
-provider mapping, locator, verified projection, Pundit/UI integration, the full
-`Access::Decision` composition, and product-domain work remain planned in the
-documented execution order.
+Entitlements resolver, product-RBAC persistence/services, and the central
+Access/Pundit decision layer also exist, but provider mapping, locator, verified
+projection, product-domain policy/UI work, and capacity commands remain planned
+in the documented execution order.
 
 Behavioral interpretation is defined in
 [Authorization Model](authorization_model.md) and
@@ -533,10 +533,12 @@ same-organization role. Repeated add/assignment/suspend/reactivate calls are
 idempotent where the requested state already exists; remove deletes the product
 membership and its role joins.
 
-These commands deliberately have no actor/Pundit decision in this persistence
-milestone and are not a controller boundary. The next Access milestone adds the
-owner/admin policy and request/UI surface without weakening their tenant-scoped
-queries.
+These commands deliberately have no actor/Pundit decision and are not a
+controller boundary. `ProductMembershipPolicy` now provides the owner/admin plus
+product-entitlement decision for the future request/UI surface; controllers
+must still call it before invoking a command. Billing/member actors deny, and
+the full product-data `Access::Gate` remains separate from assignment
+management.
 
 ## 8. Billing
 

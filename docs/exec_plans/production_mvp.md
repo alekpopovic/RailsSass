@@ -42,6 +42,8 @@ Implementation PRs may not silently change these decisions:
   `Organizations::Memberships::{ChangeRole,Remove,Reactivate}`; `Remove`
   soft-suspends and never deletes a membership row.
 - Owner/admin have no product-access bypass.
+- Billing organization membership is ineligible for product-data access; it
+  remains eligible only for the documented billing surface.
 - Product access requires an effective local plan (accessible paid subscription
   or active free fallback) AND plan entitlement AND product
   membership/permission.
@@ -96,8 +98,11 @@ Observed on 2026-07-16:
   local subscriptions and the active free fallback without provider I/O.
 - Product-role/permission and tenant product-assignment persistence now exist,
   including transactional assignment commands and constrained synthetic local
-  seeds. Their Pundit/HTTP/UI surface and the full runtime Access composition,
-  billing synchronization, and production hardening remain unimplemented.
+  seeds. The central ordered `Access::Gate`, live permission checker, immutable
+  decision result, shared Pundit helpers, and product-membership management
+  policy also exist. Product assignment HTTP/UI, a concrete product-domain
+  action/capacity slice, billing synchronization, and production hardening
+  remain unimplemented.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
 
@@ -565,7 +570,7 @@ Scope:
 - Add an idempotent development/test seed for reviewed Analytics/CRM
   roles/permissions; it creates no tenant assignments.
 - Use positive permissions only. Inactive roles reject new assignments and are
-  ignored by the future runtime permission union; permissions have stable
+  ignored by the live runtime permission union; permissions have stable
   definitions and no independent lifecycle flag.
 
 Migrations: product and optional organization FKs, snake-case role and
@@ -592,8 +597,9 @@ Scope:
 - Add `ProductMembership` and `ProductMembershipRole`.
 - Add tenant-scoped transactional add/remove/assign-role/suspend/reactivate
   services without actor authorization; they are internal until PR-10B.
-- Allow assignments to exist without a current plan entitlement; label them
-  dormant in the later UI rather than deleting on downgrade.
+- Allow existing assignments to remain dormant without a current plan
+  entitlement rather than deleting them on downgrade. The later management UI
+  does not expose or mutate them until the product is entitled again.
 - Product suspension preserves role joins, while removal deletes the assignment.
 - A role-less product membership grants no action.
 - Extend the PR-04 membership-suspension transaction to delete that
@@ -619,7 +625,7 @@ Tests:
 Acceptance: RBAC assignment data is safe but does not yet imply runtime product
 access.
 
-### PR-10B: Authorize and expose product-assignment management
+### PR-10B: Authorize and expose product-assignment management — policy checkpoint implemented
 
 Depends on: PR-10A.
 
@@ -628,18 +634,22 @@ server-authorized tenant UI.
 
 Scope:
 
-- Add Pundit policies and tenant controllers that reload all assignment targets
-  through `Current.organization` and system/catalog allowlists.
+- The `ProductMembershipPolicy` owner/admin + product-entitlement decision and
+  tenant-rooted scope are implemented; add tenant controllers that reload all
+  assignment targets through `Current.organization` and system/catalog
+  allowlists.
 - Owner/admin may manage assignments; billing/member may not. No organization
   role bypasses product runtime permission checks.
-- Add focused accessible Hotwire UI with dormant/suspended state messaging.
+- Add focused accessible Hotwire UI with suspended-state messaging; dormant
+  assignments remain inaccessible while the product is not entitled.
 - Keep organization-specific custom-role creation/editing outside the MVP.
 
 Tests: complete organization-role policy table, two-tenant IDOR requests,
 UI-hidden direct mutation denial, and keyboard/narrow-viewport system flows.
 
-Acceptance: the management surface is authorized on the server; it still does
-not grant product actions until the full Access decision is implemented.
+Acceptance: the policy layer is implemented, but the management surface remains
+incomplete until controller/request/UI tests land. Assignment management never
+grants product-data access; that uses the full Access gate.
 
 #### Implemented Billing foundation checkpoint
 
@@ -862,7 +872,7 @@ Tests:
 Acceptance: enable test-mode provider webhook only after automated suite is
 green; complete dashboard resend/simulation contract test with sanitized output.
 
-### PR-15: Add central product authorization and a thin vertical slice
+### PR-15: Add central product authorization and a thin vertical slice — common gate implemented
 
 Depends on: PR-08, PR-10B, PR-12, PR-14B, and chosen initial product contract.
 
@@ -871,13 +881,14 @@ server-side action.
 
 Scope:
 
-- Add `Access::Decision` with structured internal reason codes.
-- Compose the existing `Entitlements::Result`; do not duplicate paid-status,
-  free-fallback, catalog typing, or cache logic inside Access.
+- `Access::Decision`, the ordered `Access::Gate`, and the live tenant-rooted
+  `Access::PermissionChecker` are implemented with structured reason codes.
+- The gate composes the existing `Entitlements::Result`; it does not duplicate
+  paid-status, free-fallback, catalog typing, or cache logic inside Access.
 - Add server-owned action registry mapping product action to permission,
   required feature, and consumption contract; clients cannot supply/omit those
   semantics.
-- Keep `Access::Decision` pure: compose active tenant membership, the effective
+- Keep the common gate read-only: compose active tenant membership, the effective
   local plan (accessible paid subscription or active free fallback),
   product/feature entitlement/typed limit, product membership, and permission
   only.
@@ -886,7 +897,9 @@ Scope:
 - Implement a product command that revalidates the common grant and atomically
   enforces its authoritative usage plus server-calculated delta with mutation;
   do not add a generic metering ledger.
-- Keep UI predicate and request authorization on the same decision API.
+- `ApplicationPolicy` and `Scope` expose the same gate for UI predicates and
+  request authorization; the first concrete product-domain policy/action still
+  needs to use it.
 
 Migrations: only the selected product vertical-slice tenant table/counter, with
 organization FK, composite ownership, uniqueness, and capacity constraints.
@@ -903,7 +916,9 @@ Tests:
 - two-tenant guessed IDs and direct POST;
 - zero Lemon Squeezy calls during every decision.
 
-Acceptance: no product action is possible unless every canonical gate succeeds.
+Acceptance: the common gate truth table is implemented and provider-offline.
+The PR remains incomplete until a concrete tenant product action, request/IDOR
+tests, action registry, and atomic capacity command prove end-to-end use.
 
 ### PR-16: Add server-authorized checkout and pending return
 

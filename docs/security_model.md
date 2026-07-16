@@ -68,7 +68,7 @@ plaintext tokens are never stored.
 | Tenant IDOR | Member of A guesses B's slug or record ID | Account locator selects candidate only; authoritative membership and records reload through `Current.organization`; Pundit scope/policy; composite tenant FKs | Cross-tenant request/model tests for every controller family |
 | Stale tenant context | Reused thread/job retains prior organization | Establish context explicitly; reset in `ensure`; fail closed without context | Sequential request/job tests including exceptions |
 | Organization privilege escalation | Admin grants owner/billing, concurrent removal leaves no owner, user disable or reactivation orphans/resurrects access, or UI-hidden POST succeeds | Exact role matrix; organization-row locking in `Organizations::Memberships::ChangeRole`/`Remove`/`Reactivate`; soft suspension removes locators/product assignments once present; server authorization; cross-organization account-disable guard added with locator/bootstrap | Table-driven service/policy, reactivation, direct request, and concurrency tests |
-| Product privilege escalation | Owner assumes implicit access; a cross-product or cross-tenant custom role is attached; suspended membership or inactive role remains effective | Entitlement AND active organization/product membership AND permission from an active correctly scoped role; no role bypass; composite tenant/product FKs plus same-tenant custom-role trigger | Constraint/trigger tests now; central authorization truth table and direct-request denial tests with the next Access surface |
+| Product privilege escalation | Owner assumes implicit access; billing role reaches product data; a cross-product or cross-tenant custom role is attached; suspended membership or inactive role remains effective | Central ordered Access gate: authenticated user, active tenant/member, entitlement, active product membership, non-billing role, and permission from an active correctly scoped role; no owner/admin bypass; composite tenant/product FKs plus same-tenant custom-role trigger | Constraint/trigger, central truth-table, permission-union, policy, and two-tenant scope tests; direct-request tests land with the first product controller |
 | Numeric-limit race/bypass | Two concurrent creates consume the final unit, or client omits feature/delta | Server-owned action registry; product command revalidates common grant and locks/conditionally mutates usage in one transaction | Parameter-tamper plus concurrency test proving at most one commit |
 | Webhook forgery/tampering | Attacker posts active status or modifies one byte | HMAC-SHA256 exact raw body, constant-time compare, credential separation | Official-style fixture, mutation, bad/missing signature tests |
 | Webhook replay | Valid body is resent many times or an unsigned event header is changed | Signed-body event name is authoritative; fingerprint provider/configured-environment/exact-body only; unique index plus idempotent projection | Duplicate/resend/mutated-header tests and metric |
@@ -131,7 +131,8 @@ controllers.
   only its SHA-256 digest server-side, expire it after 30 days, and rotate
   browser/server session state on authentication. Revoke applicable sessions
   on logout, password reset, account disablement, and other security-sensitive
-  changes.
+  changes. Runtime authorization revalidates the live unexpired session row and
+  current verified/enabled user state instead of trusting cached model objects.
 - Account disablement remains unexposed until its dedicated guard locks affected
   organizations and rejects a disable operation if it would leave any
   organization without another enabled active owner.
@@ -171,17 +172,20 @@ The normative decision flow is in
   and webhook processing remain unavailable until Billing validates an exact
   server-owned test/live environment and configured-store mapping; the price
   row itself never proves payment or subscription eligibility.
-- Do not use organization role as a product permission shortcut.
-- Product-RBAC persistence commands are currently internal and transactional;
-  they are not an authorization boundary and must not be exposed by a
-  controller until the next Pundit policy/request milestone. Every tenant row
-  is re-resolved through `Current.organization` inside the command.
+- Do not use owner/admin organization role as a product permission shortcut;
+  billing organization membership is categorically ineligible for product-data
+  access.
+- Product-RBAC persistence commands remain internal and transactional; they are
+  not an authorization boundary. A future controller must first apply the
+  implemented `ProductMembershipPolicy` and then invoke the command. Every
+  tenant row is re-resolved through `Current.organization` inside the command.
 - Permit global system roles across tenants, but permit a nullable
   organization-scoped role only for a product membership from that same
   organization. Enforce this conditional rule in PostgreSQL as well as the
   model/service layer.
-- Ignore inactive roles and suspended product memberships in the future
-  permission union. Product suspension preserves role joins; organization
+- Ignore inactive roles and suspended product memberships in the live
+  `Access::PermissionChecker` permission union. Product suspension preserves
+  role joins; organization
   membership suspension deletes every product assignment before changing the
   parent status, so reactivation cannot silently resurrect access.
 - Cache only the primitive entitlement catalog snapshot across requests. Key it

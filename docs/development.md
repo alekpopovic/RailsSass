@@ -170,6 +170,27 @@ development/test and does not create Core roles, organization-specific roles,
 product memberships, entitlements, prices, Lemon identifiers, subscriptions, or
 tenant access grants.
 
+## Runtime product access
+
+Product policies use the same central decision as presentation predicates:
+
+```ruby
+decision = Access::Gate.new(
+  context: AuthorizationContext.current,
+  product_key: "analytics",
+  permission_key: "reports.view",
+  feature_key: "exports"
+).call
+```
+
+The gate is read-only, uses local database state, and returns an immutable
+`Access::Decision` with a stable reason code and entitlement metadata. It never
+calls Lemon Squeezy. `ApplicationPolicy` and `ApplicationPolicy::Scope` expose
+protected helpers for concrete product policies; controllers must still call
+Pundit's `authorize`/`policy_scope`. Product-member administration is separate:
+`ProductMembershipPolicy` permits active owner/admin actors only when the
+effective plan includes the product, while billing/member actors deny.
+
 The primary PostgreSQL database uses `db/structure.sql` so a clean schema load
 preserves database functions and deferred constraint triggers. Generate it only
 through Rails migration/schema tasks; do not edit it by hand. Solid

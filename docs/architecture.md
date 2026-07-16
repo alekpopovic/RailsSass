@@ -14,11 +14,11 @@ email/password authentication, organization onboarding, locator-backed path
 tenancy, audited organization invitations/member administration, and the
 constrained local product/plan catalog. It also contains a non-authoritative
 Billing persistence foundation, a fixed-origin Lemon API client, the local
-Entitlements read side, and product-RBAC persistence with transactional
-assignment commands. This document describes both those established boundaries
-and the remaining target architecture; checkout, signed webhook
-ingress/projection, product authorization/UI, and deployment hardening remain
-incremental milestones.
+Entitlements read side, product-RBAC persistence with transactional assignment
+commands, and the central runtime Access/Pundit composition. This document
+describes both those established boundaries and the remaining target
+architecture; checkout, signed webhook ingress/projection, product-domain
+actions/UI, and deployment hardening remain incremental milestones.
 
 Related contracts:
 
@@ -118,13 +118,14 @@ The arrows mean "is used by." Product modules do not query billing tables
 directly; they ask the Access Control gate. Entitlements does not grant product
 permissions, and Billing does not grant permissions.
 
-Access Control already owns the constrained product membership, role,
-permission, and assignment persistence plus tenant-scoped transactional
-commands. Those commands deliberately contain no Pundit actor authorization in
-this persistence milestone. The server-authorized controller/UI surface and
-the pure `Access::Decision` runtime composition are the next Access milestone.
-System roles are global reviewed definitions; the nullable organization scope
-is schema support for future custom roles, not an MVP custom-role builder.
+Access Control owns the constrained product membership, role, permission, and
+assignment persistence, tenant-scoped transactional commands,
+`Access::Gate`/`PermissionChecker`/`Decision`, and Pundit integration helpers.
+The assignment commands deliberately remain internal and contain no actor
+authorization; `ProductMembershipPolicy` is the required owner/admin and plan
+gate for a future controller/UI surface. System roles are global reviewed
+definitions; the nullable organization scope is schema support for future
+custom roles, not an MVP custom-role builder.
 
 ## 5. Code organization
 
@@ -133,7 +134,7 @@ Rails clarity (`User`, `Organization`, `Plan`, `ProductMembership`). Namespace
 orchestration and provider-specific code by owning module.
 
 Implemented and planned layout (provider mapping, locator, webhook delivery,
-jobs, Pundit/UI integration, and full Access composition remain planned):
+jobs, product-domain policies/UI, and atomic capacity commands remain planned):
 
 ```text
 app/
@@ -172,6 +173,8 @@ app/
     billing/provider_locator.rb
     billing/webhook_event.rb
   policies/
+    application_policy.rb
+    product_membership_policy.rb
   services/
     organizations/
       create.rb
@@ -184,6 +187,9 @@ app/
       result.rb
       subscription_access_policy.rb
     access/
+      decision.rb
+      gate.rb
+      permission_checker.rb
       product_memberships/add.rb
       product_memberships/remove.rb
       product_memberships/assign_role.rb
@@ -286,7 +292,8 @@ a candidate organization; all tenant reads/writes are reloaded through
 ## 7. Authorization architecture
 
 Pundit is the controller/policy integration layer, not the full decision model.
-A central, pure `Access::Decision` composes:
+The central read-only `Access::Gate` returns an immutable `Access::Decision` and
+composes:
 
 ```text
 active organization
@@ -295,6 +302,7 @@ AND effective local plan (accessible paid subscription or active free fallback)
 AND plan product entitlement
 AND optional enabled flag or finite/unlimited feature entitlement
 AND active product membership
+AND organization role is not billing
 AND permission from an active system or same-organization product role
 ```
 
@@ -305,12 +313,14 @@ subscription, products, features, plan products, and entitlement rows. No Active
 Record objects, RBAC result, or cancellation/grace decision is cached. Versioned
 keys invalidate catalog changes and old key generations expire naturally.
 
-The product Pundit policy then applies tenant record rules. A consuming product
+`ApplicationPolicy` and its base scope expose protected helpers that invoke this
+same gate; product policies then apply tenant record rules. A consuming product
 command revalidates the common grant and atomically enforces product-owned usage
 plus its server-calculated delta against returned finite capacity in the same
 transaction as mutation; explicit unlimited capacity still follows the command
-and permission path but has no numeric ceiling. Action-to-permission/feature/consumption mappings are
-server-owned, so a client cannot omit a capacity check.
+and permission path but has no numeric ceiling. Action-to-permission, feature,
+and consumption mappings are server-owned, so a client cannot omit a capacity
+check.
 
 Organization administration and billing actions use the explicit organization
 role matrix and do not require a product subscription. Product actions always
