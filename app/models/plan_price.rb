@@ -8,6 +8,10 @@ class PlanPrice < ApplicationRecord
     class_name: "Billing::CheckoutAttempt",
     dependent: :restrict_with_exception,
     inverse_of: :plan_price
+  has_many :billing_provider_price_mappings,
+    class_name: "Billing::ProviderPriceMapping",
+    dependent: :restrict_with_exception,
+    inverse_of: :plan_price
   has_many :billing_subscriptions,
     class_name: "Billing::Subscription",
     dependent: :restrict_with_exception,

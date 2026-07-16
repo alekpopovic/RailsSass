@@ -24,7 +24,13 @@ Rails.application.routes.draw do
         only: %i[index show new create]
       resources :plan_prices,
         path: "prices",
-        only: %i[index show new create edit update]
+        only: %i[index show new create edit update] do
+          resources :provider_price_mappings,
+            path: "provider-mappings",
+            param: :environment,
+            controller: "provider_price_mappings",
+            only: %i[new create edit update]
+        end
     end
 
     get "plans/:plan_key/products/:product_key/entitlements",
@@ -96,6 +102,8 @@ Rails.application.routes.draw do
     get "settings", to: "settings#show", as: :settings
     patch "settings", to: "settings#update"
     get "billing", to: "billing#show", as: :billing
+    post "billing/checkouts", to: "billing_checkouts#create", as: :billing_checkouts
+    get "billing/checkouts/pending", to: "billing_checkouts#pending", as: :billing_checkout_pending
   end
 
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html

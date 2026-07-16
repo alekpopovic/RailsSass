@@ -23,18 +23,22 @@ PostgreSQL-backed CI quality gate. Email/password authentication, organization
 onboarding, and locator-backed tenant path bootstrap exist. Invitations,
 audited membership administration, and the constrained local product/plan
 catalog also exist. Billing now has constrained local persistence/history
-primitives and an offline-tested Lemon API adapter, but no checkout/webhook
-endpoint, provider mapping/locator, or verified projection. A read-only local
-Entitlements resolver now covers paid status, free fallback, and catalog typing;
+primitives, exact test/live price mappings, checkout-token locators, an audited
+mapping-management surface, a strict Lemon checkout operation, and
+owner/billing checkout plus local pending-return endpoints. It still has no
+verified webhook ingress/projection, subscription writer, or portal flow. A
+read-only local Entitlements resolver covers paid status, free fallback, and
+catalog typing;
 product-RBAC persistence, transactional assignment commands, and the central
 runtime Access decision/Pundit integration also exist. A Pundit-protected
 internal `/admin` surface now provides audited catalog maintenance and bounded,
 read-only billing diagnostics for `platform_admin` users. The customer shell,
 audited product-assignment UI, and a tenant-owned Analytics report vertical
 slice now exercise the central action registry, product policies, CSV export,
-and atomic `report_limit` capacity command. Checkout, signed webhook
-synchronization, provider management, and deployment hardening remain separate
-execution-plan milestones.
+and atomic `report_limit` capacity command. Checkout success changes only local
+checkout-attempt state and never grants access. Signed webhook synchronization,
+subscription-management/portal operations, and deployment hardening remain
+separate execution-plan milestones.
 
 Each milestone must inspect and test existing behavior rather than assume an
 earlier prompt was implemented perfectly.
@@ -247,16 +251,20 @@ explicit deny permission.
 - Access Lemon Squeezy through one fixed-origin, timeout-bounded adapter with
   redacted provider-specific failures and no blind retry of non-idempotent
   requests. Automated tests prohibit real external network access.
-- Server-side checkout creation for an allowlisted local `PlanPrice` only after
-  Billing adds exact environment/store mapping.
-- Only owner/billing may initiate checkout or open provider subscription
-  management.
+- Server-side checkout accepts only a local `PlanPrice` ID, then resolves and
+  revalidates an active paid price and exact active
+  `Billing::ProviderPriceMapping` for the configured environment and store.
+  Provider IDs, environment, amount, token semantics, expiry, and return URL are
+  server-owned.
+- Only owner/billing may initiate checkout. Provider subscription management and
+  portal access remain a later milestone.
 - At most one current subscription and one pending checkout per
   organization.
 - Only verified `expired` is terminal for replacement checkout; a new verified
   subscription atomically supersedes the expired historical row.
-- Checkout return page displays local `pending` or synchronized state; it does
-  not mutate billing or entitlement records.
+- The canonical checkout return page displays the latest tenant-scoped local
+  attempt or synchronized subscription state; it does not mutate billing or
+  entitlement records.
 - Signed webhook ingestion, durable receipt, local idempotency, asynchronous
   projection, duplicate handling, and out-of-order protection.
 - Subscription-to-plan mapping by exact provider environment, store, and
@@ -267,9 +275,11 @@ explicit deny permission.
   secrets.
 - Customer portal URLs are requested only after authorization and are not
   persisted or logged.
-- The implemented tenant billing overview is read-only and local-only. It shows
-  the current local subscription/effective plan to owner/billing roles and
-  performs no checkout, portal, provider lookup, or subscription mutation.
+- The tenant billing overview remains read-only and local-only. Pricing may
+  initiate checkout and the pending page may display attempt state, but neither
+  return navigation nor provider API success mutates a subscription, effective
+  plan, or entitlement. Portal and verified webhook projection remain
+  unimplemented.
 
 ### 6.5 Internal platform administration
 
@@ -302,6 +312,10 @@ explicit deny permission.
 - The admin surface never renders credentials, configuration secrets, raw
   provider payloads, diagnostic JSON snapshots, entitlement settings, or signed
   provider URLs.
+- Platform administrators may create one immutable Lemon mapping per local
+  price/provider/environment and toggle only its active state. Creation requires
+  an active paid plan and active price, copies the price's Lemon identifiers,
+  and commits audit evidence in the same transaction.
 
 ### 6.6 User experience
 
@@ -309,11 +323,13 @@ explicit deny permission.
 - Tailwind-based responsive pages for authentication, global name-only profile
   settings, organization switching/dashboard/settings, member and product-role
   administration, enabled/locked product cards, local pricing/billing state,
-  and the Analytics report slice. Checkout pending/success/error states remain
-  part of the later Billing workflow.
+  and the Analytics report slice. Checkout controls, generic error feedback,
+  explicit test-mode labeling, and local pending/synchronized states are
+  implemented; portal state and webhook-driven activation remain later work.
 - Customer routes include `/o/:organization_slug/dashboard`, `/products`,
-  `/products/:product_key/members`, `/pricing`, `/billing`, `/settings`, and the
-  `/analytics/...` product routes. `/profile` is global and accepts only the
+  `/products/:product_key/members`, `/pricing`, `/billing`,
+  `POST /billing/checkouts`, `GET /billing/checkouts/pending`, `/settings`, and
+  the `/analytics/...` product routes. `/profile` is global and accepts only the
   authenticated user's display name; email remains read-only in this flow.
 - Locked product cards name the first active plan that contains the required
   product/feature when one exists. Plan-entitlement and product-permission
@@ -363,13 +379,18 @@ explicit deny permission.
 
 ### 7.3 Subscribe
 
-1. Owner/billing selects an active local `PlanPrice` whose future Billing
-   mapping matches the configured environment/store.
-2. The server creates a tenant-scoped checkout attempt and a provider checkout.
+1. Owner/billing selects an active paid local `PlanPrice` whose active Billing
+   mapping exactly matches the deployment's configured provider environment and
+   store.
+2. The server atomically creates a tenant-scoped attempt and nonce-digest
+   locator, then makes one provider checkout request with a short-lived signed
+   token carrying the organization public ID, price ID, user ID, nonce, and
+   expiry. No raw signed token or checkout URL is persisted.
 3. The browser returns to a pending page after payment.
 4. A valid Lemon Squeezy webhook is verified and durably recorded.
-5. Webhook ingress hashes signed custom token data and persists only its digest.
-   Background processing uses that digest to resolve only a global
+5. Webhook ingress verifies the signed custom token, validates its bounded
+   payload, hashes its nonce, and retains only that digest. Background
+   processing uses the digest to resolve only a global
    non-authoritative provider locator, establishes
    `Current.organization`, validates tenant/provider mappings, and updates the
    local subscription in a transaction. Plaintext token is never persisted.

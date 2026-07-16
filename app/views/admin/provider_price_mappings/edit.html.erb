@@ -1,0 +1,7 @@
+<% content_for :title, "Edit provider mapping · Admin" %>
+
+<section class="py-8">
+  <p class="text-sm text-slate-500">Plan <%= @plan.key %></p>
+  <h1 class="mt-1 text-3xl font-bold">Update provider mapping</h1>
+  <%= render "form", mapping: @mapping %>
+</section>

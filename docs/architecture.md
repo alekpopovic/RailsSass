@@ -17,9 +17,11 @@ Billing persistence foundation, a fixed-origin Lemon API client, the local
 Entitlements read side, product-RBAC persistence with transactional assignment
 commands, and the central runtime Access/Pundit composition. This document also
 covers the implemented customer shell, audited product-assignment surface, and
-the Analytics report/action/capacity vertical slice. Checkout, signed webhook
-ingress/projection, broader product workflows, and deployment hardening remain
-incremental milestones.
+the Analytics report/action/capacity vertical slice. Owner/billing checkout,
+environment-qualified provider-price mapping, digest-only provider correlation,
+and the local pending-return page are implemented. Signed webhook
+ingress/projection, provider portal operations, broader product workflows, and
+deployment hardening remain incremental milestones.
 
 Related contracts:
 
@@ -63,7 +65,7 @@ flowchart LR
   Web --> Queue[(Solid Queue database)]
   Worker[Rails job process] --> Queue
   Worker --> Primary
-  Web -->|server-side checkout/portal API| Lemon
+  Web -->|server-side checkout API; future portal API| Lemon
   Worker -->|fixed-origin subscription fetch| Lemon
   Web --> Cache[(Solid Cache database)]
   Web --> Cable[(Solid Cable database)]
@@ -80,7 +82,7 @@ network boundary.
 | Accounts | `User`, sessions, password reset | Rails security primitives | Organizations, plans, billing |
 | Tenancy | `Organization`, memberships, `Organizations::*` commands, invitations, global access locators, `Current`, tenant loader | Accounts | Product permission logic, provider calls |
 | Catalog | Products, features, stable-keyed plans, plan-product/feature entitlements, and local plan-price records | None of the tenant modules | Organization state, usage, subscription lifecycle |
-| Billing | Customers, checkout attempts, subscriptions/history, plan-change commands, webhook ledger, future environment-specific mapping/provider locators, and Lemon adapter | Tenancy, Catalog | Product RBAC or product resource data |
+| Billing | Customers, checkout attempts, subscriptions/history, plan-change commands, webhook ledger, environment-specific price mappings, checkout-token provider locators, checkout command, and Lemon adapter | Tenancy, Catalog | Product RBAC or product resource data |
 | Entitlements | Paid-status policy, effective-plan selection, typed product/feature result, versioned catalog snapshot | Tenancy, Catalog, Billing | Product RBAC, provider HTTP, usage mutation |
 | Access Control | Product memberships, roles, permissions, Pundit base integration, central common gate | Tenancy, Catalog, Billing, Entitlements | Provider HTTP, product-specific record/usage mutations |
 | Product modules | Tenant product records, Pundit record rules, authoritative numeric usage/commands | Tenancy, Access Control | Subscription projection or global role definitions |
@@ -154,8 +156,9 @@ Keep conventional top-level Active Record aggregate names where they improve
 Rails clarity (`User`, `Organization`, `Plan`, `ProductMembership`). Namespace
 orchestration and provider-specific code by owning module.
 
-Implemented and planned layout (provider mapping, locator, webhook delivery,
-jobs, and broader product modules remain planned):
+Implemented and planned layout (checkout mapping/locator/command are present;
+webhook delivery, projection jobs, portal, and broader product modules remain
+planned):
 
 ```text
 app/
@@ -163,6 +166,7 @@ app/
     admin/...
     concerns/tenant_context.rb
     organizations/...
+    organizations/billing_checkouts_controller.rb
     billing/...
     webhooks/lemon_squeezy_controller.rb
   jobs/
@@ -224,12 +228,15 @@ app/
       product_memberships/reactivate.rb
       product_memberships/unassign_role.rb
       seed_system_product_rbac.rb
-      decision.rb
     products/analytics/
       action_registry.rb
       create_report.rb
       csv_exporter.rb
     billing/...
+      checkouts/create.rb
+      checkouts/return_url.rb
+      checkouts/token.rb
+      provider_price_mappings/configure.rb
       lemon_squeezy/client.rb
       lemon_squeezy/errors.rb
   views/
@@ -329,8 +336,12 @@ tentative organization root from the public slug and may query only that
 organization's invitation association until token/email validation succeeds.
 The customer pricing page reads only active global catalog rows; the tenant
 billing page reads the current subscription only through
-`Current.organization.billing_subscriptions`. Neither route calls Lemon nor
-writes subscription/access state.
+`Current.organization.billing_subscriptions`. Both GET routes remain local-only.
+Pricing may render a separate server-authorized checkout POST for an active
+owner/billing member and an exact eligible environment/store mapping. Checkout
+creates a tenant attempt and locator, calls Lemon once, and returns to the
+canonical tenant pending page; neither API success nor browser navigation writes
+subscription/access state.
 
 ### 6.4 Background jobs
 
@@ -345,9 +356,10 @@ ledger/locator rows) to enqueue per-organization work. It never sweeps a
 tenant-owned child table globally.
 
 The verified webhook resolver may query only the global
-`Billing::ProviderLocator` after signature and envelope validation, using a
-provider subscription identifier or checkout-token digest. The locator selects
-a candidate organization; all tenant reads/writes are reloaded through
+`Billing::ProviderLocator` after signature and envelope validation. The current
+locator supports checkout-token digest discovery; provider subscription-ID
+lookup remains an additive projection milestone. A locator selects only a
+candidate organization; all tenant reads/writes are reloaded through
 `Current.organization`.
 
 ## 7. Authorization architecture
@@ -421,9 +433,11 @@ controls but never replace request authorization.
   free/price flag never creates a persisted organization-plan assignment or
   changes subscription state; `active AND free` may select only the documented
   runtime fallback.
-- `PlanPrice` is catalog/display data and a future Billing input, not an access
-  grant. Billing must add and validate exact test/live environment mapping
-  before exposing checkout or webhook projection.
+- `PlanPrice` is catalog/display data and a Billing input, not an access grant.
+  Checkout requires an immutable exact `Billing::ProviderPriceMapping` for the
+  configured test/live environment and store. The mapping and attempt remain
+  non-authoritative; future verified webhook projection is the only path that
+  may change a subscription.
 - Service objects own multi-row state transitions. Authorization-sensitive
   invariants do not depend on uncontrolled Active Record callbacks.
 - `Organizations::Memberships::ChangeRole`,
@@ -467,10 +481,24 @@ per call and does not install generic retry middleware. A later command/job may
 retry an idempotent read according to its state machine; non-idempotent `POST`
 operations are never blindly retried.
 
-The persistence/client foundation does not call this adapter from a controller,
-job, callback, or subscription writer. Its existence cannot mutate local
-subscription state or grant access. WebMock disables non-local network access in
-the test environment, and adapter examples stub every provider response.
+`Billing::Checkouts::Create` is the current web-facing caller. Under tenant and
+organization locks it revalidates the owner/billing actor, paid price/plan,
+exact active mapping, one-pending-attempt invariant, and absence of a
+non-expired current subscription. It commits a tenant attempt plus global
+digest locator before making exactly one provider POST. The outbound signed
+`MessageVerifier` token contains organization public ID, price ID, user ID,
+nonce, and expiry; only the nonce digest is persisted. The return URL is the
+canonical tenant pending route, and the checkout URL must use the configured
+HTTPS host.
+
+Valid response data may move only the attempt to `ready`. Local request or
+configuration failures and provider statuses `400`, `401`, `403`, `404`, and
+`422` become `failed`; timeout, connection, `408`, `429`, other
+non-allowlisted responses, 5xx, malformed JSON, and invalid-success responses
+become `creation_unknown`. The signed URL is redirected without persistence or
+framework logging. None of these outcomes mutates local subscription state or
+grants access. WebMock disables non-local network access in the test
+environment, and adapter examples stub every provider response.
 
 `Billing::LemonSqueezy::WebhookVerifier` consumes exact raw request bytes and a
 versioned credential, verifies HMAC-SHA256 in constant time, and returns a

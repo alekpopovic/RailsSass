@@ -25,6 +25,8 @@ class OrganizationPolicy < ApplicationPolicy
     active_context? && membership.role.in?(%w[owner billing])
   end
 
+  alias_method :checkout?, :billing?
+
   private
     def active_context?
       user&.authentication_allowed? &&

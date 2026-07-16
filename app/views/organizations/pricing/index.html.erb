@@ -29,9 +29,30 @@
             <% elsif active_prices.any? %>
               <ul class="space-y-2">
                 <% active_prices.each do |price| %>
-                  <li class="flex items-baseline justify-between gap-4 rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                    <span class="font-medium text-slate-700"><%= price.billing_interval.humanize %></span>
-                    <span class="font-bold text-slate-950"><%= number_to_currency(price.amount_cents / 100.0, unit: "#{price.currency} ") %></span>
+                  <% mapping = @checkout_mappings_by_plan_price_id[price.id] %>
+                  <li class="rounded-lg bg-slate-50 px-3 py-3 text-sm">
+                    <div class="flex items-baseline justify-between gap-4">
+                      <span class="font-medium text-slate-700"><%= price.billing_interval.humanize %></span>
+                      <span class="font-bold text-slate-950"><%= number_to_currency(price.amount_cents / 100.0, unit: "#{price.currency} ") %></span>
+                    </div>
+                    <% if mapping&.test_mode? %>
+                      <p class="mt-2 font-semibold text-amber-800">Test mode — no real charge</p>
+                    <% end %>
+                    <% if @can_checkout && mapping&.checkout_eligible? && !@pending_checkout_attempt && (@current_subscription.nil? || @current_subscription.status_expired?) %>
+                      <%= button_to "Choose #{price.billing_interval}",
+                        organization_billing_checkouts_path(organization_slug: Current.organization.slug),
+                        params: { plan_price_id: price.id },
+                        method: :post,
+                        class: "mt-3 w-full cursor-pointer rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-500" %>
+                    <% elsif @can_checkout && @current_subscription && !@current_subscription.status_expired? %>
+                      <%= link_to "View current billing",
+                        organization_billing_path(organization_slug: Current.organization.slug),
+                        class: "mt-3 inline-flex font-semibold text-indigo-700 hover:text-indigo-600" %>
+                    <% elsif @can_checkout && @pending_checkout_attempt %>
+                      <%= link_to "View pending checkout",
+                        organization_billing_checkout_pending_path(organization_slug: Current.organization.slug),
+                        class: "mt-3 inline-flex font-semibold text-indigo-700 hover:text-indigo-600" %>
+                    <% end %>
                   </li>
                 <% end %>
               </ul>
@@ -52,6 +73,10 @@
               <p class="mt-3 text-sm text-slate-500">No products are listed for this plan.</p>
             <% end %>
           </div>
+
+          <% if !plan.free? && !@can_checkout %>
+            <p class="mt-5 text-sm text-slate-500">An organization owner or billing member can start checkout.</p>
+          <% end %>
         </article>
       <% end %>
     </div>

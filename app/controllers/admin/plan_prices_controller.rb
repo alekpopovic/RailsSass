@@ -4,10 +4,13 @@ class Admin::PlanPricesController < Admin::BaseController
   before_action :set_plan_price, only: %i[show edit update]
 
   def index
-    @plan_prices = platform_scope(@plan.plan_prices).order(:billing_interval, :currency, :amount_cents)
+    @plan_prices = platform_scope(@plan.plan_prices)
+      .includes(:billing_provider_price_mappings)
+      .order(:billing_interval, :currency, :amount_cents)
   end
 
   def show
+    @provider_price_mappings = @plan_price.billing_provider_price_mappings.order(:environment)
   end
 
   def new

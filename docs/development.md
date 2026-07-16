@@ -93,24 +93,53 @@ The status policy uses this duration from the stable local
 ## Lemon Squeezy adapter
 
 Ordinary setup, boot, and tests do not require provider credentials. The tracked
-`.env.example` exposes empty `LEMON_SQUEEZY_API_KEY` and
-`LEMON_SQUEEZY_STORE_ID` placeholders only; keep real values in the ignored
-`.env` for local manual work or in Rails credentials/deployment secret storage.
-The client resolves explicit constructor values first, then non-blank environment
-variables, then the matching `lemon_squeezy` Rails credential entries. Missing
-configuration raises a redacted configuration error before any request.
+`.env.example` exposes empty `LEMON_SQUEEZY_API_KEY`,
+`LEMON_SQUEEZY_STORE_ID`, and `LEMON_SQUEEZY_CHECKOUT_HOST` placeholders plus
+the synthetic `LEMON_SQUEEZY_ENVIRONMENT=test` selector. Keep real values in
+the ignored `.env` for local manual work or in Rails credentials/deployment
+secret storage. The client resolves explicit constructor values first, then
+non-blank environment variables, then the matching `lemon_squeezy` Rails
+credential entries. Missing configuration raises a redacted configuration
+error before any request.
 
 ```yaml
 lemon_squeezy:
   api_key: replace-in-your-encrypted-credentials
   store_id: replace-in-your-encrypted-credentials
+  environment: test
+  checkout_host: exact-checkout-hostname
 ```
 
 The adapter uses a fixed Lemon HTTPS origin, explicit connect/read timeouts, and
-one network attempt per call. It does not implement checkout, webhook delivery,
-or subscription projection. The test helper enables WebMock globally and blocks
-all non-local network traffic while allowing localhost for Rails/system tests;
-provider tests must stub every request with synthetic data.
+one network attempt per call. It implements strict subscription retrieval and
+one-attempt checkout creation. Checkout validates the configured environment and
+store, response identity, expiry, test mode, exact enabled variant, and an exact
+HTTPS checkout hostname. It never blindly retries the non-idempotent POST.
+Webhook delivery, subscription projection, and portal operations remain
+unimplemented. The test helper enables WebMock globally and blocks all non-local
+network traffic while allowing localhost for Rails/system tests; provider tests
+must stub every request with synthetic data.
+
+### Manual test-mode checkout
+
+1. Set the four Lemon values above in ignored `.env` or encrypted credentials.
+   Use `test` outside production; production must explicitly use `live`.
+   `LEMON_SQUEEZY_CHECKOUT_HOST` is the exact hostname only, without a scheme or
+   path.
+2. Ensure `APP_HOST` and `APP_PORT` generate the canonical local
+   `/o/:organization_slug/billing/checkouts/pending` return URL, then restart
+   Rails because billing configuration is loaded at boot.
+3. Create an active paid `PlanPrice` with the complete Lemon store, product, and
+   variant IDs. As a verified platform administrator, open that price in
+   `/admin` and create the matching test/live provider mapping. There is no
+   checkout setup Rake task.
+4. Sign in as an active organization owner or billing member and start checkout
+   from `/o/:organization_slug/pricing`.
+
+The pending page displays local attempt/subscription state only. A provider API
+success or return redirect never changes the current subscription, effective
+plan, or entitlements; that remains reserved for future verified webhook
+projection. Automated tests continue to block every unstubbed external request.
 
 ## Internal platform administration
 
@@ -138,9 +167,12 @@ entitlements are disabled with `enabled=false` rather than deleted. A new
 plan-product requires an active plan and product, a new plan-price requires an
 active plan, and a new entitlement requires its plan, product, and feature to be
 active. Deactivation retains existing catalog and billing-history relationships
-but blocks new ones. A price with billing history can only be
-activated/deactivated; create a new price to change its commercial or Lemon
-mapping fields. Advanced entitlement settings are intentionally not rendered by
+but blocks new ones. Once a price has a provider mapping, checkout attempt,
+subscription, or plan-change reference, only its `active` flag may change.
+Provider mapping identity is copied from the immutable price identifiers; its
+environment and provider IDs cannot be edited, while `active` may be toggled
+through the audited mapping UI. Create a new price to change commercial or Lemon
+identity. Advanced entitlement settings are intentionally not rendered by
 this interface and the `settings` parameter is filtered from logs.
 
 Subscription diagnostics require one exact organization `public_id`, do not

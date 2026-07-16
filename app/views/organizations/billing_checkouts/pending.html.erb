@@ -1,0 +1,59 @@
+<% content_for :title, "Checkout pending · #{Current.organization.name}" %>
+
+<section class="py-10 sm:py-12" aria-labelledby="checkout-pending-title">
+  <div class="max-w-3xl">
+    <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Billing</p>
+    <h1 id="checkout-pending-title" class="mt-2 text-3xl font-bold tracking-tight text-slate-950">Payment confirmation pending</h1>
+    <p class="mt-3 text-slate-600">This page reads local billing state only. Returning from checkout never activates a plan; access changes only after a verified webhook is processed.</p>
+  </div>
+
+  <div class="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm" role="status" aria-live="polite">
+    <% if @subscription && !@subscription.status_expired? %>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p class="text-sm font-medium text-slate-500">Local subscription</p>
+          <h2 class="mt-1 text-xl font-bold text-slate-950"><%= @subscription.plan_price.plan.name %></h2>
+        </div>
+        <span class="rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-800"><%= @subscription.status.humanize %></span>
+      </div>
+      <p class="mt-4 text-sm text-slate-600">A verified provider event has already synchronized the local subscription.</p>
+    <% elsif @attempt %>
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p class="text-sm font-medium text-slate-500">Requested plan</p>
+          <h2 class="mt-1 text-xl font-bold text-slate-950"><%= @attempt.plan_price.plan.name %></h2>
+          <p class="mt-1 text-sm text-slate-600"><%= @attempt.plan_price.billing_interval.humanize %> · <%= number_to_currency(@attempt.plan_price.amount_cents / 100.0, unit: "#{@attempt.plan_price.currency} ") %></p>
+        </div>
+        <% if @attempt.test_mode? %>
+          <span class="rounded-full bg-amber-100 px-3 py-1 text-sm font-semibold text-amber-900">Test mode</span>
+        <% end %>
+      </div>
+
+      <div class="mt-5 rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
+        <% case @attempt.status %>
+        <% when "creating", "ready" %>
+          <p class="font-semibold text-slate-950">Waiting for verified payment confirmation.</p>
+          <p class="mt-1">You can safely refresh this page. Product access is unchanged while confirmation is pending.</p>
+        <% when "creation_unknown" %>
+          <p class="font-semibold text-amber-900">Checkout creation could not be confirmed.</p>
+          <p class="mt-1">Do not start another checkout yet. The attempt remains pending to prevent a duplicate charge.</p>
+        <% when "failed" %>
+          <p class="font-semibold text-rose-800">Checkout was not created.</p>
+          <p class="mt-1">Return to pricing and try again later.</p>
+        <% else %>
+          <p class="font-semibold text-slate-950">This checkout attempt is no longer active.</p>
+          <p class="mt-1">The local subscription remains the only source of product access.</p>
+        <% end %>
+      </div>
+    <% else %>
+      <h2 class="text-xl font-bold text-slate-950">No checkout attempt found</h2>
+      <p class="mt-2 text-sm text-slate-600">Choose an available paid plan from pricing to begin.</p>
+    <% end %>
+  </div>
+
+  <div class="mt-6 flex flex-wrap gap-4 text-sm font-semibold">
+    <%= link_to "Refresh status", organization_billing_checkout_pending_path(organization_slug: Current.organization.slug), class: "text-indigo-700 hover:text-indigo-600" %>
+    <%= link_to "Billing overview", organization_billing_path(organization_slug: Current.organization.slug), class: "text-indigo-700 hover:text-indigo-600" %>
+    <%= link_to "Compare plans", organization_pricing_path(organization_slug: Current.organization.slug), class: "text-indigo-700 hover:text-indigo-600" %>
+  </div>
+</section>

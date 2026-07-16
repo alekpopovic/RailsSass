@@ -1,2 +1,29 @@
 <% content_for :title, "#{@plan.key} prices · Admin" %>
-<section class="py-8"><div class="flex flex-wrap items-center justify-between gap-4"><div><p class="text-sm text-slate-500">Plan <%= @plan.key %></p><h1 class="text-3xl font-bold">Plan prices</h1></div><% if @plan.active? %><%= link_to "New price", new_admin_plan_plan_price_path(@plan.key), class: "rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white" %><% else %><span class="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-600">Activate plan to add prices</span><% end %></div><div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white"><table class="min-w-full divide-y divide-slate-200 text-left text-sm"><thead class="bg-slate-50 text-xs uppercase text-slate-600"><tr><th class="px-4 py-3">Interval</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Variant</th><th class="px-4 py-3">Status</th></tr></thead><tbody class="divide-y divide-slate-100"><% @plan_prices.each do |price| %><tr><td class="px-4 py-3"><%= link_to price.billing_interval.titleize, admin_plan_plan_price_path(@plan.key, price), class: "font-semibold text-indigo-700" %></td><td class="px-4 py-3"><%= number_to_currency(price.amount_cents / 100.0, unit: "#{price.currency} ") %></td><td class="px-4 py-3 font-mono text-xs"><%= price.lemon_variant_id.presence || "Not mapped" %></td><td class="px-4 py-3"><%= price.active? ? "Active" : "Inactive" %></td></tr><% end %></tbody></table></div></section>
+
+<section class="py-8">
+  <div class="flex flex-wrap items-center justify-between gap-4">
+    <div><p class="text-sm text-slate-500">Plan <%= @plan.key %></p><h1 class="text-3xl font-bold">Plan prices</h1></div>
+    <% if @plan.active? %>
+      <%= link_to "New price", new_admin_plan_plan_price_path(@plan.key), class: "rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white" %>
+    <% else %>
+      <span class="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-600">Activate plan to add prices</span>
+    <% end %>
+  </div>
+
+  <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+    <table class="min-w-full divide-y divide-slate-200 text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-600"><tr><th class="px-4 py-3">Interval</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Variant</th><th class="px-4 py-3">Environment</th><th class="px-4 py-3">Status</th></tr></thead>
+      <tbody class="divide-y divide-slate-100">
+        <% @plan_prices.each do |price| %>
+          <tr>
+            <td class="px-4 py-3"><%= link_to price.billing_interval.titleize, admin_plan_plan_price_path(@plan.key, price), class: "font-semibold text-indigo-700" %></td>
+            <td class="px-4 py-3"><%= number_to_currency(price.amount_cents / 100.0, unit: "#{price.currency} ") %></td>
+            <td class="px-4 py-3 font-mono text-xs"><%= price.lemon_variant_id.presence || "Not mapped" %></td>
+            <td class="px-4 py-3"><%= price.billing_provider_price_mappings.map { |mapping| mapping.test_mode? ? "Test" : "Live" }.join(", ").presence || "None" %></td>
+            <td class="px-4 py-3"><%= price.active? ? "Active" : "Inactive" %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+</section>

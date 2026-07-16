@@ -60,7 +60,7 @@ module Platform
     }.freeze
     SENSITIVE_VALUE_ATTRIBUTES = %w[settings].freeze
     PLAN_PRICE_REFERENCE_ASSOCIATIONS = %i[
-      billing_checkout_attempts billing_subscriptions
+      billing_provider_price_mappings billing_checkout_attempts billing_subscriptions
       billing_plan_changes_from billing_plan_changes_to
     ].freeze
 

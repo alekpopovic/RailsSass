@@ -457,6 +457,89 @@ ALTER SEQUENCE public.billing_plan_changes_id_seq OWNED BY public.billing_plan_c
 
 
 --
+-- Name: billing_provider_locators; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.billing_provider_locators (
+    id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    billing_checkout_attempt_id bigint NOT NULL,
+    provider character varying(32) DEFAULT 'lemon_squeezy'::character varying NOT NULL,
+    environment character varying(8) NOT NULL,
+    token_digest character varying(64) NOT NULL,
+    status character varying(32) DEFAULT 'unresolved'::character varying NOT NULL,
+    resolved_at timestamp(6) without time zone,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT billing_provider_locators_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_provider_locators_lifecycle CHECK (((((status)::text = 'unresolved'::text) AND (resolved_at IS NULL)) OR (((status)::text = ANY ((ARRAY['consumed'::character varying, 'definitive_creation_failure'::character varying])::text[])) AND (resolved_at IS NOT NULL)))),
+    CONSTRAINT billing_provider_locators_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
+    CONSTRAINT billing_provider_locators_token_digest_format CHECK (((token_digest)::text ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: billing_provider_locators_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.billing_provider_locators_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: billing_provider_locators_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.billing_provider_locators_id_seq OWNED BY public.billing_provider_locators.id;
+
+
+--
+-- Name: billing_provider_price_mappings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.billing_provider_price_mappings (
+    id bigint NOT NULL,
+    plan_price_id bigint NOT NULL,
+    provider character varying(32) DEFAULT 'lemon_squeezy'::character varying NOT NULL,
+    environment character varying(8) NOT NULL,
+    provider_store_id character varying(64) NOT NULL,
+    provider_product_id character varying(64) NOT NULL,
+    provider_variant_id character varying(64) NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT billing_price_mappings_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_price_mappings_product_id_normalized CHECK ((((provider_product_id)::text = btrim((provider_product_id)::text)) AND ((provider_product_id)::text ~ '^[1-9][0-9]*$'::text) AND ((char_length((provider_product_id)::text) >= 1) AND (char_length((provider_product_id)::text) <= 64)))),
+    CONSTRAINT billing_price_mappings_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
+    CONSTRAINT billing_price_mappings_store_id_normalized CHECK ((((provider_store_id)::text = btrim((provider_store_id)::text)) AND ((provider_store_id)::text ~ '^[1-9][0-9]*$'::text) AND ((char_length((provider_store_id)::text) >= 1) AND (char_length((provider_store_id)::text) <= 64)))),
+    CONSTRAINT billing_price_mappings_variant_id_normalized CHECK ((((provider_variant_id)::text = btrim((provider_variant_id)::text)) AND ((provider_variant_id)::text ~ '^[1-9][0-9]*$'::text) AND ((char_length((provider_variant_id)::text) >= 1) AND (char_length((provider_variant_id)::text) <= 64))))
+);
+
+
+--
+-- Name: billing_provider_price_mappings_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.billing_provider_price_mappings_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: billing_provider_price_mappings_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.billing_provider_price_mappings_id_seq OWNED BY public.billing_provider_price_mappings.id;
+
+
+--
 -- Name: billing_subscriptions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1311,6 +1394,20 @@ ALTER TABLE ONLY public.billing_plan_changes ALTER COLUMN id SET DEFAULT nextval
 
 
 --
+-- Name: billing_provider_locators id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_provider_locators ALTER COLUMN id SET DEFAULT nextval('public.billing_provider_locators_id_seq'::regclass);
+
+
+--
+-- Name: billing_provider_price_mappings id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_provider_price_mappings ALTER COLUMN id SET DEFAULT nextval('public.billing_provider_price_mappings_id_seq'::regclass);
+
+
+--
 -- Name: billing_subscriptions id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1496,6 +1593,22 @@ ALTER TABLE ONLY public.billing_customers
 
 ALTER TABLE ONLY public.billing_plan_changes
     ADD CONSTRAINT billing_plan_changes_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billing_provider_locators billing_provider_locators_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_provider_locators
+    ADD CONSTRAINT billing_provider_locators_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billing_provider_price_mappings billing_provider_price_mappings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_provider_price_mappings
+    ADD CONSTRAINT billing_provider_price_mappings_pkey PRIMARY KEY (id);
 
 
 --
@@ -1885,6 +1998,62 @@ CREATE INDEX index_billing_plan_changes_on_to_plan_price_id ON public.billing_pl
 
 
 --
+-- Name: index_billing_price_mappings_on_local_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_price_mappings_on_local_identity ON public.billing_provider_price_mappings USING btree (plan_price_id, provider, environment);
+
+
+--
+-- Name: index_billing_price_mappings_on_provider_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_price_mappings_on_provider_identity ON public.billing_provider_price_mappings USING btree (provider, environment, provider_store_id, provider_product_id, provider_variant_id);
+
+
+--
+-- Name: index_billing_price_mappings_on_provider_lookup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_price_mappings_on_provider_lookup ON public.billing_provider_price_mappings USING btree (provider, environment, provider_store_id, provider_variant_id);
+
+
+--
+-- Name: index_billing_provider_locators_on_checkout_attempt; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_provider_locators_on_checkout_attempt ON public.billing_provider_locators USING btree (billing_checkout_attempt_id);
+
+
+--
+-- Name: index_billing_provider_locators_on_org_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_provider_locators_on_org_status ON public.billing_provider_locators USING btree (organization_id, status);
+
+
+--
+-- Name: index_billing_provider_locators_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_provider_locators_on_organization_id ON public.billing_provider_locators USING btree (organization_id);
+
+
+--
+-- Name: index_billing_provider_locators_on_token_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_provider_locators_on_token_identity ON public.billing_provider_locators USING btree (provider, environment, token_digest);
+
+
+--
+-- Name: index_billing_provider_price_mappings_on_plan_price_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_provider_price_mappings_on_plan_price_id ON public.billing_provider_price_mappings USING btree (plan_price_id);
+
+
+--
 -- Name: index_billing_subscriptions_on_billing_customer_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2176,6 +2345,13 @@ CREATE INDEX index_plan_prices_on_plan_and_selection ON public.plan_prices USING
 --
 
 CREATE INDEX index_plan_prices_on_plan_id ON public.plan_prices USING btree (plan_id);
+
+
+--
+-- Name: index_plan_prices_on_provider_mapping_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_plan_prices_on_provider_mapping_identity ON public.plan_prices USING btree (id, lemon_store_id, lemon_product_id, lemon_variant_id);
 
 
 --
@@ -2594,6 +2770,14 @@ ALTER TABLE ONLY public.billing_checkout_attempts
 
 
 --
+-- Name: billing_checkout_attempts fk_billing_checkout_attempts_provider_mapping; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_checkout_attempts
+    ADD CONSTRAINT fk_billing_checkout_attempts_provider_mapping FOREIGN KEY (plan_price_id, provider, environment) REFERENCES public.billing_provider_price_mappings(plan_price_id, provider, environment) ON DELETE RESTRICT;
+
+
+--
 -- Name: billing_plan_changes fk_billing_plan_changes_from_plan_price; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2623,6 +2807,22 @@ ALTER TABLE ONLY public.billing_plan_changes
 
 ALTER TABLE ONLY public.billing_plan_changes
     ADD CONSTRAINT fk_billing_plan_changes_to_plan_price FOREIGN KEY (to_plan_price_id) REFERENCES public.plan_prices(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_provider_price_mappings fk_billing_price_mappings_plan_price_identity; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_provider_price_mappings
+    ADD CONSTRAINT fk_billing_price_mappings_plan_price_identity FOREIGN KEY (plan_price_id, provider_store_id, provider_product_id, provider_variant_id) REFERENCES public.plan_prices(id, lemon_store_id, lemon_product_id, lemon_variant_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_provider_locators fk_billing_provider_locators_checkout_identity; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_provider_locators
+    ADD CONSTRAINT fk_billing_provider_locators_checkout_identity FOREIGN KEY (billing_checkout_attempt_id, organization_id, provider, environment, token_digest) REFERENCES public.billing_checkout_attempts(id, organization_id, provider, environment, token_digest) ON DELETE RESTRICT;
 
 
 --
@@ -2703,6 +2903,14 @@ ALTER TABLE ONLY public.product_role_permissions
 
 ALTER TABLE ONLY public.product_role_permissions
     ADD CONSTRAINT fk_product_role_permissions_role_product FOREIGN KEY (product_role_id, product_id) REFERENCES public.product_roles(id, product_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_provider_price_mappings fk_rails_00cba654b7; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_provider_price_mappings
+    ADD CONSTRAINT fk_rails_00cba654b7 FOREIGN KEY (plan_price_id) REFERENCES public.plan_prices(id) ON DELETE RESTRICT;
 
 
 --
@@ -2858,6 +3066,14 @@ ALTER TABLE ONLY public.product_roles
 
 
 --
+-- Name: billing_provider_locators fk_rails_87f67451f1; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_provider_locators
+    ADD CONSTRAINT fk_rails_87f67451f1 FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: analytics_reports fk_rails_8ec405440b; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2984,6 +3200,8 @@ ALTER TABLE ONLY public.product_membership_roles
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20260716070100'),
+('20260716070000'),
 ('20260716060000'),
 ('20260716050000'),
 ('20260716040000'),

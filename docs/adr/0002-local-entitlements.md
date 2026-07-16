@@ -21,21 +21,23 @@ Use PostgreSQL as the only runtime source for subscription eligibility and plan
 entitlements.
 
 Implementation note (2026-07-16): the repository has added constrained Billing
-persistence/history tables, the Lemon API adapter, and the read-only
-`Entitlements` status/catalog resolver. The central `Access::Gate` now composes
-that resolver with live product membership and permission state without provider
-I/O. The application still has no checkout, webhook ingress, provider locator,
-or subscription writer. Paid rows remain synthetic outside a future
-verified-webhook projection; no browser or outbound API path can create or
-change one.
+persistence/history tables, exact test/live provider price mappings, a
+checkout-token provider locator, the Lemon API adapter, owner/billing checkout
+with local pending state, and the read-only `Entitlements` status/catalog
+resolver. The central `Access::Gate` composes that resolver with live product
+membership and permission state without provider I/O. The application still has
+no webhook ingress/projection or subscription writer. Paid rows remain
+synthetic outside that future verified-webhook projection; no browser, checkout
+redirect, or outbound API result can create or change one.
 
 - `Billing::Subscription` is the local runtime projection of the provider
   subscription and references its `Plan` through `PlanPrice`. The future
-  verified writer must resolve that price through an exact
+  verified writer must resolve that price through the implemented exact
   environment-qualified provider mapping before persistence.
-- The current catalog `PlanPrice` fields are not sufficient production mapping
-  evidence because they have no test/live environment dimension. Billing must
-  add that isolation before checkout or webhook projection is exposed.
+- Catalog `PlanPrice` fields alone are not sufficient production mapping
+  evidence because they have no test/live dimension. Checkout therefore
+  requires an active `Billing::ProviderPriceMapping` for the configured
+  environment and store; future webhook projection must use the same boundary.
 - Plan and price `active` flags stop new selection but do not revoke or rewrite
   an already synchronized subscription.
 - The current subscription plus the canonical status/time matrix in

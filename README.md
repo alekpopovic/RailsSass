@@ -4,11 +4,13 @@ This repository is the executable foundation for a modular-monolith SaaS built
 with Rails 8.1, PostgreSQL, Hotwire, Tailwind CSS, Pundit, Solid Queue, Propshaft,
 Faraday, and Minitest.
 
-The current slice contains global email/password authentication, explicit
-organization onboarding, and locator-backed path tenancy with a Pundit-enforced
-organization shell. It intentionally has no product-access domain or live Lemon
-Squeezy integration. Registration never creates an organization; verified users
-explicitly complete onboarding.
+The current slice contains authentication and path tenancy, the customer SaaS
+shell, catalog/entitlement/product RBAC, the Analytics reference product,
+internal platform administration, and owner/billing Lemon Squeezy checkout with
+local pending state. Registration never creates an organization; verified users
+explicitly complete onboarding. Checkout/API success never changes subscription
+or entitlement state. Signed webhook projection, provider portal management,
+and production hardening remain open milestones.
 The target behavior and delivery sequence are in
 [`docs/`](docs/), beginning with the
 [product requirements](docs/product_requirements.md),
@@ -81,9 +83,11 @@ secret/configuration store.
 
 After signing in, a verified user explicitly creates an organization and is
 redirected to `/o/:organization_slug/dashboard`. The tenant navigation exposes
-members, settings, and billing according to the server-enforced organization
-role, and the switcher appears when the account has multiple active locator
-candidates.
+dashboard, products, pricing, organization members/settings, and billing
+according to server-side policy. Product and Analytics actions additionally
+require local entitlement and product permissions. Only active owner/billing
+members receive checkout controls for eligible locally mapped prices. The
+switcher appears when the account has multiple active locator candidates.
 
 If Rails was already running when MailCatcher or its SMTP settings were added,
 restart `bin/dev` or recreate the `app` container so Rails reloads its
@@ -138,7 +142,8 @@ workers; the safe default is one worker until CI database isolation is proven.
 
 ## Repository structure
 
-- `app/` — Rails controllers, views, policies, jobs, and future namespaced modules
+- `app/` — Rails controllers, views, policies, jobs, and namespaced tenancy,
+  catalog, billing, entitlement, access, platform-admin, and Analytics modules
 - `config/` — Rails, PostgreSQL, Solid Queue, assets, and deployment configuration
 - `db/` — primary PostgreSQL `structure.sql` plus Rails-managed Solid
   Cache/Queue/Cable schemas
@@ -155,6 +160,16 @@ workers; the safe default is one worker until CI database isolation is proven.
 and customer data must never be committed. Production values belong in the
 deployment secret store and must be passed through environment variables or
 Rails credentials.
+
+Ordinary setup, boot, and automated tests require no Lemon credentials. Manual
+checkout requires `LEMON_SQUEEZY_API_KEY`, `LEMON_SQUEEZY_STORE_ID`,
+`LEMON_SQUEEZY_ENVIRONMENT`, and the exact hostname-only
+`LEMON_SQUEEZY_CHECKOUT_HOST` in ignored environment configuration or encrypted
+credentials. `APP_HOST`/`APP_PORT` define the canonical pending return URL.
+Restart Rails after changing this boot-time configuration. An active paid
+`PlanPrice` with complete Lemon IDs must then receive the matching test/live
+provider mapping through its `/admin` detail page; there is no checkout setup
+Rake task. See [Development and CI](docs/development.md#manual-test-mode-checkout).
 
 Kamal files are still generator-level placeholders. Do not deploy them as-is;
 the production topology, hosts, registry, TLS settings, database credentials,

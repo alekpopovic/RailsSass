@@ -24,22 +24,32 @@ Related documents:
 
 ### 1.1 Current implementation boundary
 
-The repository currently contains the local Billing persistence foundation, the
-outbound `Billing::LemonSqueezy::Client`, and the read-only
+The repository currently contains the local Billing persistence foundation,
+the outbound `Billing::LemonSqueezy::Client`, the customer checkout initiation
+and pending-return flow, and the read-only
 `Entitlements::SubscriptionAccessPolicy`/`Resolver`. The persistence layer
-includes tenant-owned customers, checkout attempts, subscriptions, and
-plan-change commands plus the provider-wide webhook-event ledger. It still
-exposes no checkout route, webhook controller, webhook processor, provider
-locator, environment-qualified price mapping, subscription projection service,
-or portal. It does expose two read-only surfaces over local state: the
-customer-facing tenant billing overview and the platform-admin diagnostic view
-of subscriptions and failed webhook ledger rows. Neither surface is a billing
-state writer.
+includes tenant-owned customers, checkout attempts, subscriptions, plan-change
+commands, checkout-token provider locators, environment-qualified provider
+price mappings, and the provider-wide webhook-event ledger.
+
+An active organization `owner` or `billing` member can submit
+`POST /o/:organization_slug/billing/checkouts`. The server resolves one active
+`Billing::ProviderPriceMapping` for the configured test/live environment,
+creates the tenant attempt and locator atomically, then performs exactly one
+provider request outside the transaction. Lemon redirects to the canonical
+local pending page. No checkout response or redirect writes a subscription.
+
+The repository still exposes no webhook controller, webhook processor,
+subscription projection service, provider portal, or plan-change command
+execution. The billing overview, pending-return page, and platform-admin
+diagnostics are local-state readers. Checkout writes only local attempt and
+correlation state; it is not a subscription-state writer.
 
 The entitlement resolver reads a current local subscription and never calls the
 provider. No application path currently creates paid subscription state. The
-future projection milestone must add exact environment/store/variant mapping
-and make verified-webhook-rooted processing the only application writer. A
+future projection milestone must consume the implemented exact environment/
+store/product/variant mapping and make verified-webhook-rooted processing the
+only application writer. A
 checkout attempt, plan-change command, redirect, or successful Lemon API
 response still cannot create or change product access.
 
@@ -55,14 +65,16 @@ environment-qualified provider event ID with a unique index. Lemon currently
 documents no delivery ID, so the fingerprint remains the required idempotency
 identity rather than inventing provider authority.
 
-The client reads its API key and store ID from explicit configuration,
-environment variables, or Rails credentials, uses a fixed HTTPS origin and
-explicit connect/read timeouts, and maps provider, transport, and JSON failures
-to provider-specific errors whose messages contain no response body or secret.
-It performs one request per call and has no automatic retry middleware; a later
-operation-specific command/job will own bounded retries only where the operation
-is proven safe. Tests disable non-local network access with WebMock so the suite
-cannot contact Lemon Squeezy.
+The client reads its API key, store ID, environment, and checkout host from
+explicit configuration, environment variables, or Rails credentials. It uses
+a fixed HTTPS API origin and explicit connect/read timeouts, validates the exact
+checkout store, variant, test mode, expiry, and HTTPS checkout URL host, and
+maps provider, transport, JSON, and semantic-response failures to
+provider-specific errors whose messages contain no response body or secret. It
+performs one request per call and has no automatic retry middleware. Checkout
+creation deliberately makes exactly one non-idempotent POST. Tests disable
+non-local network access with WebMock so the suite cannot contact Lemon
+Squeezy.
 
 ## 2. Billing invariants
 
@@ -78,9 +90,12 @@ cannot contact Lemon Squeezy.
    candidate tenant.
 3. The browser supplies a local plan-price ID only. Provider store, product,
    variant, price, custom price, environment, and redirect URL are server-owned.
-4. Checkout correlation uses a transient high-entropy local token. Only its
-   SHA-256 digest is persisted; email, name, slug, browser session, and
-   client-supplied organization IDs are never correlation authority.
+4. Checkout correlation uses a short-lived signed `MessageVerifier` token whose
+   payload contains the organization public ID, local plan-price ID, initiating
+   user ID, high-entropy nonce, and expiry. The raw signed token exists only in
+   memory and the provider custom field. PostgreSQL stores only the SHA-256
+   digest of the nonce; email, name, slug, browser session, and client-supplied
+   organization IDs are never correlation authority.
 5. Checkout and provider command results create pending UI state only.
 6. Exact raw-body signature verification precedes JSON parsing.
 7. Verified delivery is durably recorded before HTTP 200.
@@ -101,16 +116,26 @@ cannot contact Lemon Squeezy.
 subscription only through `Current.organization.billing_subscriptions`, and
 renders its local status, lifecycle dates, effective plan, and
 `Entitlements::SubscriptionAccessPolicy` decision. It performs no Lemon API
-request and exposes no checkout, portal, plan-change, or subscription mutation
-action. A redirect or outbound provider result therefore cannot change what the
-runtime gate sees.
+request. Starting checkout is a separate authorized POST and neither surface
+offers a portal, plan-change, or subscription mutation action. A redirect or
+outbound provider result therefore cannot change what the runtime gate sees.
 
 `GET /o/:organization_slug/pricing` is a catalog comparison for any active
 organization member. It shows active local plans and prices plus the locally
-resolved effective plan. It is not checkout, does not claim provider
-availability, and cannot grant an entitlement. Until environment-qualified
-mapping and the verified webhook projection exist, upgrade controls remain
-informational rather than provider actions.
+resolved effective plan. The GET remains local-only and cannot grant an
+entitlement. For an eligible paid price with an active provider mapping in the
+configured environment, an active owner or billing member sees a POST checkout
+action; other members see an authorization-safe explanatory state. Test
+mappings are labeled explicitly. Missing/inactive mappings and an existing
+non-expired current subscription suppress checkout eligibility server-side as
+well as in presentation.
+
+`GET /o/:organization_slug/billing/checkouts/pending` is the sole checkout
+return target. It authorizes the same owner/billing policy, reads the latest
+attempt and current subscription only through `Current.organization`, and
+shows local `creating`, `ready`, `creation_unknown`, failed, or terminal state.
+It accepts no provider state as authority and offers an explicit refresh rather
+than treating the redirect as completion.
 
 ### 2.2 Internal billing diagnostics
 
@@ -172,12 +197,10 @@ single local status matrix below isolate the application from provider details.
 ## 4. Catalog and environment mapping
 
 `PlanPrice` is the local catalog/display record for a plan's monthly or yearly
-price. It may carry one complete Lemon store/product/variant tuple, but it has no
-provider-environment dimension and therefore is not yet a production-safe
-checkout or webhook mapping by itself.
-
-Before Billing exposes checkout or subscription projection, its mapping
-milestone must bind and validate:
+price. Its complete Lemon store/product/variant tuple remains the immutable
+provider identity source, but it has no environment dimension and is never used
+alone to authorize checkout. `Billing::ProviderPriceMapping` binds that exact
+tuple to one provider environment:
 
 ```text
 provider + environment + store ID + product ID + variant ID
@@ -186,23 +209,34 @@ provider + environment + store ID + product ID + variant ID
 
 Rules:
 
-- No checkout is exposed until exact test/live environment and configured-store
-  isolation exists in addition to the current `PlanPrice` fields.
-- Only an active `PlanPrice` whose plan is also active may be considered for a
-  future checkout. Both checks are selection rules, not access grants.
+- Checkout resolves exactly one active mapping by local price, provider, and
+  configured `test` or `live` environment. The mapping tuple must match its
+  `PlanPrice` tuple and the configured client store.
+- Mapping identities are unique per local price/environment and per exact
+  external tuple/environment. Provider IDs are immutable; catalog corrections
+  use a new price/mapping instead of repointing history.
+- Platform administrators configure mappings by choosing only the environment;
+  provider IDs are copied from `PlanPrice`. Deactivation is supported, deletion
+  and identifier editing are not.
+- Only an active mapping whose `PlanPrice` and plan are active and paid is
+  eligible for checkout. These checks are selection rules, not access grants.
 - Inactive historical prices remain valid mappings for existing subscriptions;
   `active` is a checkout-selection flag, not an entitlement kill switch.
 - An inactive plan remains referenced by an already synchronized subscription;
   deactivation is not an implicit subscription or entitlement transition.
-- Production checkout selects a `live` mapping; development/test uses `test`.
+- `LEMON_SQUEEZY_ENVIRONMENT` selects `test` or `live`; production defaults to
+  `live` and non-production defaults to `test`, but deployments should set it
+  explicitly. The client store ID and mapping store must match exactly.
 - Provider identifiers are configuration/catalog data, not secrets, but they
   are still server-controlled and never trusted from a form.
 - API keys and webhook secrets are credentials and remain outside the
   repository.
 - A provider tuple already referenced by billing history is never silently
-  repointed. The future mapping/projection milestone must enforce the required
-  transition policy before any foundational provider-backed row can become an
-  authoritative subscription projection.
+  repointed. Database unique/composite foreign keys connect checkout attempts
+  to their exact mapping. The expand migration installs the checkout mapping FK
+  as `NOT VALID`; a follow-up migration backfills compatible legacy rows as
+  inactive mappings, rejects unsafe identities for remediation, and validates
+  the FK before application rollout completes.
 - An incoming variant with no exact active/historical mapping is quarantined and
   fail-closed. It does not inherit a nearby plan by product name or price.
 - The one active `Plan.free` row is the local runtime fallback when no paid
@@ -230,8 +264,9 @@ its paid grace period.
 
 Under the organization billing lock, checkout creation first marks pending rows
 expired when `now >= expires_at + 10 minutes`, then evaluates the static
-one-pending-attempt unique constraint. A periodic sweeper performs the same
-idempotent transition. Wall-clock expiry alone does not remove an index entry.
+one-pending-attempt unique constraint. This lazy transition is implemented; a
+periodic sweeper remains future work and must perform the same idempotent
+transition. Wall-clock expiry alone does not remove an index entry.
 
 Existing subscribers use a server-authorized provider portal/subscription
 command rather than opening a second subscription checkout.
@@ -253,8 +288,8 @@ sequenceDiagram
   A->>DB: Validate and mark attempt ready
   A-->>U: 303 redirect to provider URL
   U->>LS: Complete or abandon checkout
-  LS-->>U: Redirect to /o/:slug/billing
-  U->>A: GET billing page
+  LS-->>U: Redirect to /o/:slug/billing/checkouts/pending
+  U->>A: GET canonical pending page
   A->>DB: Read local attempt/subscription
   A-->>U: Pending until verified webhook projection
 ```
@@ -263,10 +298,14 @@ Server request details:
 
 - set one `enabled_variants` entry matching the environment-qualified mapping
   for the selected `PlanPrice`;
-- set a canonical server-generated return URL for the current tenant;
+- set the canonical server-generated
+  `/o/:organization_slug/billing/checkouts/pending` return URL for the current
+  tenant, with no query, fragment, or userinfo; require HTTPS in production;
 - set a short provider and local expiry, initially 30 minutes;
-- generate a high-entropy token, persist only its SHA-256 digest in the attempt
-  and global provider locator, and put the transient plaintext token only in
+- generate a purpose- and expiry-scoped Rails `MessageVerifier` token carrying
+  `organization_public_id`, `plan_price_id`, `user_id`, `nonce`, and
+  `expires_at`; persist only `SHA256(nonce)` in the attempt and global provider
+  locator, and put the transient signed token only in
   `checkout_data.custom.checkout_attempt_token`;
 - optionally prefill the authenticated user's email, but never use it later for
   tenant resolution;
@@ -291,9 +330,13 @@ ambiguous: timeout, connection reset, 5xx, truncated/malformed response, or a
   created may resolve the locator and fail the attempt earlier; a timeout may
   not.
 
-Only a failure before request transmission or a documented deterministic
-provider rejection that proves no checkout was created may set `failed` and
-resolve correlation as `definitive_creation_failure`.
+Local configuration/request validation and provider statuses `400`, `401`,
+`403`, `404`, and `422` are treated as definitive: the attempt becomes `failed`
+and its locator becomes `definitive_creation_failure`. Timeout, connection
+failure, `408`, `429`, any other non-allowlisted response, 5xx, malformed JSON,
+or a semantically invalid success response are ambiguous and retain the one
+pending slot as `creation_unknown`; the controller redirects to the pending
+page with a safe do-not-retry message.
 
 An orphan remote checkout is bounded by expiry and cannot grant access without
 the correlated verified webhook.
@@ -314,10 +357,12 @@ deferred beyond the MVP.
 
 ### 5.4 Return behavior
 
-The return endpoint accepts no authoritative billing parameters. It renders the
-latest local `CheckoutAttempt` and `Subscription` state and may refresh/poll via
-Turbo. It never changes subscription status, plan, entitlement, or completion
-based on query parameters or provider JavaScript callbacks.
+The canonical return endpoint accepts no authoritative billing parameters. It
+renders the latest tenant-scoped local `CheckoutAttempt` and `Subscription`
+state and provides an ordinary manual refresh link. It never changes
+subscription status, plan, entitlement, or completion based on query parameters
+or provider JavaScript callbacks. The checkout controller redirects with a
+manual 303 and does not persist or log the signed provider URL.
 
 ## 6. Webhook receipt sequence
 
@@ -371,9 +416,10 @@ The endpoint performs these bounded steps:
    `SHA256(provider || configured_environment || raw_body)`. The untrusted,
    unsigned header is excluded; signed `meta.event_name` is stored separately
    when parsing succeeds.
-10. If present, hash allowlisted
-    `meta.custom_data.checkout_attempt_token` immediately and retain only its
-    digest.
+10. If present, verify the purpose/expiry-scoped
+    `meta.custom_data.checkout_attempt_token`, validate its bounded payload,
+    calculate `SHA256(nonce)`, and retain only that digest. Never hash the raw
+    signed token as the lookup identity.
 11. Insert `Billing::WebhookEvent` with the fingerprint and a minimal allowlisted
     envelope; never store raw body, signature, plaintext custom token, email,
     customer name, or signed URLs.

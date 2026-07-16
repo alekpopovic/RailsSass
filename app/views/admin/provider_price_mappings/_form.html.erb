@@ -1,0 +1,43 @@
+<%= render "admin/shared/errors", record: mapping %>
+
+<%= form_with model: mapping,
+  url: mapping.persisted? ?
+    admin_plan_plan_price_provider_price_mapping_path(@plan.key, @plan_price, mapping.environment) :
+    admin_plan_plan_price_provider_price_mappings_path(@plan.key, @plan_price),
+  class: "mt-6 space-y-5" do |form| %>
+  <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+    <p>Plan price: <code><%= @plan.key %>/price/<%= @plan_price.id %></code></p>
+    <p class="mt-2">Store, product, and variant identifiers are copied from the immutable local price mapping. They are never accepted from checkout requests.</p>
+  </div>
+
+  <% if mapping.persisted? %>
+    <div>
+      <span class="block text-sm font-semibold text-slate-950">Environment</span>
+      <span class="mt-2 inline-flex rounded-full px-3 py-1 text-sm font-semibold <%= mapping.test_mode? ? "bg-amber-100 text-amber-900" : "bg-emerald-100 text-emerald-900" %>">
+        <%= mapping.test_mode? ? "Test mode" : "Live mode" %>
+      </span>
+    </div>
+  <% else %>
+    <div>
+      <%= form.label :environment, class: "block text-sm font-semibold" %>
+      <%= form.select :environment,
+        Billing::ProviderPriceMapping.environments.keys.map { |value| [value.titleize, value] },
+        {},
+        class: "mt-2 w-full rounded-lg border-slate-300" %>
+    </div>
+  <% end %>
+
+  <label class="flex items-center gap-2 text-sm font-medium">
+    <%= form.checkbox :active, class: "rounded border-slate-300 text-indigo-600" %>
+    Active for new checkout selection
+  </label>
+
+  <% if mapping.test_mode? || (!mapping.persisted? && mapping.environment == "test") %>
+    <p class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">Test mode uses synthetic Lemon transactions and must never be selected by a live deployment.</p>
+  <% end %>
+
+  <div class="flex gap-3">
+    <%= form.submit class: "cursor-pointer rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white" %>
+    <%= link_to "Cancel", admin_plan_plan_price_path(@plan.key, @plan_price), class: "rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold" %>
+  </div>
+<% end %>

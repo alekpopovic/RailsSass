@@ -54,8 +54,9 @@ Implementation PRs may not silently change these decisions:
 - Limit entitlements use an explicit finite non-negative value or explicit
   unlimited state; `enabled` remains the master grant switch.
 - `PlanPrice` is local catalog/display data, not payment proof or an access
-  grant. Exact test/live provider mapping remains a required Billing boundary
-  before checkout or webhook projection.
+  grant. Checkout selection is constrained through a Billing-owned exact
+  test/live provider mapping tied to the local price. Mapping and
+  checkout-attempt state remain non-authoritative and never grant access.
 - Only verified `expired` is terminal for replacement checkout; resubscription
   atomically supersedes the expired historical row.
 - Local database is runtime authorization truth; runtime performs no Lemon
@@ -106,22 +107,26 @@ Observed on 2026-07-16:
   entitlements, local plan prices, and an audited platform-admin mutation surface
   exist. A DB-authoritative internal admin policy, explicit promotion task, and
   Tailwind `/admin` catalog/diagnostic UI are available to platform admins only.
-- A Billing persistence/client foundation exists: tenant customers, checkout
-  attempts, subscriptions with archival history, plan-change commands, a
-  provider-wide minimal webhook-event ledger, and a fixed-origin Lemon client.
-  It has no checkout/webhook controller, mapping/locator, verified projection,
-  or writer. A read-only Entitlements status/catalog resolver now uses current
-  local subscriptions and the active free fallback without provider I/O.
+- Billing includes tenant customers, checkout attempts, subscription history,
+  plan-change commands, a minimal webhook ledger, exact provider-price
+  mappings, checkout-token locators, an audited admin mapping surface, a strict
+  Lemon checkout client operation, and owner/billing checkout/pending routes.
+  Checkout success changes only attempt state. Verified webhook
+  ingress/projection, subscription-ID locator transitions, portal actions, and
+  production hardening remain unimplemented. A read-only Entitlements
+  status/catalog resolver uses current local subscriptions and the active free
+  fallback without provider I/O.
 - Product-role/permission and tenant product-assignment persistence now exist,
   including transactional assignment commands and constrained synthetic local
   seeds. The central ordered `Access::Gate`, live permission checker, immutable
   decision result, shared Pundit helpers, and product-membership management
   policy also exist. The customer shell now provides dashboard, product and
   pricing catalogs, member/product assignment, local-only billing overview,
-  organization settings, and profile pages. The Analytics reference slice adds
+  organization settings, profile pages, and checkout/pending state. The
+  Analytics reference slice adds
   tenant-owned reports, exact feature/permission action mappings, atomic
-  report-limit enforcement, and CSV export. Billing synchronization, checkout,
-  portal actions, and production hardening remain unimplemented.
+  report-limit enforcement, and CSV export. Billing synchronization, portal
+  actions, and production hardening remain unimplemented.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
 
@@ -718,12 +723,14 @@ boundary.
 
 #### Implemented Billing foundation checkpoint
 
-The repository added constrained `Billing::Customer`, `CheckoutAttempt`,
-`Subscription`, `WebhookEvent`, and `PlanChange` records plus the basic
-`Billing::LemonSqueezy::Client` before PR-11. It now also has a read-only
-Entitlements policy/resolver, but no provider mapping, provider locator,
-controller, webhook verifier/processor, projection writer, or external side
-effect. `raw_payload` is restricted to a bounded screened
+The repository has constrained `Billing::Customer`, `CheckoutAttempt`,
+`Subscription`, `WebhookEvent`, and `PlanChange` records, an exact
+environment-qualified `ProviderPriceMapping`, a checkout-token
+`ProviderLocator`, and the strict `Billing::LemonSqueezy::Client`. It also has a
+read-only Entitlements policy/resolver, audited mapping administration, and an
+owner/billing checkout/pending controller. It still has no webhook verifier/
+processor, subscription projection writer, subscription-ID locator transition,
+or provider portal. `raw_payload` is restricted to a bounded screened
 diagnostic snapshot and never means a raw request or complete provider payload.
 Subscription history is one-way and deletion-protected. The event ledger keeps
 a mandatory content fingerprint plus a unique optional provider event identity;
@@ -733,9 +740,10 @@ for delivery idempotency.
 The remaining PRs extend these tables through backward-compatible migrations
 rather than recreating them. Checkout/API responses remain unable to edit local
 subscription state; only PR-14B's later verified-webhook-rooted service may do
-so. WebMock blocks non-local network access throughout tests.
+so. WebMock blocks non-local network access throughout automated tests.
 
-### PR-11: Add environment-qualified price mapping and checkout persistence
+### PR-11: Add environment-qualified price mapping and checkout persistence —
+implemented checkpoint
 
 Depends on: PR-05, PR-07–08; initial Lemon test mappings available.
 
@@ -747,19 +755,26 @@ Scope:
 - Add a Billing-owned environment-qualified provider mapping from an exact
   `PlanPrice` to Lemon and extend the existing `Billing::CheckoutAttempt` with
   that exact mapping boundary.
-- Add test/live mapping loader with no credentials or real customer data.
+- Add audited platform-admin test/live mapping management with no credentials or
+  real customer data. Mapping creation copies immutable provider IDs from the
+  selected price; later edits may toggle only `active`.
 - Permit new mapping/checkout selection only when both plan and price are
   active; deactivation blocks selection while preserving historical resolution.
 - Generate checkout correlation plaintext only in memory and persist a SHA-256
-  digest; no API checkout is created yet.
-- Add locked/lazy and sweeper transition for pending attempts at
-  `expires_at + 10 minutes`, including static partial-unique behavior.
+  nonce digest. PR-16 now uses this boundary for the provider request.
+- Add the locked lazy transition for pending attempts at
+  `expires_at + 10 minutes`, including static partial-unique behavior. A
+  separate periodic sweeper remains future work.
 
-Migrations: environment-qualified provider-mapping and checkout-attempt tables;
-exact PlanPrice/provider mapping/composite supporting keys,
-tenant/initiator/provider-mapping FKs, token-digest/provider-ID
-unique indexes, pending partial unique, state/environment/timestamp constraints,
-and explicit delete restrictions.
+Migration: `20260716070000_create_billing_checkout_mapping_and_locators.rb`
+adds the provider mapping and checkout-token locator tables, exact PlanPrice
+mapping identity, mapping/attempt/tenant composite foreign keys, uniqueness,
+lifecycle checks, and supporting lookup identities. Existing checkout-attempt
+constraints and the pending partial unique index remain authoritative.
+`20260716070100_validate_billing_checkout_provider_mappings.rb` backfills
+compatible legacy attempt identities as inactive mappings, stops for explicit
+remediation when identifiers are unsafe, and validates the additive composite
+foreign key.
 
 Tests:
 
@@ -771,8 +786,10 @@ Tests:
 - lazy and swept expiry release the unique slot only after delivery grace;
 - checkout-attempt state/timestamp/origin tuple constraints.
 
-Acceptance: constrained synthetic mappings/attempts exist, but no public path or
-subscription grant exists.
+Checkpoint acceptance: constrained mappings, attempts, and locators exist.
+PR-16 now supplies the public owner/billing checkout path, but none of these
+records grants or mutates subscription access. Full concurrency/system evidence
+remains part of the PR-16 completion gate.
 
 ### PR-12: Complete subscription, provider locator, and verified-event ledger
 
@@ -784,15 +801,16 @@ infrastructure before accepting provider traffic.
 Scope:
 
 - Extend the existing `Billing::Subscription` and inert
-  `Billing::WebhookEvent` into projection-ready constrained records, and add the
-  global non-authoritative `Billing::ProviderLocator`.
+  `Billing::WebhookEvent` into projection-ready constrained records. The global
+  non-authoritative locator currently supports checkout-token discovery only;
+  add subscription-ID locator identity/binding and verified transitions.
 - Bind subscriptions to their original attempt/provider mapping while allowing
   verified current mapping changes; derive the exact plan only through the
   current environment-qualified mapping and `PlanPrice`.
-- Add atomic checkout-attempt + checkout-locator creation service and provider
-  subscription locator transitions. Checkout locators distinguish unresolved,
-  webhook-consumed, and definitive-creation-failure correlation; expiry alone
-  stays unresolved.
+- Reuse the implemented atomic checkout-attempt + checkout-locator creation
+  service and add provider subscription-locator transitions. Checkout locators
+  already distinguish unresolved, webhook-consumed, and
+  definitive-creation-failure correlation; expiry alone stays unresolved.
 - Add services for pending-attempt serialization and event claiming/state
   transition, with no external endpoint.
 - Define filtered provider envelope DTO and log filtering.
@@ -1012,33 +1030,47 @@ bin/rails test test/system/product_access_test.rb
 4 runs, 23 assertions, 0 failures, 0 errors, 0 skips
 ```
 
-### PR-16: Add server-authorized checkout and pending return
+### PR-16: Add server-authorized checkout and pending return — implementation
+checkpoint
 
 Depends on: PR-15 and PR-11/12 production catalog inputs (test mode first).
 
 **Goal:** create safe Lemon Squeezy checkout without making it an access path.
 
-Scope:
+Implemented scope:
 
-- Add tenant checkout create and return/status endpoints.
-- Authorize owner/billing only; enforce CSRF, tenant scope, and checkout-specific
-  rate limit in this PR.
-- Accept local price ID, serialize attempt, send one allowlisted variant,
-  canonical return, short expiry, and transient opaque token; create attempt and
-  global digest locator atomically and persist/log no plaintext token.
-- Validate provider response and handle every outcome that lacks proof of remote
-  non-creation (timeout/reset/5xx/truncated/malformed/invalid 2xx) as
-  `creation_unknown` without blind duplicate. Only pre-transmission or
-  documented definitive no-create rejection may become `failed`.
-- Render pending/synchronized states with Turbo refresh.
-- Provide accessible live-region/status semantics, focus-safe errors, and a
-  responsive no-JavaScript fallback for the pending page.
-- Lazily expire pending attempts only after expiry plus delivery grace. Block a
-  non-terminal current subscription; permit replacement only after verified
-  `expired` and let PR-14B atomically supersede it. Attempt expiry releases the
-  one-pending slot but does not resolve its correlation locator.
+- Tenant checkout create and canonical pending-return endpoints authorize an
+  active owner/billing membership through Pundit, retain default CSRF
+  protection, and rate-limit by user plus organization.
+- The server accepts only a local price ID and revalidates an active paid price/
+  plan and exact active provider mapping for the configured environment and
+  store. It owns the variant, test mode, amount, expiry, and return URL.
+- Attempt and global nonce-digest locator are committed transactionally before
+  HTTP. A short-lived Rails `MessageVerifier` token carries organization public
+  ID, price ID, user ID, nonce, and expiry; neither the raw signed token nor
+  checkout URL is persisted or logged.
+- The client performs one non-retried provider POST and strictly validates
+  checkout ID, store, variant, test mode, enabled variant, expiry, and configured
+  HTTPS checkout host. A valid response redirects with a manual 303.
+- Timeout, connection, `408`, `429`, other non-allowlisted responses, 5xx,
+  malformed JSON, and semantically invalid success remain `creation_unknown`;
+  local request/configuration failures and provider `400`, `401`, `403`, `404`,
+  or `422` become `failed`. User messages are generic and ambiguous errors
+  explicitly direct the user not to retry.
+- The pending page reads only tenant-local attempt/subscription state, labels
+  test mode, uses `role="status"`/`aria-live`, and provides a normal manual
+  refresh link. Redirect and API success never mutate subscription or
+  entitlement state.
+- Creation lazily expires pending attempts only after expiry plus ten-minute
+  delivery grace. A partial unique index permits one pending attempt per
+  organization. A non-expired current subscription blocks checkout; only local
+  `expired` permits replacement. Expiry does not resolve the locator.
 
-Migrations: none expected.
+Migrations: `20260716070000_create_billing_checkout_mapping_and_locators.rb`
+adds the exact provider mapping and checkout-token locator boundary plus the
+mapping/attempt composite foreign key used by this flow;
+`20260716070100_validate_billing_checkout_provider_mappings.rb` backfills safe
+legacy identities and validates that foreign key.
 
 Tests: exact role matrix, CSRF/rate limit, client field tampering, provider
 response validation, token digest/no plaintext, concurrent/lazy-expired
@@ -1048,9 +1080,11 @@ explicit proof that redirect/API success leaves subscription/access unchanged;
 system coverage for status live-region/focus behavior and no-JavaScript pending
 fallback.
 
-Acceptance: test-mode purchase remains pending until the deployed PR-14B
-processor consumes a verified webhook, then the local product gate changes on a
-later request.
+Checkpoint acceptance: implementation and model/service/client/request/policy
+coverage are present, including a dedicated two-thread checkout race test and a
+browser test for the eligible CTA plus local-only pending status. A test-mode
+purchase stays pending until the future PR-14B processor consumes a verified
+webhook; only then may the local product gate change on a later request.
 
 ### PR-17: Add subscription management portal and billing UI
 

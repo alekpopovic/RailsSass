@@ -1,5 +1,6 @@
 module Billing
   class CheckoutAttempt < ApplicationRecord
+    PENDING_STATUSES = %w[creating ready creation_unknown].freeze
     TOKEN_DIGEST_PATTERN = /\A[0-9a-f]{64}\z/
     PROVIDER_ID_PATTERN = /\A\S+\z/
     CODE_PATTERN = /\A[a-z][a-z0-9_]*\z/
@@ -9,6 +10,16 @@ module Billing
       class_name: "OrganizationMembership",
       inverse_of: :initiated_billing_checkout_attempts
     belongs_to :plan_price, inverse_of: :billing_checkout_attempts
+    belongs_to :provider_price_mapping,
+      class_name: "Billing::ProviderPriceMapping",
+      foreign_key: [ :plan_price_id, :provider, :environment ],
+      primary_key: [ :plan_price_id, :provider, :environment ],
+      inverse_of: :checkout_attempts
+    has_one :provider_locator,
+      class_name: "Billing::ProviderLocator",
+      foreign_key: :billing_checkout_attempt_id,
+      dependent: :restrict_with_exception,
+      inverse_of: :checkout_attempt
 
     enum :environment, { test: "test", live: "live" }, prefix: true, validate: true
     enum :status, {
@@ -20,6 +31,8 @@ module Billing
       superseded: "superseded",
       failed: "failed"
     }, prefix: true, validate: true
+
+    scope :pending, -> { where(status: PENDING_STATUSES) }
 
     normalizes :provider_checkout_id, :failure_code,
       with: ->(value) { value.to_s.strip.presence }
@@ -49,6 +62,7 @@ module Billing
     validates :expires_at, presence: true
     validate :test_mode_matches_environment
     validate :membership_matches_organization
+    validate :mapping_matches_plan_price
     validate :lifecycle_is_consistent
 
     private
@@ -64,6 +78,13 @@ module Billing
         return if initiated_by_membership.organization_id == organization_id
 
         errors.add(:initiated_by_membership, "must belong to the organization")
+      end
+
+      def mapping_matches_plan_price
+        return if provider_price_mapping.blank? || plan_price.blank?
+        return if provider_price_mapping.plan_price_id == plan_price_id
+
+        errors.add(:provider_price_mapping, "must belong to the selected plan price")
       end
 
       def lifecycle_is_consistent

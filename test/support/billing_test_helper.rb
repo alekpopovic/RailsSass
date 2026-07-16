@@ -54,17 +54,60 @@ module BillingTestHelper
   end
 
   def create_billing_checkout_attempt(organization:, membership:, plan_price: nil, **overrides)
-    plan_price ||= create_test_plan_price(plan: create_test_plan)
+    plan_price ||= create_test_plan_price(
+      plan: create_test_plan,
+      lemon_store_id: provider_numeric_id,
+      lemon_product_id: provider_numeric_id,
+      lemon_variant_id: provider_numeric_id
+    )
+    environment = overrides.fetch(:environment, "test").to_s
+    create_billing_provider_price_mapping(
+      plan_price: plan_price,
+      environment: environment
+    ) unless plan_price.billing_provider_price_mappings.exists?(
+      provider: "lemon_squeezy",
+      environment: environment
+    )
 
     organization.billing_checkout_attempts.create!({
       initiated_by_membership: membership,
       plan_price: plan_price,
       provider: "lemon_squeezy",
-      environment: "test",
-      test_mode: true,
+      environment: environment,
+      test_mode: environment == "test",
       token_digest: Digest::SHA256.hexdigest(SecureRandom.hex(32)),
       status: "creating",
       expires_at: 30.minutes.from_now
+    }.merge(overrides))
+  end
+
+  def create_billing_provider_price_mapping(plan_price:, environment: "test", **overrides)
+    if plan_price.lemon_variant_id.blank?
+      plan_price.update!(
+        lemon_store_id: provider_numeric_id,
+        lemon_product_id: provider_numeric_id,
+        lemon_variant_id: provider_numeric_id
+      )
+    end
+
+    Billing::ProviderPriceMapping.create!({
+      plan_price: plan_price,
+      provider: "lemon_squeezy",
+      environment: environment,
+      provider_store_id: plan_price.lemon_store_id,
+      provider_product_id: plan_price.lemon_product_id,
+      provider_variant_id: plan_price.lemon_variant_id,
+      active: true
+    }.merge(overrides))
+  end
+
+  def create_billing_provider_locator(organization:, checkout_attempt:, **overrides)
+    organization.billing_provider_locators.create!({
+      checkout_attempt: checkout_attempt,
+      provider: checkout_attempt.provider,
+      environment: checkout_attempt.environment,
+      token_digest: checkout_attempt.token_digest,
+      status: :unresolved
     }.merge(overrides))
   end
 
@@ -81,4 +124,9 @@ module BillingTestHelper
       snapshot: {}
     }.merge(overrides))
   end
+
+  private
+    def provider_numeric_id
+      SecureRandom.random_number(8_999_999_999_999_999).then { |value| (value + 1_000_000_000_000_000).to_s }
+    end
 end

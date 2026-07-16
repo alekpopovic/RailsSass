@@ -24,6 +24,10 @@ class Organization < ApplicationRecord
     class_name: "Billing::CheckoutAttempt",
     dependent: :restrict_with_exception,
     inverse_of: :organization
+  has_many :billing_provider_locators,
+    class_name: "Billing::ProviderLocator",
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
   has_many :billing_subscriptions,
     class_name: "Billing::Subscription",
     dependent: :restrict_with_exception,

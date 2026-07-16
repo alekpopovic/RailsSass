@@ -18,19 +18,19 @@ class OrganizationPolicyTest < ActiveSupport::TestCase
     expectations = {
       owner: {
         dashboard: true, products: true, pricing: true, members: true,
-        settings: true, update: true, billing: true
+        settings: true, update: true, billing: true, checkout: true
       },
       admin: {
         dashboard: true, products: true, pricing: true, members: true,
-        settings: true, update: true, billing: false
+        settings: true, update: true, billing: false, checkout: false
       },
       billing: {
         dashboard: true, products: true, pricing: true, members: false,
-        settings: false, update: false, billing: true
+        settings: false, update: false, billing: true, checkout: true
       },
       member: {
         dashboard: true, products: true, pricing: true, members: false,
-        settings: false, update: false, billing: false
+        settings: false, update: false, billing: false, checkout: false
       }
     }
 

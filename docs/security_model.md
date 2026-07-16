@@ -35,7 +35,7 @@ not a control.
 | --- | --- | --- |
 | Secret | Rails master key, database password/URL, Lemon API keys, webhook secrets, mail credentials | Secret manager/Kamal environment only; never repository, logs, browser, fixtures, or docs |
 | Authentication token | Session, password-reset, email-verification, invitation token | Opaque tokens are high entropy and one-way digested at rest; Rails signed account tokens are purpose/expiry/state bound; never log |
-| Sensitive signed URL | Checkout URL, customer portal/payment-method URL | Return only after authorization; short-lived; do not log; portal URL not persisted; checkout URL encrypted and short-retained only if necessary |
+| Sensitive signed URL | Checkout URL, customer portal/payment-method URL | Return only after authorization; short-lived; do not log or persist; the checkout controller emits a manual redirect without framework URL logging |
 | PII | Email address, optional billing/customer identifiers, IP/user agent | Minimize, access-control, redact logs, retain only for defined purpose |
 | Tenant business data | Organization memberships, product resources, assignments, usage | Non-null tenant ownership, scoped query, policy, database constraints, backup encryption |
 | Authorization catalog | Stable-keyed plans, entitlements, roles, permissions, local plan prices | Reviewed platform-admin commands, immutable identities, database constraints, append-only audit trail; display names never grant access, while only the unique active free plan is a fallback |
@@ -74,8 +74,8 @@ plaintext tokens are never stored.
 | Webhook forgery/tampering | Attacker posts active status or modifies one byte | HMAC-SHA256 exact raw body, constant-time compare, credential separation | Official-style fixture, mutation, bad/missing signature tests |
 | Webhook replay | Valid body is resent many times or an unsigned event header is changed | Signed-body event name is authoritative; fingerprint provider/configured-environment/exact-body only; unique index plus idempotent projection | Duplicate/resend/mutated-header tests and metric |
 | Webhook reordering/race | Old active event overwrites expired, or two jobs race | Current provider refetch rooted in verified event, row locks, monotonic provider timestamp, conflict quarantine | Reordered/concurrent/equal-conflict tests |
-| Billing confused deputy | Webhook token/variant attaches subscription to wrong organization | Persist token digest only; global provider locator selects candidate after HMAC; exact store/environment/variant/attempt cross-check; tenant reload | Mismatch/digest locator matrix tests |
-| Checkout tampering | Client submits cheap variant, custom price, live/test flag, or attacker redirect | Accept local price ID only; server allowlist; one enabled variant; canonical return URL; validate response | Request/client-parameter tests |
+| Billing confused deputy | Webhook token/variant attaches subscription to wrong organization | Purpose/expiry-signed token with tenant/price/user/nonce payload; persist only nonce digest; global provider locator selects candidate after HMAC; exact store/environment/variant/attempt cross-check; tenant reload | Mismatch/digest locator matrix tests |
+| Checkout tampering | Client submits cheap variant, custom price, live/test flag, or attacker redirect | Accept local price ID only; exact active provider mapping for configured environment/store; one enabled variant; canonical pending return URL; strict response identity/expiry/test-mode/HTTPS-host validation | Request/client-parameter tests |
 | Redirect-based grant | Browser fakes success URL | Return page reads local state only; no subscription mutation | Redirect/API-success tests assert unchanged access |
 | Unknown provider change | New status/event/property is interpreted as allowed | Allowlist events, normalize known values, unknown/malformed deny paid-plan selection and alert; only the explicit active free fallback remains | Unknown status/event/field tests |
 | SSRF | Payload relationship or redirect URL points to internal host | Fixed Lemon API origin; construct resource paths; validate checkout URL origin; never follow payload links | Adapter URL tests |
@@ -193,11 +193,11 @@ The normative decision flow is in
 - Treat every submitted organization/member/product/role/permission/price ID as
   untrusted and re-resolve it through owned associations/catalog allowlists.
 - Treat `PlanPrice` and its Lemon identifiers as catalog input only. Checkout
-  and webhook processing remain unavailable until Billing validates an exact
-  server-owned test/live environment and configured-store mapping; the price
-  row itself never proves payment or subscription eligibility. Lock commercial
-  and provider-mapping fields after any checkout, subscription, or plan-change
-  history references the price; use a new price row for corrected terms.
+  requires an exact active `Billing::ProviderPriceMapping` for the server-owned
+  test/live environment and configured store; neither row proves payment or
+  subscription eligibility. Lock commercial and provider-mapping identity after
+  any mapping, checkout, subscription, or plan-change history references the
+  price; use a new price row for corrected terms.
 - Do not use owner/admin organization role as a product permission shortcut;
   billing organization membership is categorically ineligible for product-data
   access.
@@ -251,32 +251,52 @@ The normative decision flow is in
 The complete flow is in [Billing Model](billing_model.md). Required security
 properties are:
 
-The implemented persistence/client foundation still has no checkout or webhook
-controller and no provider locator or projection writer. The read-only
-Entitlements policy consumes current local subscription rows, but no production
-application path can create them yet. A future signed-webhook pipeline remains
-the only permitted writer.
+The implemented boundary includes an environment-qualified provider-price
+mapping, an immutable checkout-token locator, a strict one-attempt Lemon
+checkout client operation, and owner/billing-only checkout and pending-return
+controllers. It still has no webhook controller, subscription locator, or
+projection writer. The read-only Entitlements policy consumes current local
+subscription rows, but checkout cannot create or mutate them. A future
+signed-webhook pipeline remains the only permitted writer.
 
 The customer billing overview is also read-only: it loads the current
 subscription through `Current.organization.billing_subscriptions`, displays
 local effective-plan/status information, and performs no provider request.
-Pricing displays the local catalog only. Neither route exposes checkout, portal,
-plan-change, or subscription mutation controls.
+Pricing is a local catalog GET, but an active owner/billing member may submit a
+separate CSRF-protected checkout POST for an eligible mapped price. The
+canonical pending return page reads only tenant attempt/subscription state.
+There is no portal, plan-change execution, or subscription mutation control.
 
 - Store API keys and webhook secrets only in environment/credential stores.
 - Use separate live/test keys, webhook endpoints/configuration, and mappings.
+- Authorize checkout server-side for a live active owner/billing membership,
+  rate-limit by user and organization, and rely on the database partial unique
+  index to permit at most one pending attempt per organization. UI visibility is
+  never the authorization boundary.
 - Verify HMAC against exact raw bytes before parsing; compare constant-time.
 - Support previous signing key only during a bounded, observable rotation.
 - Persist only after verification and acknowledge only after durable receipt.
 - Deduplicate with a database unique fingerprint and project under a row lock.
-- Hash checkout custom token after verification and resolve only through the
-  global provider locator by subscription ID/token digest; persist no plaintext
-  token, then reload through `Current.organization`.
+- Create a purpose- and expiry-scoped `MessageVerifier` token containing only
+  organization public ID, local price ID, initiating user ID, a high-entropy
+  nonce, and expiry. Persist only `SHA256(nonce)` in the tenant attempt and
+  global locator; send the raw signed token only in the provider custom field.
+  Future verified ingress must verify the signed token before digest lookup,
+  use the global locator only for discovery, then reload through
+  `Current.organization`.
 - Never use email/name/slug or a browser callback to attach a subscription.
 - Construct outbound URLs from a fixed API base; use connect/read timeouts and
   response size limits. The low-level client performs no automatic retry;
-  bounded retry with jitter belongs to a later operation-aware job and must
-  never blindly repeat a non-idempotent request.
+  checkout sends exactly one non-idempotent POST. Timeout, connection, `408`,
+  `429`, other non-allowlisted responses, 5xx, malformed JSON, and semantically
+  invalid success responses remain ambiguous `creation_unknown`; local
+  request/configuration errors and the explicit provider no-create allowlist
+  (`400`, `401`, `403`, `404`, `422`) may resolve definitively. Never blindly
+  repeat checkout creation.
+- Generate the return URL from the canonical tenant pending route, reject query,
+  fragment, userinfo, and wrong host/path, and require HTTPS in production.
+  Validate the provider checkout URL against one configured HTTPS hostname.
+  Do not persist or log the signed URL.
 - Persist only bounded, screened diagnostic snapshots. Despite the compatibility
   name `raw_payload` on subscriptions, it may not contain the raw webhook body,
   full provider response, authentication/signature/token material, personal
