@@ -41,10 +41,10 @@ not a control.
 | Authorization catalog | Stable-keyed plans, entitlements, roles, permissions, local plan prices | Reviewed platform-admin commands, immutable identities, database constraints, append-only audit trail; display names never grant access, while only the unique active free plan is a fallback |
 | Operational metadata | Event fingerprint, status reason code, timestamps, request/job IDs | Retain for diagnosis without raw payloads or secrets |
 
-The webhook ledger stores an allowlisted normalized envelope, mandatory content
-fingerprint, and an optional unique provider event ID when supplied; it never
-stores raw provider payloads. Passwords, API credentials, signatures, and
-plaintext tokens are never stored.
+The webhook ledger stores an allowlisted normalized envelope, exact-body
+SHA-256, environment-qualified content fingerprint, and an optional unique
+provider event ID when supplied; it never stores raw provider payloads.
+Passwords, API credentials, signatures, and plaintext tokens are never stored.
 
 ## 4. Trust boundaries
 
@@ -254,10 +254,12 @@ properties are:
 The implemented boundary includes an environment-qualified provider-price
 mapping, an immutable checkout-token locator, a strict one-attempt Lemon
 checkout client operation, and owner/billing-only checkout and pending-return
-controllers. It still has no webhook controller, subscription locator, or
-projection writer. The read-only Entitlements policy consumes current local
-subscription rows, but checkout cannot create or mutate them. A future
-signed-webhook pipeline remains the only permitted writer.
+controllers. It now also includes an isolated exact-body webhook controller,
+constant-time HMAC verifier, durable idempotent global receipt, and Solid Queue
+handoff/recovery sweeper. It still has no subscription locator or projection
+writer. The read-only Entitlements policy consumes current local subscription
+rows, but neither checkout nor receipt can create or mutate them. A future
+verified-event projection remains the only permitted writer.
 
 The customer billing overview is also read-only: it loads the current
 subscription through `Current.organization.billing_subscriptions`, displays

@@ -29,8 +29,8 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
     assert_required_columns(
       Billing::WebhookEvent,
       %w[
-        provider environment fingerprint status received_at verified_at attempt_count
-        snapshot created_at updated_at
+        provider environment fingerprint body_sha256 status received_at verified_at
+        attempt_count attempts_count snapshot payload created_at updated_at
       ]
     )
     assert_required_columns(
@@ -55,8 +55,12 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
     ])
     assert_constraint_names(Billing::WebhookEvent, %w[
       billing_webhook_events_fingerprint_format
+      billing_webhook_events_body_sha256_format
       billing_webhook_events_lifecycle
       billing_webhook_events_snapshot_object_bounded
+      billing_webhook_events_payload_object_bounded
+      billing_webhook_events_resource_id_compatibility
+      billing_webhook_events_attempts_compatibility
     ])
     past_due_constraint = Billing::Subscription.connection
       .check_constraints(:billing_subscriptions)
@@ -288,6 +292,14 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
     end
     assert_kind_of PG::UniqueViolation, duplicate_provider_event_error.cause
 
+    body_identity_error = assert_database_error(ActiveRecord::RecordNotUnique, PG::UniqueViolation) do
+      Billing::WebhookEvent.insert_all!([ raw_webhook_attributes(
+        fingerprint: Digest::SHA256.hexdigest("different-fingerprint"),
+        body_sha256: event.body_sha256
+      ) ])
+    end
+    assert_kind_of PG::UniqueViolation, body_identity_error.cause
+
     organization, membership = create_billing_tenant(prefix: "db-pending")
     attempt = create_billing_checkout_attempt(organization: organization, membership: membership)
     duplicate_attempt_error = assert_database_error(ActiveRecord::RecordNotUnique, PG::UniqueViolation) do
@@ -402,12 +414,15 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
         provider: "lemon_squeezy",
         environment: "test",
         fingerprint: fingerprint,
+        body_sha256: fingerprint,
         status: "received",
         test_mode: true,
         received_at: now,
         verified_at: now,
         attempt_count: 0,
+        attempts_count: 0,
         snapshot: {},
+        payload: {},
         created_at: now,
         updated_at: now
       }.merge(overrides)

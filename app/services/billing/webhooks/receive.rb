@@ -1,0 +1,290 @@
+require "digest"
+require "json"
+
+module Billing
+  module Webhooks
+    class Receive
+      PROVIDER = "lemon_squeezy"
+      MAX_BODY_BYTES = 256.kilobytes
+      MAX_TOKEN_BYTES = 2_048
+      MAX_NESTING = 50
+      SAFE_EVENT_NAME = /\A[a-z][a-z0-9_]*\z/
+      SAFE_RESOURCE_TYPE = /\A[a-z][a-z0-9_-]*\z/
+      SAFE_PROVIDER_ID = /\A\S+\z/
+      SAFE_STORE_ID = /\A[1-9][0-9]*\z/
+      SAFE_STATUS = /\A[a-z][a-z0-9_]*\z/
+      PROCESSABLE_EVENTS = %w[subscription_created subscription_updated].freeze
+
+      Result = Data.define(:status, :event, :duplicate, :enqueue_failed)
+
+      def self.call(**attributes)
+        new(**attributes).call
+      end
+
+      def initialize(
+        body:,
+        signature:,
+        content_type:,
+        secret: Rails.configuration.x.billing.lemon_squeezy.webhook_secret,
+        environment: Rails.configuration.x.billing.lemon_squeezy.environment,
+        store_id: Rails.configuration.x.billing.lemon_squeezy.store_id,
+        request_id: nil,
+        now: Time.current
+      )
+        @body = body
+        @signature = signature
+        @content_type = content_type.to_s
+        @verifier = SignatureVerifier.new(secret: secret)
+        @environment = environment.to_s
+        @store_id = store_id.to_s
+        @request_id = safe_request_id(request_id)
+        @now = now
+      end
+
+      def call
+        raw_body = read_raw_body
+        return result(413) if raw_body.bytesize > MAX_BODY_BYTES
+        return result(503) unless @verifier.configured?
+        return result(401) unless @verifier.valid?(raw_body: raw_body, signature: @signature)
+        return result(415) unless json_content_type?
+
+        parsed_payload = parse_payload(raw_body)
+        return result(400) unless parsed_payload.is_a?(Hash)
+        return result(503) unless provider_configuration_valid?
+
+        event, created = persist_event(raw_body, parsed_payload)
+        log_quarantine(event) if created && event.status_quarantined?
+        enqueued = Billing::Webhooks::Enqueue.call(event)
+
+        Result.new(
+          status: 200,
+          event: event,
+          duplicate: !created,
+          enqueue_failed: !enqueued
+        )
+      rescue JSON::ParserError, EncodingError
+        result(400)
+      rescue StandardError
+        Rails.logger.error(
+          "billing_webhook_receipt_failed reason=internal_error request_id=#{@request_id}"
+        )
+        result(503)
+      end
+
+      private
+        def result(status)
+          Result.new(status: status, event: nil, duplicate: false, enqueue_failed: false)
+        end
+
+        def json_content_type?
+          @content_type.split(";", 2).first.to_s.strip.casecmp?("application/json")
+        end
+
+        def read_raw_body
+          @body.read(MAX_BODY_BYTES + 1).to_s.b
+        end
+
+        def provider_configuration_valid?
+          @environment.in?(%w[test live]) &&
+            SAFE_STORE_ID.match?(@store_id)
+        end
+
+        def parse_payload(raw_body)
+          JSON.parse(raw_body, max_nesting: MAX_NESTING)
+        end
+
+        def persist_event(raw_body, parsed_payload)
+          body_sha256 = Digest::SHA256.hexdigest(raw_body)
+          fingerprint = Digest::SHA256.hexdigest(
+            "#{PROVIDER}\0#{@environment}\0".b + raw_body
+          )
+          event_name = safe_value(
+            nested_value(parsed_payload, "meta", "event_name"),
+            maximum: 100,
+            pattern: SAFE_EVENT_NAME
+          )
+          external_resource_type = safe_value(
+            nested_value(parsed_payload, "data", "type"),
+            maximum: 64,
+            pattern: SAFE_RESOURCE_TYPE
+          )
+          external_resource_id = safe_value(
+            nested_value(parsed_payload, "data", "id"),
+            maximum: 128,
+            pattern: SAFE_PROVIDER_ID
+          )
+          payload = sanitized_payload(
+            parsed_payload,
+            event_name: event_name,
+            resource_type: external_resource_type,
+            resource_id: external_resource_id
+          )
+          test_mode = trusted_test_mode(payload["test_mode"])
+          disposition = disposition_for(
+            event_name: event_name,
+            resource_type: external_resource_type,
+            resource_id: external_resource_id,
+            store_id: payload["provider_store_id"],
+            test_mode: payload["test_mode"]
+          )
+          payload["reason_code"] = disposition.fetch(:reason_code) if disposition[:reason_code]
+
+          existing_event = Billing::WebhookEvent.find_by(fingerprint: fingerprint)
+          return [ existing_event, false ] if existing_event
+
+          event = Billing::WebhookEvent.create!(
+            provider: PROVIDER,
+            environment: @environment,
+            fingerprint: fingerprint,
+            event_name: event_name,
+            external_resource_type: external_resource_type,
+            external_resource_id: external_resource_id,
+            body_sha256: body_sha256,
+            payload: payload,
+            status: disposition.fetch(:status),
+            test_mode: test_mode,
+            received_at: @now,
+            verified_at: @now,
+            processed_at: disposition[:processed_at],
+            attempts_count: 0,
+            error_code: disposition[:error_code]
+          )
+
+          [ event, true ]
+        rescue ActiveRecord::RecordNotUnique => error
+          existing_event = Billing::WebhookEvent.find_by(fingerprint: fingerprint)
+          raise error unless existing_event
+
+          [ existing_event, false ]
+        rescue ActiveRecord::RecordInvalid => error
+          existing_event = Billing::WebhookEvent.find_by(fingerprint: fingerprint)
+          raise error unless existing_event && error.record.errors.of_kind?(:fingerprint, :taken)
+
+          [ existing_event, false ]
+        end
+
+        def sanitized_payload(parsed_payload, event_name:, resource_type:, resource_id:)
+          attributes = nested_value(parsed_payload, "data", "attributes")
+          attributes = {} unless attributes.is_a?(Hash)
+
+          {
+            "event_name" => event_name,
+            "resource_type" => resource_type,
+            "provider_resource_id" => resource_id,
+            "provider_subscription_id" => resource_id_if_subscription(resource_type, resource_id),
+            "provider_store_id" => provider_id(attributes["store_id"]),
+            "provider_product_id" => provider_id(attributes["product_id"]),
+            "provider_variant_id" => provider_id(attributes["variant_id"]),
+            "provider_customer_id" => provider_id(attributes["customer_id"]),
+            "status" => safe_value(attributes["status"], maximum: 64, pattern: SAFE_STATUS),
+            "test_mode" => boolean_value(attributes["test_mode"]),
+            "trial_ends_at" => bounded_scalar(attributes["trial_ends_at"]),
+            "renews_at" => bounded_scalar(attributes["renews_at"]),
+            "ends_at" => bounded_scalar(attributes["ends_at"]),
+            "provider_updated_at" => bounded_scalar(attributes["updated_at"]),
+            "checkout_token_digest" => checkout_token_digest(parsed_payload)
+          }.compact
+        end
+
+        def checkout_token_digest(parsed_payload)
+          raw_token = nested_value(
+            parsed_payload,
+            "meta",
+            "custom_data",
+            "checkout_attempt_token"
+          )
+          return unless raw_token.is_a?(String) && raw_token.bytesize <= MAX_TOKEN_BYTES
+
+          token_payload = Billing::Checkouts::Token.verify(raw_token, now: @now)
+          Billing::Checkouts::Token.digest_nonce(token_payload.nonce) if token_payload
+        end
+
+        def resource_id_if_subscription(resource_type, resource_id)
+          resource_id if resource_type == "subscriptions"
+        end
+
+        def disposition_for(event_name:, resource_type:, resource_id:, store_id:, test_mode:)
+          if event_name.nil?
+            return terminal_disposition(:quarantined, "invalid_event_envelope")
+          end
+          unless PROCESSABLE_EVENTS.include?(event_name)
+            return terminal_disposition(:ignored, "unsupported_event")
+          end
+          unless resource_type == "subscriptions" && resource_id
+            return terminal_disposition(:quarantined, "invalid_subscription_resource")
+          end
+          unless store_id == @store_id
+            return terminal_disposition(:quarantined, "store_mismatch")
+          end
+          if trusted_test_mode(test_mode).nil?
+            return terminal_disposition(:quarantined, "environment_mismatch")
+          end
+
+          { status: :received }
+        end
+
+        def terminal_disposition(status, reason_code)
+          {
+            status: status,
+            processed_at: @now,
+            error_code: (reason_code if status == :quarantined),
+            reason_code: reason_code
+          }
+        end
+
+        def provider_id(value)
+          safe_value(value, maximum: 128, pattern: SAFE_PROVIDER_ID)
+        end
+
+        def nested_value(value, *keys)
+          keys.each do |key|
+            return unless value.is_a?(Hash)
+
+            value = value[key]
+          end
+          value
+        end
+
+        def safe_request_id(value)
+          normalized = value.to_s
+          return "unavailable" unless /\A[a-zA-Z0-9-]{1,255}\z/.match?(normalized)
+
+          normalized
+        end
+
+        def log_quarantine(event)
+          Rails.logger.warn(
+            "billing_webhook_quarantined event_id=#{event.id} " \
+              "reason_code=#{event.error_code} request_id=#{@request_id}"
+          )
+        end
+
+        def safe_value(value, maximum:, pattern:)
+          return unless value.is_a?(String) || value.is_a?(Integer)
+
+          normalized = value.to_s.strip
+          return if normalized.empty? || normalized.bytesize > maximum
+
+          normalized if pattern.match?(normalized)
+        end
+
+        def bounded_scalar(value)
+          return if value.nil?
+          return unless value.is_a?(String)
+
+          normalized = value.strip
+          return if normalized.empty? || normalized.bytesize > 64 || normalized.match?(/[[:cntrl:]]/)
+
+          normalized
+        end
+
+        def boolean_value(value)
+          value if value == true || value == false
+        end
+
+        def trusted_test_mode(value)
+          value if (@environment == "test" && value == true) || (@environment == "live" && value == false)
+        end
+    end
+  end
+end

@@ -14,7 +14,9 @@ class AuthenticationSecurityTest < ActiveSupport::TestCase
     authorization: "Bearer provider-key",
     api_key: "provider-key",
     signature: "webhook-signature",
+    payload: { "customer_email" => "person@example.test" },
     raw_payload: { "customer_email" => "person@example.test" },
+    raw_body: "signed-provider-body",
     settings: { "api_key" => "operator-pasted-secret" },
     checkout_url: "https://provider.example/signed-checkout",
     portal_url: "https://provider.example/signed-portal"

@@ -9,8 +9,9 @@ shell, catalog/entitlement/product RBAC, the Analytics reference product,
 internal platform administration, and owner/billing Lemon Squeezy checkout with
 local pending state. Registration never creates an organization; verified users
 explicitly complete onboarding. Checkout/API success never changes subscription
-or entitlement state. Signed webhook projection, provider portal management,
-and production hardening remain open milestones.
+or entitlement state. Exact-body signed webhook ingress, durable idempotent
+receipt, and Solid Queue handoff are implemented; subscription projection,
+provider portal management, and production hardening remain open milestones.
 The target behavior and delivery sequence are in
 [`docs/`](docs/), beginning with the
 [product requirements](docs/product_requirements.md),
@@ -115,6 +116,8 @@ bin/jobs
 Do not enable access from a checkout redirect or outbound Lemon API response.
 Runtime authorization will use local database state, and only verified,
 durably recorded, idempotently processed webhooks may change subscription state.
+The current webhook handoff job deliberately leaves verified events in
+`received`; it does not project a subscription or unlock paid access.
 
 ## Tests and quality checks
 
@@ -165,7 +168,11 @@ Ordinary setup, boot, and automated tests require no Lemon credentials. Manual
 checkout requires `LEMON_SQUEEZY_API_KEY`, `LEMON_SQUEEZY_STORE_ID`,
 `LEMON_SQUEEZY_ENVIRONMENT`, and the exact hostname-only
 `LEMON_SQUEEZY_CHECKOUT_HOST` in ignored environment configuration or encrypted
-credentials. `APP_HOST`/`APP_PORT` define the canonical pending return URL.
+credentials. Webhook ingress additionally requires
+`LEMON_SQUEEZY_WEBHOOK_SECRET`; configure Lemon to send test-mode
+`subscription_created` and `subscription_updated` events to
+`POST /webhooks/lemon_squeezy`. `APP_HOST`/`APP_PORT` define the canonical
+pending return URL.
 Restart Rails after changing this boot-time configuration. An active paid
 `PlanPrice` with complete Lemon IDs must then receive the matching test/live
 provider mapping through its `/admin` detail page; there is no checkout setup

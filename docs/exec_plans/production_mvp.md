@@ -728,14 +728,20 @@ The repository has constrained `Billing::Customer`, `CheckoutAttempt`,
 environment-qualified `ProviderPriceMapping`, a checkout-token
 `ProviderLocator`, and the strict `Billing::LemonSqueezy::Client`. It also has a
 read-only Entitlements policy/resolver, audited mapping administration, and an
-owner/billing checkout/pending controller. It still has no webhook verifier/
-processor, subscription projection writer, subscription-ID locator transition,
-or provider portal. `raw_payload` is restricted to a bounded screened
+owner/billing checkout/pending controller. It still has no subscription
+processor/projection writer, subscription-ID locator transition, or provider
+portal. `raw_payload` is restricted to a bounded screened
 diagnostic snapshot and never means a raw request or complete provider payload.
 Subscription history is one-way and deletion-protected. The event ledger keeps
 a mandatory content fingerprint plus a unique optional provider event identity;
 Lemon's lack of a documented delivery ID leaves the fingerprint authoritative
 for delivery idempotency.
+
+The signed-ingress checkpoint now adds the isolated webhook verifier/controller,
+exact-body digest, sanitized durable receipt, Solid Queue ID-only handoff, and
+enqueue-recovery sweeper. The current handoff job is intentionally not the
+subscription processor and leaves rows in `received`; therefore the projection
+writer, subscription-ID locator transition, and provider portal remain open.
 
 The remaining PRs extend these tables through backward-compatible migrations
 rather than recreating them. Checkout/API responses remain unable to edit local
@@ -841,7 +847,7 @@ Tests:
 Acceptance: synthetic local records produce deterministic paid/free/no-plan
 answers; no public path can create/mutate a subscription.
 
-### PR-13: Add signed webhook ingress and durable receipt
+### PR-13: Add signed webhook ingress and durable receipt — implemented checkpoint
 
 Depends on: PR-12.
 
@@ -852,31 +858,35 @@ Scope:
 
 - Add global `POST /webhooks/lemon_squeezy` with only action-specific CSRF
   exemption.
-- Implement exact raw-body HMAC verifier with constant-time comparison and
-  bounded current/previous key rotation.
-- Enforce webhook-specific rate/body limits in this PR; validate content type,
-  use signed `meta.event_name` as authority, compare the unsigned header only for
-  anomaly telemetry, and validate the exact created+updated processing
-  allowlist, resource type, store, and environment/test mode.
+- Implement exact raw-body HMAC verifier with constant-time comparison. The
+  current-key path is implemented; bounded previous-key rotation remains a
+  production-hardening follow-up.
+- Enforce a 256 KiB application body limit and validate content type. Use signed
+  `meta.event_name` as authority, ignore the unsigned header for classification,
+  and validate the exact created+updated processing allowlist, resource type,
+  store, and environment/test mode. Edge rate limiting remains a deployment
+  hardening item.
 - Hash allowlisted checkout custom token after HMAC; persist only its digest.
 - Fingerprint only provider + configured environment + exact raw body; exclude
   signature and unsigned headers so a mutated header cannot create a new event.
-- Implement the exact HTTP outcome table from the billing model: 401/413/415,
-  rate-limit 429, durable 200 ignored/quarantined/supported/duplicate, and 503
-  transient persistence failure.
-- Compute local fingerprint and insert only the filtered event. Keep the route
-  environment-gated and production webhook unregistered; enqueue/processing is
-  enabled only when PR-14B deploys the complete projection.
+- Implement the ingress HTTP outcomes: 400/401/413/415, durable 200
+  ignored/quarantined/supported/duplicate, and 503 transient persistence or
+  configuration failure. The deployment edge owns 429 enforcement.
+- Compute both the exact body digest and environment-qualified fingerprint and
+  insert only the filtered event. The public route, durable ID-only handoff,
+  and recovery sweeper are enabled; subscription projection remains absent.
 
-Migrations: none unless measured indexes are missing.
+Migrations: additive receipt identity/lifecycle fields, named checks, exact-body
+unique index, and enqueue-recovery index.
 
-Tests: valid signature, byte mutation, malformed/missing key, rotation, 429
-rate/body limits, each HTTP outcome, unsupported and envelope/store/environment
-mismatch, mutated-header same-body deduplication, custom-token digest/no
-plaintext, duplicate, DB failure, and log redaction.
+Implemented tests: valid real HMAC, byte/signature mutation, missing signature,
+signed malformed JSON, size/content-type bounds, unsupported event, duplicate,
+enqueue failure+sweeper recovery, requested ledger constraints, and log
+redaction. Previous-key rotation, deployment 429 behavior, and full provider
+contract fixtures remain production-hardening evidence.
 
-Acceptance: no subscription row can be changed by this PR; production provider
-webhook is not enabled yet.
+Acceptance: no subscription row can be changed by this PR; ingress receipt and
+queue handoff alone never unlock access.
 
 ### PR-14A: Add the Lemon subscription client and DTO contract
 
@@ -906,8 +916,8 @@ URL SSRF attempt, oversized/truncated response, timeouts, 429, bounded 404, 5xx,
 permanent failures, rate-limit handling, and log redaction. Assert zero
 subscription mutations.
 
-Acceptance: provider behavior is contract-tested but no subscription mutation or
-production webhook enablement exists.
+Acceptance: provider behavior is contract-tested but no subscription mutation
+or production projection enablement exists.
 
 ### PR-14B: Add webhook-rooted tenant resolution and projection
 
@@ -917,8 +927,9 @@ Depends on: PR-14A.
 
 Scope:
 
-- Enable after-commit enqueue/sweeper for supported verified receipts and keep
-  provider registration restricted to created+updated.
+- Replace the existing read-only handoff job with the idempotent claim/
+  projection worker while keeping provider registration restricted to
+  created+updated.
 - Resolve candidates only through `Billing::ProviderLocator` by external
   subscription ID or checkout-token digest, then reload every tenant row through
   `Current.organization`.

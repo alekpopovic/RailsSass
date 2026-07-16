@@ -39,11 +39,14 @@ creates the tenant attempt and locator atomically, then performs exactly one
 provider request outside the transaction. Lemon redirects to the canonical
 local pending page. No checkout response or redirect writes a subscription.
 
-The repository still exposes no webhook controller, webhook processor,
-subscription projection service, provider portal, or plan-change command
-execution. The billing overview, pending-return page, and platform-admin
-diagnostics are local-state readers. Checkout writes only local attempt and
-correlation state; it is not a subscription-state writer.
+The repository now exposes an isolated `POST /webhooks/lemon_squeezy`
+controller, exact-body verifier, durable receipt service, Solid Queue handoff,
+and enqueue-recovery sweeper. The current handoff job deliberately leaves the
+verified row in `received`; there is still no subscription projection service,
+provider portal, or plan-change command execution. The billing overview,
+pending-return page, and platform-admin diagnostics are local-state readers.
+Checkout and webhook receipt write only local attempt/correlation/ledger state;
+neither is a subscription-state writer.
 
 The entitlement resolver reads a current local subscription and never calls the
 provider. No application path currently creates paid subscription state. The
@@ -58,14 +61,14 @@ a bounded, recursively screened, explicitly allowlisted diagnostic snapshot. It
 must never contain a raw webhook body, complete API response, authorization data,
 signature, token, email/name, custom data, or signed checkout/portal URL. The
 same minimal snapshot rule applies to `Billing::WebhookEvent`. Exact raw webhook
-bytes exist only transiently for future signature verification and are never
-persisted.
+bytes exist only transiently for signature verification and are never persisted.
 The ledger always has a unique content fingerprint and also accepts an optional
 environment-qualified provider event ID with a unique index. Lemon currently
 documents no delivery ID, so the fingerprint remains the required idempotency
 identity rather than inventing provider authority.
 
-The client reads its API key, store ID, environment, and checkout host from
+Billing configuration reads the webhook signing secret separately from the API
+key. The client reads its API key, store ID, environment, and checkout host from
 explicit configuration, environment variables, or Rails credentials. It uses
 a fixed HTTPS API origin and explicit connect/read timeouts, validates the exact
 checkout store, variant, test mode, expiry, and HTTPS checkout URL host, and
@@ -386,9 +389,11 @@ sequenceDiagram
   else persisted
     W->>Q: Enqueue after commit
     W-->>LS: 200
-    Q->>API: GET fixed /v1/subscriptions/:id
+    Q->>DB: Load receipt ID; leave status received
+    Note over Q,API: Future projection milestone
+    Q-->>API: GET fixed /v1/subscriptions/:id
     API-->>Q: Current subscription snapshot
-    Q->>DB: Resolve tenant, lock, validate, project atomically
+    Q-->>DB: Resolve tenant, lock, validate, project atomically
   end
 ```
 
@@ -401,21 +406,22 @@ The endpoint performs these bounded steps:
 2. Read exact raw bytes once.
 3. Require a valid 64-character hex `X-Signature`.
 4. Calculate HMAC-SHA256 with the configured current signing secret and compare
-   in constant time. During bounded rotation, also permit the previous secret
-   and record its key version.
+   in constant time. Bounded previous-key rotation plus recorded key version is
+   a deployment-hardening follow-up; no unbounded key list is accepted.
 5. Parse JSON only after a valid signature.
-6. Read signed-body `meta.event_name` as the only event-name authority. Compare
-   `X-Event-Name` only as advisory provider-contract telemetry; a missing or
-   mismatched unsigned header cannot change classification.
+6. Read signed-body `meta.event_name` as the only event-name authority. The
+   unsigned `X-Event-Name` header is ignored for classification, so a missing or
+   mismatched value cannot create a second receipt or change behavior.
 7. Classify only `subscription_created` and `subscription_updated` with a valid
    subscription resource as processable; other signed events are deterministic
    ignored receipts.
-8. Validate configured store and environment/test-mode shape. Signed malformed
-   or configuration-mismatched events are quarantined, not projected.
-9. Calculate
+8. Validate subscription resource, configured store, and environment/test-mode
+   shape. Signed invalid envelopes or configuration mismatches are quarantined,
+   not projected.
+9. For every new signed receipt, calculate exact `SHA256(raw_body)` plus
    `SHA256(provider || configured_environment || raw_body)`. The untrusted,
-   unsigned header is excluded; signed `meta.event_name` is stored separately
-   when parsing succeeds.
+   unsigned header is excluded from both identities; signed `meta.event_name`
+   is stored separately when parsing succeeds.
 10. If present, verify the purpose/expiry-scoped
     `meta.custom_data.checkout_attempt_token`, validate its bounded payload,
     calculate `SHA256(nonce)`, and retain only that digest. Never hash the raw
@@ -430,23 +436,27 @@ A duplicate fingerprint is a successful no-op and returns 200. A persistence
 failure returns 503 so Lemon Squeezy retries. If enqueueing fails after receipt,
 the periodic sweeper finds the durable `received` row; the endpoint can still
 return 200 because local recovery no longer depends on provider redelivery.
+The same sweeper redispatches a row that remains `received` for six hours, so a
+future idempotent processor release can claim pre-release receipts.
 
 HTTP outcomes are explicit:
 
 | Condition | Response | Durable behavior |
 | --- | ---: | --- |
 | invalid/missing signature | 401 | no ledger or tenant mutation |
+| verified syntactically invalid JSON | 400 | no ledger or tenant mutation |
 | ingress rate limit exceeded | 429 | no ledger; bounded `Retry-After` response |
 | oversized body | 413 | no ledger or tenant mutation |
 | unsupported content type | 415 | no ledger or tenant mutation |
 | verified unsupported event | 200 | minimal `ignored` receipt, no enqueue |
-| verified deterministic malformed/store/environment mismatch | 200 | minimal `quarantined` receipt and alert, no projection |
+| verified deterministic malformed/store/environment mismatch | 200 | minimal `quarantined` receipt and bounded warning, no projection |
 | durable supported receipt or duplicate | 200 | enqueue once/recover via sweeper |
 | transient database/internal persistence failure | 503 | no acknowledgement; provider retry expected |
 
 Returning 200 for a verified deterministic mismatch avoids four futile
-identical retries; the durable alert remains actionable. Error logs contain a
-request ID and reason code, not headers/body.
+identical retries; the durable receipt and warning remain actionable. External
+alert routing is a deployment follow-up. Error logs contain a request ID and
+reason code, not headers/body.
 
 ### 6.2 Processing
 
@@ -692,12 +702,12 @@ this accepted operational risk without creating a second mutation authority.
 - Replaying one signed body with a mutated `X-Event-Name` header cannot create a
   second fingerprint/receipt or alter classification. A first delivery with a
   missing/mismatched header is still classified only by signed
-  `meta.event_name`, while emitting bounded anomaly telemetry.
+  `meta.event_name`.
 - Verified unsupported event and deterministic malformed/store/environment
   mismatch persist minimal ignored/quarantined receipts and return 200 without
   projection.
-- Current and bounded previous secret work during rotation; expired prior key
-  fails.
+- The configured current secret works and missing configuration fails closed;
+  bounded previous-key rotation remains a production-hardening follow-up.
 - Duplicate delivery returns 200 and stores/processes once.
 - Database failure returns 503; durable receipt with enqueue failure is recovered
   by the sweeper.

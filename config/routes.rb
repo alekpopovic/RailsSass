@@ -1,4 +1,8 @@
 Rails.application.routes.draw do
+  post "webhooks/lemon_squeezy",
+    to: "webhooks/lemon_squeezy#create",
+    as: :lemon_squeezy_webhook
+
   resource :registration, only: %i[ new create ]
   resource :session, only: %i[ new create destroy ]
   resources :active_sessions, only: %i[ index destroy ]

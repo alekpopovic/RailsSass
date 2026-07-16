@@ -739,30 +739,38 @@ exact mapping through a verified projection.
 
 #### 8.2.4 `Billing::WebhookEvent` / `billing_webhook_events`
 
-This provider-wide ledger is not an ordinary tenant resource. It currently
-stores only the shape needed for future verified receipt work:
+This provider-wide ledger is not an ordinary tenant resource. It now stores the
+shape needed for verified receipt and later projection work:
 
 - optional `organization_id`; non-null provider/environment and 64-character
   SHA-256 `fingerprint`;
 - optional normalized `provider_event_id`, unique by provider/environment when
   present. Lemon currently documents no delivery ID, so the body fingerprint
   remains mandatory and is the effective delivery idempotency key;
-- optional bounded `event_name` and `provider_resource_id`;
+- optional bounded `event_name`, `external_resource_type`, and mirrored
+  `external_resource_id`/`provider_resource_id`;
+- exact raw-byte `body_sha256` for new signed receipts plus the
+  environment-qualified `fingerprint` (legacy synthetic-row provenance is
+  documented in section 8.6);
 - `status`: `received`, `processing`, `processed`, `ignored`, `quarantined`, or
   `failed`;
-- non-null `received_at` and `verified_at`; nullable `processed_at` and
-  `provider_updated_at`; non-negative `attempt_count`; optional redacted
-  `error_code` and `test_mode`;
-- non-null screened JSON-object `snapshot` plus ordinary timestamps.
+- non-null `received_at` and `verified_at`; nullable `enqueued_at`,
+  `processing_started_at`, `processed_at`, `failed_at`, and
+  `provider_updated_at`; mirrored non-negative `attempts_count`/`attempt_count`;
+  optional bounded `error_class`, `error_message`, redacted `error_code`, and
+  `test_mode`;
+- mirrored non-null screened JSON-object `payload`/`snapshot` plus ordinary
+  timestamps.
 
 The fingerprint is globally unique. Indexes support status/receipt sweeping,
-environment-qualified provider-event identity when supplied, provider-resource
-lookup, and optional resolved organization lookup. When test mode is known it
-must match the configured environment. Snapshot storage uses an explicit
+environment-qualified body identity, environment-qualified provider-event
+identity when supplied, provider-resource lookup, enqueue recovery, and optional
+resolved organization lookup. When test mode is known it must match the
+configured environment. Payload/snapshot storage uses an explicit
 normalized-field allowlist and is limited to 64 KiB under the same
-no-body/no-secret/no-PII rule as subscriptions. No webhook route or verifier
-writes this table yet; a synthetic row cannot represent verified production
-authority merely because `verified_at` is populated.
+no-body/no-secret/no-PII rule as subscriptions. Only the isolated signed webhook
+receipt service writes verified ingress rows; a synthetic row still cannot
+represent provider authority merely because `verified_at` is populated.
 
 #### 8.2.5 `Billing::PlanChange` / `billing_plan_changes`
 
@@ -940,48 +948,30 @@ a composite tenant subscription foreign key. Once verified correlation is
 trusted, one transaction will consume the checkout locator and establish the
 subscription locator; locator rows remain retained for idempotency and history.
 
-### 8.6 Future verified-event ledger expansion
+### 8.6 Remaining verified-event projection expansion
 
-The implemented provider-wide ledger remains an inert storage primitive until
-the following signed-ingress fields, constraints, and processing semantics are
-added. It is not an ordinary tenant resource.
+Section 8.2.4 defines the implemented signed-ingress ledger. It already has the
+exact-body digest, environment-qualified fingerprint, resource identity,
+screened payload, receipt/processing/failure timestamps, attempt counters,
+idempotency indexes, and enqueue-recovery index. It is not an ordinary tenant
+resource and receipt alone is not a subscription writer.
 
-- `provider`, configured `environment`, and nullable bounded `event_name` from
-  signed `meta.event_name`; it is null only when a verified raw body cannot be
-  parsed and is never populated authoritatively from `X-Event-Name`.
-- `fingerprint`: 64-character SHA-256 hex of provider, configured environment,
-  and exact raw body. Mutable request headers are deliberately excluded.
-- nullable bounded `resource_type`, `external_resource_id`,
-  `provider_store_id`, and `test_mode`; processable states require the complete
-  supported subscription shape, while ignored/quarantined malformed envelopes
-  may retain only fields that were safely parsed.
-- nullable `checkout_attempt_token_digest`, computed immediately after signature
-  verification from allowlisted `meta.custom_data`; plaintext custom data is
-  never persisted.
-- `provider_updated_at` when present.
-- nullable `organization_id`, set only after trusted resolution.
-- `status`: `received`, `processing`, `processed`, `ignored`, `quarantined`, or
-  `failed`.
-- `verified_at`, `verification_key_version`, `received_at`, `processed_at`,
-  `attempt_count`, and redacted `error_code`.
-- optional allowlisted normalized `snapshot` JSONB, constrained to an object.
+The projection milestone may add only the normalized fields proven necessary
+for processing, notably a recorded verification-key version for bounded secret
+rotation and a first-class checkout-token digest if querying inside the screened
+payload is insufficient. Trusted provider-subscription lookup also requires the
+subscription locator described in section 8.5. Those changes remain additive,
+indexed, and constrained; they do not replace the existing receipt identity.
 
-Constraints and indexes:
+Rows that predate the ingress migration have no retained raw bytes. Their
+compatibility backfill copies the earlier environment-qualified `fingerprint`
+into `body_sha256`; only rows written by the signed receipt service carry a true
+exact-body digest. Such legacy/synthetic rows cannot acquire provider authority
+from timestamps or digest shape and must not be projected without a new verified
+delivery.
 
-- unique `fingerprint`;
-- checks for fixed fingerprint shape, enums, non-negative attempts, timestamp
-  consistency, environment/test-mode agreement when present, and complete
-  non-null supported envelope fields for processable states;
-- index `(status, received_at)` for sweepers;
-- index `(provider, environment, external_resource_id)`;
-- nullable foreign key/index on `organization_id`.
-
-Lemon Squeezy does not currently document a unique delivery ID, so the local
-content fingerprint is the receipt idempotency key. The signature is excluded
-from the fingerprint so secret rotation cannot bypass duplicate detection.
-
-Do not persist raw bodies, signatures, plaintext custom tokens, emails, customer
-names, API keys, or signed checkout/portal URLs in this ledger. After
+Do not persist raw bodies, signatures, plaintext custom tokens, emails,
+customer names, API keys, or signed checkout/portal URLs in this ledger. After
 verification, persist only the fields/digests required to locate, refetch, and
 project the provider resource.
 

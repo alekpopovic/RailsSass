@@ -25,10 +25,11 @@ persistence/history tables, exact test/live provider price mappings, a
 checkout-token provider locator, the Lemon API adapter, owner/billing checkout
 with local pending state, and the read-only `Entitlements` status/catalog
 resolver. The central `Access::Gate` composes that resolver with live product
-membership and permission state without provider I/O. The application still has
-no webhook ingress/projection or subscription writer. Paid rows remain
-synthetic outside that future verified-webhook projection; no browser, checkout
-redirect, or outbound API result can create or change one.
+membership and permission state without provider I/O. The application now has
+verified webhook ingress, durable receipt, and a read-only Solid Queue handoff,
+but still has no subscription projection writer. Paid rows remain synthetic
+outside that future verified-webhook projection; no browser, checkout redirect,
+webhook receipt, or outbound API result can create or change one.
 
 - `Billing::Subscription` is the local runtime projection of the provider
   subscription and references its `Plan` through `PlanPrice`. The future

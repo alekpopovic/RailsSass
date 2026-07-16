@@ -94,10 +94,11 @@ The status policy uses this duration from the stable local
 
 Ordinary setup, boot, and tests do not require provider credentials. The tracked
 `.env.example` exposes empty `LEMON_SQUEEZY_API_KEY`,
-`LEMON_SQUEEZY_STORE_ID`, and `LEMON_SQUEEZY_CHECKOUT_HOST` placeholders plus
-the synthetic `LEMON_SQUEEZY_ENVIRONMENT=test` selector. Keep real values in
-the ignored `.env` for local manual work or in Rails credentials/deployment
-secret storage. The client resolves explicit constructor values first, then
+`LEMON_SQUEEZY_STORE_ID`, `LEMON_SQUEEZY_CHECKOUT_HOST`, and
+`LEMON_SQUEEZY_WEBHOOK_SECRET` placeholders plus the synthetic
+`LEMON_SQUEEZY_ENVIRONMENT=test` selector. Keep real values in the ignored
+`.env` for local manual work or in Rails credentials/deployment secret storage.
+The client resolves explicit constructor values first, then
 non-blank environment variables, then the matching `lemon_squeezy` Rails
 credential entries. Missing configuration raises a redacted configuration
 error before any request.
@@ -108,6 +109,7 @@ lemon_squeezy:
   store_id: replace-in-your-encrypted-credentials
   environment: test
   checkout_host: exact-checkout-hostname
+  webhook_secret: replace-in-your-encrypted-credentials
 ```
 
 The adapter uses a fixed Lemon HTTPS origin, explicit connect/read timeouts, and
@@ -115,10 +117,31 @@ one network attempt per call. It implements strict subscription retrieval and
 one-attempt checkout creation. Checkout validates the configured environment and
 store, response identity, expiry, test mode, exact enabled variant, and an exact
 HTTPS checkout hostname. It never blindly retries the non-idempotent POST.
-Webhook delivery, subscription projection, and portal operations remain
-unimplemented. The test helper enables WebMock globally and blocks all non-local
-network traffic while allowing localhost for Rails/system tests; provider tests
-must stub every request with synthetic data.
+Signed webhook delivery is accepted at `POST /webhooks/lemon_squeezy`. The
+isolated endpoint verifies `X-Signature` against exact request bytes before JSON
+parsing, stores only a screened diagnostic envelope, and hands the receipt ID
+to Solid Queue. The current handoff job does not project subscriptions;
+provider portal operations and subscription projection remain unimplemented.
+The test helper enables WebMock globally and blocks all non-local network
+traffic while allowing localhost for Rails/system tests; provider tests must
+stub every request with synthetic data.
+
+### Manual test-mode webhook
+
+1. Set `LEMON_SQUEEZY_STORE_ID`, `LEMON_SQUEEZY_ENVIRONMENT=test`, and
+   `LEMON_SQUEEZY_WEBHOOK_SECRET` in the ignored `.env`, then restart Rails.
+2. Expose an HTTPS URL that terminates at
+   `POST /webhooks/lemon_squeezy`; never place the secret in the callback URL.
+3. Configure the Lemon test-mode webhook with the same signing secret and only
+   the `subscription_created` and `subscription_updated` events.
+4. Keep `bin/jobs` running when using the production/Solid Queue adapter.
+
+The endpoint returns `401` for a missing/invalid signature, `400` for signed
+invalid JSON, and `200` only after a durable new or duplicate receipt. An
+enqueue failure remains a durable `received` row and the production recurring
+sweeper retries the handoff. Still-`received` rows are redispatched after six
+hours so a later processor release can claim them. Receipt alone never changes
+entitlements.
 
 ### Manual test-mode checkout
 

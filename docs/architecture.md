@@ -20,8 +20,9 @@ covers the implemented customer shell, audited product-assignment surface, and
 the Analytics report/action/capacity vertical slice. Owner/billing checkout,
 environment-qualified provider-price mapping, digest-only provider correlation,
 and the local pending-return page are implemented. Signed webhook
-ingress/projection, provider portal operations, broader product workflows, and
-deployment hardening remain incremental milestones.
+ingress, durable receipt, and Solid Queue handoff are also implemented;
+subscription projection, provider portal operations, broader product workflows,
+and deployment hardening remain incremental milestones.
 
 Related contracts:
 
@@ -156,9 +157,9 @@ Keep conventional top-level Active Record aggregate names where they improve
 Rails clarity (`User`, `Organization`, `Plan`, `ProductMembership`). Namespace
 orchestration and provider-specific code by owning module.
 
-Implemented and planned layout (checkout mapping/locator/command are present;
-webhook delivery, projection jobs, portal, and broader product modules remain
-planned):
+Implemented and planned layout (checkout mapping/locator/command plus webhook
+receipt/handoff are present; subscription projection, portal, and broader
+product modules remain planned):
 
 ```text
 app/
@@ -264,7 +265,11 @@ Authentication, password reset, verified-and-authenticated onboarding at
 `POST /organizations`, the internal `/admin` namespace, the root landing page,
 `/up`, readiness, and `POST /webhooks/lemon_squeezy` are outside ordinary tenant
 routes. Global application controllers still authenticate and authorize where
-appropriate. `Organizations::Create`, which is owned by the Tenancy module
+appropriate. The webhook action is the narrow exception: it inherits directly
+from `ActionController::Metal`, reads no Rails parameters/session/tenant state,
+and delegates exact-body signature verification and durable receipt to Billing.
+This prevents normal controller instrumentation from parsing JSON before HMAC
+verification. `Organizations::Create`, which is owned by the Tenancy module
 despite its public namespace, atomically inserts the active organization and
 first active owner membership. It sets
 `Current.organization` and `Current.membership` only after the
@@ -459,6 +464,15 @@ Solid Queue handles webhook projection, receipt sweeping, mail delivery, and
 operational reconciliation. The webhook HTTP endpoint performs bounded
 verification and durable receipt, then acknowledges quickly. Business
 processing occurs asynchronously.
+
+The current ingress milestone enqueues only the global event ID and records
+`enqueued_at`. Its handoff job intentionally leaves the event in `received` and
+cannot mutate a subscription. The periodic sweeper retries receipts whose
+initial enqueue failed and redispatches still-`received` handoffs after six
+hours, so receipts accepted before the processor release are not stranded. A
+later projection worker will claim the verified row idempotently, establish
+tenant context after provider-locator resolution, and own all subscription
+mutation.
 
 Job rules:
 
