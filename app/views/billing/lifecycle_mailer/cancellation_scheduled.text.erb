@@ -1,0 +1,9 @@
+Hello <%= @recipient.name %>,
+
+The <%= @plan.name %> subscription for <%= @organization.name %> is scheduled to end.
+<% if @subscription.ends_at.present? %>
+Paid access is scheduled to end at <%= l @subscription.ends_at, format: :long %>.
+<% end %>
+
+Review billing:
+<%= @billing_url %>

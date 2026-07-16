@@ -1,0 +1,7 @@
+<h1>Subscription expired</h1>
+
+<p>Hello <%= @recipient.name %>,</p>
+
+<p>The <strong><%= @plan.name %></strong> subscription for <%= @organization.name %> has expired. Paid entitlements are no longer active.</p>
+
+<p><%= link_to "Review billing", @billing_url %></p>

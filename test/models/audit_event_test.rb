@@ -15,6 +15,8 @@ class AuditEventTest < ActiveSupport::TestCase
 
     assert_equal @organization, event.organization
     assert_equal @owner, event.actor_user
+    assert_equal @owner, event.actor
+    assert_equal @owner.id, event.actor_id
     assert_nil system_event.actor_user
     assert_includes @organization.audit_events, event
     assert_includes @owner.audit_events_as_actor, event
@@ -47,6 +49,14 @@ class AuditEventTest < ActiveSupport::TestCase
   test "database requires metadata to be a JSON object" do
     error = assert_raises(ActiveRecord::StatementInvalid) do
       AuditEvent.insert_all!([ raw_attributes(metadata: [ "not", "an", "object" ]) ])
+    end
+
+    assert_kind_of PG::CheckViolation, error.cause
+  end
+
+  test "database bounds metadata size" do
+    error = assert_raises(ActiveRecord::StatementInvalid) do
+      AuditEvent.insert_all!([ raw_attributes(metadata: { "value" => "x" * 20_000 }) ])
     end
 
     assert_kind_of PG::CheckViolation, error.cause
@@ -89,7 +99,7 @@ class AuditEventTest < ActiveSupport::TestCase
         subject_type: "OrganizationInvitation",
         subject_id: 123,
         metadata: { "organization_role" => "member" },
-        occurred_at: Time.current
+        created_at: Time.current
       }.merge(overrides))
     end
 
@@ -103,7 +113,7 @@ class AuditEventTest < ActiveSupport::TestCase
         request_id: nil,
         job_id: nil,
         metadata: {},
-        occurred_at: Time.current
+        created_at: Time.current
       }.merge(overrides)
     end
 end

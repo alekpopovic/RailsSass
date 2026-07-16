@@ -1,8 +1,10 @@
 require "test_helper"
 require_relative "../../../support/billing_test_helper"
+require_relative "../../../support/audit_event_test_helper"
 
 class Billing::Checkouts::ConcurrencyTest < ActiveSupport::TestCase
   include BillingTestHelper
+  include AuditEventTestHelper
 
   self.use_transactional_tests = false
 
@@ -101,6 +103,7 @@ class Billing::Checkouts::ConcurrencyTest < ActiveSupport::TestCase
 
   private
     def cleanup_records
+      clear_test_audit_events!
       ApplicationRecord.transaction do
         Billing::ProviderLocator.where(organization_id: @organization&.id).delete_all
         Billing::CheckoutAttempt.where(organization_id: @organization&.id).delete_all

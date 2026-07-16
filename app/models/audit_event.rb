@@ -21,8 +21,12 @@ class AuditEvent < ApplicationRecord
   validates :request_id, :job_id,
     length: { maximum: CORRELATION_ID_MAX_LENGTH },
     allow_nil: true
-  validates :occurred_at, presence: true
+  validates :created_at, presence: true
   validate :metadata_is_an_object
+
+  alias_method :actor, :actor_user
+  alias_method :actor=, :actor_user=
+  alias_attribute :actor_id, :actor_user_id
 
   def readonly?
     persisted? || super

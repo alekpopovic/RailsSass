@@ -10,6 +10,9 @@ class Billing::ProcessWebhookJob < ApplicationJob
     attempts: 5
 
   def perform(webhook_event_id)
-    Billing::Webhooks::Processor.call(webhook_event_id: webhook_event_id)
+    Billing::Webhooks::Processor.call(
+      webhook_event_id: webhook_event_id,
+      job_id: job_id
+    )
   end
 end

@@ -70,7 +70,7 @@ class Billing::SweepWebhookEventsJobTest < ActiveJob::TestCase
     assert_predicate event, :status_received?
   end
 
-  test "processing job delegates only the durable global receipt id to the processor" do
+  test "processing job delegates the durable receipt id and its actual job id" do
     now = Time.current
     event = create_billing_webhook_event(
       received_at: now - 1.second,
@@ -90,13 +90,14 @@ class Billing::SweepWebhookEventsJobTest < ActiveJob::TestCase
 
     original_call = Billing::Webhooks::Processor.method(:call)
     Billing::Webhooks::Processor.define_singleton_method(:call, processor)
+    job = Billing::ProcessWebhookJob.new(event.id)
     begin
-      Billing::ProcessWebhookJob.perform_now(event.id)
+      job.perform_now
     ensure
       Billing::Webhooks::Processor.define_singleton_method(:call, original_call)
     end
 
-    assert_equal [ { webhook_event_id: event.id } ], calls
+    assert_equal [ { webhook_event_id: event.id, job_id: job.job_id } ], calls
   end
 
   test "sweeper redispatches abandoned processing and recoverable failed events" do

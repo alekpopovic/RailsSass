@@ -36,6 +36,10 @@ class Organization < ApplicationRecord
     class_name: "Billing::PlanChange",
     dependent: :restrict_with_exception,
     inverse_of: :organization
+  has_many :billing_lifecycle_deliveries,
+    class_name: "Billing::LifecycleDelivery",
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
   has_many :billing_webhook_events,
     class_name: "Billing::WebhookEvent",
     dependent: :restrict_with_exception,

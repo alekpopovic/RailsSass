@@ -434,6 +434,13 @@ data model, not an unresolved external-sink choice. Ordinary application code
 cannot update either ledger; retention paths, if approved, are separately
 authorized and tested.
 
+Tenant audit metadata is a typed allowlist and is bounded at the database; it
+does not accept email addresses, passwords, raw/signed tokens, secrets, API
+keys, card data, signed URLs, or complete provider payloads. The billing
+lifecycle outbox stores only relational IDs, a bounded kind/state, timestamps,
+and redacted reason codes. Each recipient gets a separate message and the
+encoded mail body is filtered from Action Mailer instrumentation.
+
 ## 14. Availability and abuse controls
 
 - Run Solid Queue in a separate production worker process and monitor heartbeat,

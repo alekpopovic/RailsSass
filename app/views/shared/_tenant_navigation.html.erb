@@ -26,6 +26,12 @@
         class: "whitespace-nowrap font-semibold text-slate-700 hover:text-slate-950" %>
     <% end %>
 
+    <% if policy(AuditEvent).index? %>
+      <%= link_to "Audit log",
+        organization_audit_events_path(organization_slug: Current.organization.slug),
+        class: "whitespace-nowrap font-semibold text-slate-700 hover:text-slate-950" %>
+    <% end %>
+
     <% if policy(Current.organization).billing? %>
       <%= link_to "Billing",
         organization_billing_path(organization_slug: Current.organization.slug),

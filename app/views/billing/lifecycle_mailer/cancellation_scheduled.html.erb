@@ -1,0 +1,11 @@
+<h1>Subscription cancellation scheduled</h1>
+
+<p>Hello <%= @recipient.name %>,</p>
+
+<p>The <strong><%= @plan.name %></strong> subscription for <%= @organization.name %> is scheduled to end.</p>
+
+<% if @subscription.ends_at.present? %>
+  <p>Paid access is scheduled to end at <%= l @subscription.ends_at, format: :long %>.</p>
+<% end %>
+
+<p><%= link_to "Review billing", @billing_url %></p>

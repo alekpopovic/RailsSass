@@ -137,6 +137,18 @@ module Billing
               token_digest: token_digest,
               status: :unresolved
             )
+            AuditEvents::Record.call(
+              organization: Current.organization,
+              actor_user: @user,
+              action: "billing.checkout.started",
+              subject: attempt,
+              metadata: {
+                plan_price_id: plan_price.id,
+                plan_key: plan_price.plan.key,
+                environment: attempt.environment,
+                test_mode: attempt.test_mode
+              }
+            )
           end
 
           [ attempt, raw_token ]

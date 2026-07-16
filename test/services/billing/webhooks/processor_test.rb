@@ -3,6 +3,7 @@ require_relative "../../../support/billing_test_helper"
 require_relative "../../../support/product_rbac_test_helper"
 
 class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
+  include ActiveJob::TestHelper
   include BillingTestHelper
   include ProductRbacTestHelper
 
@@ -17,6 +18,7 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
   end
 
   setup do
+    clear_enqueued_jobs
     @organization, @membership = create_billing_tenant(prefix: "webhook-processor")
     @plan = create_test_plan
     @plan_price = create_test_plan_price(
@@ -48,18 +50,24 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
   end
 
   teardown do
+    clear_enqueued_jobs
     Current.reset
   end
 
   test "created event consumes verified checkout authority and atomically creates the local projection" do
     event = created_event
     client = fake_client(snapshot: snapshot)
+    job_id = "billing-job-#{SecureRandom.hex(6)}"
 
     assert_difference -> { Billing::Customer.count }, 1 do
       assert_difference -> { Billing::Subscription.count }, 1 do
-        result = process(event, client: client)
+        assert_difference -> {
+          @organization.audit_events.where(action: "billing.subscription.created").count
+        }, 1 do
+          result = process(event, client: client, job_id: job_id)
 
-        assert_predicate result, :processed?
+          assert_predicate result, :processed?
+        end
       end
     end
 
@@ -79,6 +87,36 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     assert_equal subscription, @locator.billing_subscription
     assert_equal @provider_subscription_id, @locator.provider_subscription_id
     assert_equal [ @provider_subscription_id ], client.calls
+    audit_event = @organization.audit_events.find_by!(
+      action: "billing.subscription.created",
+      subject_type: "Billing::Subscription",
+      subject_id: subscription.id
+    )
+    assert_nil audit_event.actor_user
+    assert_equal job_id, audit_event.job_id
+    assert_equal(
+      {
+        "plan_price_id" => @plan_price.id,
+        "plan_key" => @plan.key,
+        "to_status" => "active",
+        "environment" => "test",
+        "test_mode" => true,
+        "webhook_event_id" => event.id
+      },
+      audit_event.metadata
+    )
+    delivery = @organization.billing_lifecycle_deliveries.find_by!(
+      kind: "subscription_activated",
+      source_webhook_event: event,
+      recipient_user: @membership.user
+    )
+    assert_equal audit_event, delivery.audit_event
+    assert_equal subscription, delivery.billing_subscription
+    assert_enqueued_with(
+      job: Billing::DeliverLifecycleEmailJob,
+      args: [ @organization.id, delivery.id ],
+      queue: "mailers"
+    )
   end
 
   test "duplicate jobs and equal provider snapshots are idempotent" do
@@ -87,20 +125,46 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     process(first_event, client: first_client)
     subscription = @organization.billing_subscriptions.find_by!(current: true)
     original_lock_version = subscription.lock_version
+    original_delivery_count = @organization.billing_lifecycle_deliveries.count
 
-    duplicate_job_result = process(first_event, client: fake_client(snapshot: snapshot))
-    assert_equal :noop, duplicate_job_result.status
+    assert_no_difference -> { @organization.billing_lifecycle_deliveries.count } do
+      assert_no_difference -> { @organization.audit_events.count } do
+        duplicate_job_result = process(first_event, client: fake_client(snapshot: snapshot))
+        assert_equal :noop, duplicate_job_result.status
+      end
+    end
 
     second_event = created_event
     assert_no_difference -> { Billing::Subscription.count } do
       assert_no_difference -> { Billing::Customer.count } do
-        result = process(second_event, client: fake_client(snapshot: snapshot))
-        assert_predicate result, :processed?
+        assert_no_difference -> { @organization.billing_lifecycle_deliveries.count } do
+          assert_no_difference -> { @organization.audit_events.count } do
+            result = process(second_event, client: fake_client(snapshot: snapshot))
+            assert_predicate result, :processed?
+          end
+        end
       end
     end
 
+    assert_equal 1, original_delivery_count
     assert_predicate second_event.reload, :status_processed?
     assert_equal original_lock_version, subscription.reload.lock_version
+  end
+
+  test "an audit persistence failure rolls back a created subscription projection" do
+    event = created_event
+    invalid_job_id = "j" * (AuditEvent::CORRELATION_ID_MAX_LENGTH + 1)
+
+    assert_no_difference -> { Billing::Subscription.count } do
+      assert_no_difference -> { Billing::Customer.count } do
+        result = process(event, client: fake_client(snapshot: snapshot), job_id: invalid_job_id)
+        assert_equal :failed, result.status
+      end
+    end
+
+    assert_failed event, "projection_conflict"
+    assert_predicate @attempt.reload, :status_ready?
+    assert_predicate @locator.reload, :status_unresolved?
   end
 
   test "a row without signed-ingress provenance cannot be claimed" do
@@ -272,19 +336,34 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     subscription.reload
     assert_predicate subscription, :status_past_due?
     assert_equal past_due_at.to_i, subscription.past_due_started_at.to_i
+    past_due_audit = billing_audit_for(past_due_event, action: "billing.subscription.updated")
+    assert_nil past_due_audit.actor_user
+    assert_equal "active", past_due_audit.metadata.fetch("from_status")
+    assert_equal "past_due", past_due_audit.metadata.fetch("to_status")
+    payment_delivery = lifecycle_delivery_for(past_due_event, kind: "payment_problem")
+    assert_equal past_due_audit, payment_delivery.audit_event
 
     later_past_due_at = past_due_at + 10.seconds
+    later_past_due_event = update_event
     process(
-      update_event,
+      later_past_due_event,
       client: fake_client(snapshot: snapshot(status: "past_due", updated_at: later_past_due_at)),
       now: later_past_due_at + 1.second
     )
     assert_equal past_due_at.to_i, subscription.reload.past_due_started_at.to_i
+    renewal_audit = billing_audit_for(
+      later_past_due_event,
+      action: "billing.subscription.updated"
+    )
+    assert_equal "past_due", renewal_audit.metadata.fetch("from_status")
+    assert_equal "past_due", renewal_audit.metadata.fetch("to_status")
+    assert_nil lifecycle_delivery_for(later_past_due_event)
 
     cancelled_at = later_past_due_at + 10.seconds
     access_ends_at = cancelled_at + 1.day
+    cancelled_event = update_event
     process(
-      update_event,
+      cancelled_event,
       client: fake_client(
         snapshot: snapshot(status: "cancelled", updated_at: cancelled_at, ends_at: access_ends_at)
       ),
@@ -298,6 +377,14 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
       subscription: subscription,
       now: cancelled_at + 1.hour
     ).call, :allowed?
+    cancelled_audit = billing_audit_for(
+      cancelled_event,
+      action: "billing.subscription.cancelled"
+    )
+    assert_equal "past_due", cancelled_audit.metadata.fetch("from_status")
+    assert_equal "cancelled", cancelled_audit.metadata.fetch("to_status")
+    assert_equal cancelled_audit,
+      lifecycle_delivery_for(cancelled_event, kind: "cancellation_scheduled").audit_event
 
     stale_event = update_event
     stale_snapshot = snapshot(status: "active", updated_at: later_past_due_at + 1.second)
@@ -309,6 +396,7 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     assert_predicate stale_event.reload, :status_ignored?
     assert_equal "stale_provider_snapshot", stale_event.payload.fetch("reason_code")
     assert_predicate subscription.reload, :status_cancelled?
+    assert_nil billing_audit_for(stale_event)
 
     expired_at = cancelled_at + 20.seconds
     expired_event = update_event
@@ -321,6 +409,11 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     )
     assert_predicate subscription.reload, :status_expired?
     assert_predicate expired_event.reload, :status_processed?
+    expired_audit = billing_audit_for(expired_event, action: "billing.subscription.expired")
+    assert_equal "cancelled", expired_audit.metadata.fetch("from_status")
+    assert_equal "expired", expired_audit.metadata.fetch("to_status")
+    assert_equal expired_audit,
+      lifecycle_delivery_for(expired_event, kind: "subscription_expired").audit_event
   end
 
   test "unknown variant and unknown status advance last seen and deny paid access" do
@@ -342,6 +435,8 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     assert_predicate subscription, :sync_state_mapping_error?
     assert_equal unknown_variant_at.to_i, subscription.last_seen_provider_updated_at.to_i
     assert_failed variant_event, "unknown_provider_variant"
+    variant_audit = billing_audit_for(variant_event, action: "billing.subscription.updated")
+    assert_equal "unknown_provider_variant", variant_audit.metadata.fetch("reason_code")
     assert_denied_for_invalid_sync subscription
 
     unknown_status_at = unknown_variant_at + 10.seconds
@@ -356,6 +451,10 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     assert_predicate subscription, :sync_state_invalid?
     assert_equal unknown_status_at.to_i, subscription.provider_updated_at.to_i
     assert_failed status_event, "unknown_subscription_status"
+    status_audit = billing_audit_for(status_event, action: "billing.subscription.updated")
+    assert_equal "active", status_audit.metadata.fetch("from_status")
+    assert_equal "unknown", status_audit.metadata.fetch("to_status")
+    assert_equal "unknown_subscription_status", status_audit.metadata.fetch("reason_code")
     assert_denied_for_invalid_sync subscription
   end
 
@@ -373,6 +472,8 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
 
     assert_failed event, "provider_timestamp_conflict"
     assert_predicate subscription.reload, :sync_state_invalid?
+    conflict_audit = billing_audit_for(event, action: "billing.subscription.updated")
+    assert_equal "provider_timestamp_conflict", conflict_audit.metadata.fetch("reason_code")
   end
 
   test "a monotonic subscription update applies its matching open plan change atomically" do
@@ -386,6 +487,7 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     )
     updated_at = @initial_updated_at + 10.seconds
     event = update_event
+    job_id = "plan-change-job-#{SecureRandom.hex(6)}"
 
     result = process(
       event,
@@ -395,7 +497,8 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
           updated_at: updated_at
         )
       ),
-      now: updated_at + 1.second
+      now: updated_at + 1.second,
+      job_id: job_id
     )
 
     assert_predicate result, :processed?
@@ -403,10 +506,30 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     assert_predicate plan_change.reload, :status_applied?
     assert_equal updated_at.to_i, plan_change.provider_updated_at.to_i
     assert_equal (updated_at + 1.second).to_i, plan_change.completed_at.to_i
+    applied_audit = billing_audit_for(event, action: "billing.plan_change.applied")
+    assert_nil applied_audit.actor_user
+    assert_equal job_id, applied_audit.job_id
+    assert_equal(
+      {
+        "from_plan_price_id" => @plan_price.id,
+        "to_plan_price_id" => target_price.id,
+        "from_plan_key" => @plan.key,
+        "to_plan_key" => target_price.plan.key,
+        "environment" => "test",
+        "test_mode" => true,
+        "webhook_event_id" => event.id
+      },
+      applied_audit.metadata
+    )
+    plan_change_delivery = lifecycle_delivery_for(event, kind: "plan_change_completed")
+    assert_equal applied_audit, plan_change_delivery.audit_event
+    assert_equal subscription, plan_change_delivery.billing_subscription
 
     completed_at = plan_change.completed_at
-    duplicate = process(event, client: fake_client(snapshot: snapshot))
-    assert_equal :noop, duplicate.status
+    assert_no_difference -> { @organization.audit_events.count } do
+      duplicate = process(event, client: fake_client(snapshot: snapshot))
+      assert_equal :noop, duplicate.status
+    end
     assert_equal completed_at, plan_change.reload.completed_at
   end
 
@@ -417,8 +540,9 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     plan_change = create_plan_change(subscription: subscription, to_plan_price: target_price)
     updated_at = @initial_updated_at + 10.seconds
 
+    event = update_event
     process(
-      update_event,
+      event,
       client: fake_client(snapshot: snapshot(updated_at: updated_at)),
       now: updated_at + 1.second
     )
@@ -436,8 +560,9 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     plan_change = create_plan_change(subscription: subscription, to_plan_price: target_price)
     updated_at = @initial_updated_at + 10.seconds
 
+    event = update_event
     process(
-      update_event,
+      event,
       client: fake_client(
         snapshot: snapshot(
           provider_variant_id: replacement_mapping.provider_variant_id,
@@ -451,6 +576,11 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     assert_predicate plan_change.reload, :status_superseded?
     assert_equal updated_at.to_i, plan_change.provider_updated_at.to_i
     assert plan_change.completed_at
+    failed_audit = billing_audit_for(event, action: "billing.plan_change.failed")
+    assert_nil failed_audit.actor_user
+    assert_equal "superseded_by_provider_variant",
+      failed_audit.metadata.fetch("reason_code")
+    assert_equal target_price.id, failed_audit.metadata.fetch("to_plan_price_id")
   end
 
   test "a verified provider downgrade preserves over-limit product data and assignments" do
@@ -766,12 +896,26 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
       )
     end
 
-    def process(event, client:, now: @processing_now)
+    def process(event, client:, now: @processing_now, job_id: nil)
       Billing::Webhooks::Processor.call(
         webhook_event_id: event.id,
         client: client,
-        now: now
+        now: now,
+        job_id: job_id
       )
+    end
+
+    def billing_audit_for(event, action: nil)
+      scope = @organization.audit_events
+      scope = scope.where(action: action) if action
+      scope.detect { |audit_event| audit_event.metadata["webhook_event_id"] == event.id }
+    end
+
+    def lifecycle_delivery_for(event, kind: nil)
+      scope = @organization.billing_lifecycle_deliveries
+        .where(source_webhook_event_id: event.id)
+      scope = scope.where(kind: kind) if kind
+      scope.first
     end
 
     def fake_client(snapshot: nil, error: nil)

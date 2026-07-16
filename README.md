@@ -14,8 +14,11 @@ receipt, Solid Queue processing, and the fail-closed local subscription
 projection are implemented. Owner/billing subscription management now fetches
 fresh customer-portal links, records idempotent plan-change commands, performs
 product-owned limit preflight, and waits for verified webhook confirmation
-before changing the local effective plan. Operational reconciliation and
-production hardening remain open milestones.
+before changing the local effective plan. Sensitive tenant transitions are
+recorded in an immutable audit log with an owner/admin viewer. Verified billing
+transitions create deduplicated per-recipient lifecycle email outbox rows for
+active owner/billing contacts. Operational reconciliation and production
+hardening remain open milestones.
 The target behavior and delivery sequence are in
 [`docs/`](docs/), beginning with the
 [product requirements](docs/product_requirements.md),
@@ -93,6 +96,9 @@ according to server-side policy. Product and Analytics actions additionally
 require local entitlement and product permissions. Only active owner/billing
 members receive checkout controls for eligible locally mapped prices. The
 switcher appears when the account has multiple active locator candidates.
+Organization owners/admins can inspect the read-only audit log from the same
+navigation; lifecycle billing email continues asynchronously through Solid
+Queue and never changes subscription access.
 
 If Rails was already running when MailCatcher or its SMTP settings were added,
 restart `bin/dev` or recreate the `app` container so Rails reloads its

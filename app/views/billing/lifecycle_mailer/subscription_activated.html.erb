@@ -1,0 +1,7 @@
+<h1>Subscription activated</h1>
+
+<p>Hello <%= @recipient.name %>,</p>
+
+<p><%= @organization.name %> now has an active <strong><%= @plan.name %></strong> subscription.</p>
+
+<p><%= link_to "Review billing", @billing_url %></p>

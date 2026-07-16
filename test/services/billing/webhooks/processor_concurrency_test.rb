@@ -1,9 +1,11 @@
 require "test_helper"
 require "timeout"
 require_relative "../../../support/billing_test_helper"
+require_relative "../../../support/audit_event_test_helper"
 
 class Billing::Webhooks::ProcessorConcurrencyTest < ActiveSupport::TestCase
   include BillingTestHelper
+  include AuditEventTestHelper
 
   self.use_transactional_tests = false
 
@@ -188,6 +190,7 @@ class Billing::Webhooks::ProcessorConcurrencyTest < ActiveSupport::TestCase
           "DISABLE TRIGGER billing_subscription_history_is_preserved"
       )
       user_ids = OrganizationMembership.where(organization_id: @organization.id).pluck(:user_id)
+      clear_test_audit_events!
       ApplicationRecord.transaction do
         Billing::ProviderLocator.where(organization_id: @organization.id).delete_all
         Billing::WebhookEvent.where(id: @event&.id).delete_all

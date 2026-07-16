@@ -1,5 +1,5 @@
 class Current < ActiveSupport::CurrentAttributes
-  attribute :session, :organization, :membership
+  attribute :session, :organization, :membership, :request_id, :job_id
   delegate :user, to: :session, allow_nil: true
 
   class << self

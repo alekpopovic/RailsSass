@@ -1,6 +1,7 @@
 class AuditEvents::Record
-  SENSITIVE_METADATA_KEY_PATTERN = /(?:email|token)/i
+  SENSITIVE_METADATA_KEY_PATTERN = /(?:email|token|password|secret|api_key|payload|signed_url|card)/i
   UUID_PATTERN = /\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/i
+  REASON_CODE_PATTERN = /\A[a-z][a-z0-9_]*\z/
   METADATA_VALIDATORS = {
     "organization_role" => ->(value) { OrganizationMembership.roles.key?(value.to_s) },
     "from_role" => ->(value) { OrganizationMembership.roles.key?(value.to_s) },
@@ -8,6 +9,18 @@ class AuditEvents::Record
     "membership_id" => ->(value) { value.is_a?(Integer) && value.positive? },
     "product_key" => ->(value) { value.to_s.match?(Product::KEY_PATTERN) },
     "product_role_key" => ->(value) { value.to_s.match?(ProductRole::KEY_PATTERN) },
+    "plan_price_id" => ->(value) { value.is_a?(Integer) && value.positive? },
+    "from_plan_price_id" => ->(value) { value.is_a?(Integer) && value.positive? },
+    "to_plan_price_id" => ->(value) { value.is_a?(Integer) && value.positive? },
+    "plan_key" => ->(value) { value.to_s.match?(Plan::KEY_PATTERN) },
+    "from_plan_key" => ->(value) { value.to_s.match?(Plan::KEY_PATTERN) },
+    "to_plan_key" => ->(value) { value.to_s.match?(Plan::KEY_PATTERN) },
+    "from_status" => ->(value) { value.nil? || Billing::Subscription.statuses.key?(value.to_s) },
+    "to_status" => ->(value) { Billing::Subscription.statuses.key?(value.to_s) },
+    "environment" => ->(value) { value.to_s.in?(Billing::Subscription.environments.keys) },
+    "test_mode" => ->(value) { value.in?([ true, false ]) },
+    "reason_code" => ->(value) { value.to_s.match?(REASON_CODE_PATTERN) },
+    "webhook_event_id" => ->(value) { value.is_a?(Integer) && value.positive? },
     "source" => ->(value) { value == "organization_invitation" },
     "public_id" => ->(value) { value.to_s.match?(UUID_PATTERN) }
   }.freeze
@@ -23,8 +36,8 @@ class AuditEvents::Record
     actor_user:,
     action:,
     subject:,
-    request_id: nil,
-    job_id: nil,
+    request_id: Current.request_id,
+    job_id: Current.job_id,
     metadata: {}
   )
     @organization = organization
@@ -47,7 +60,7 @@ class AuditEvents::Record
       request_id: @request_id,
       job_id: @job_id,
       metadata: normalized_metadata,
-      occurred_at: Time.current
+      created_at: Time.current
     )
   end
 

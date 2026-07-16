@@ -1,0 +1,9 @@
+<h1>Payment problem</h1>
+
+<p>Hello <%= @recipient.name %>,</p>
+
+<p>There is a payment problem with the <strong><%= @plan.name %></strong> subscription for <%= @organization.name %>.</p>
+
+<p>Please review billing details to avoid an interruption in paid access.</p>
+
+<p><%= link_to "Review billing", @billing_url %></p>

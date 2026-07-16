@@ -576,6 +576,32 @@ events normally converge on the newest provider state. Rules:
   processor's bounded local clock-skew allowance is rejected rather than
   extending access.
 
+### 7.1 Audit and lifecycle notification outbox
+
+Every accepted semantic subscription transition, including renewal-date-only
+updates, is recorded in the immutable tenant audit log inside the projection
+transaction. A fail-closed projection change such as an unknown variant,
+unknown status, invalid status timestamp, or provider-timestamp conflict is
+also audited with a safe reason code. Provider-driven rows use a null actor and
+retain only local plan/status identifiers, the verified webhook row ID,
+environment/test-mode markers, and the processing job ID. Stale, duplicate,
+and truly equal-semantic snapshots create neither audit nor notification rows;
+fail-closed errors do not send lifecycle email.
+
+Customer lifecycle email uses `Billing::LifecycleDelivery`, a primary-database
+outbox created in that same transaction. One row is created for each currently
+active, verified, enabled owner or billing member. The delivery job revalidates
+that eligibility before sending, and otherwise marks the row discarded. A
+unique source-event/kind/recipient key prevents webhook retry from producing
+the same lifecycle message twice. Delivery jobs lock and lease a row, use a
+stable message ID, cap retries, store only redacted failure codes, and are
+recovered by a per-organization sweeper when queue handoff or a worker fails.
+
+The delivery guarantee is at-least-once: a mail server can accept a message
+immediately before a worker crash. The stable message ID helps downstream
+deduplication, but true exactly-once email requires provider-side idempotency.
+No email path can change subscription or entitlement state.
+
 ## 8. Subscription access matrix
 
 This is the single canonical MVP paid-subscription predicate. Other documents
@@ -716,6 +742,9 @@ application IDs, not raw PII in logs.
   checkout creation.
 - A periodic Solid Queue job re-enqueues aged `received` and recoverable
   `processing`/`failed` events.
+- A separate periodic job enumerates organization roots and re-enqueues due or
+  abandoned lifecycle-delivery rows only through
+  `Current.organization.billing_lifecycle_deliveries`.
 - Alerts fire on oldest-event age, retry exhaustion, quarantine, and subscription
   sync conflicts.
 - A read-only reconciliation job may compare current provider/local state and

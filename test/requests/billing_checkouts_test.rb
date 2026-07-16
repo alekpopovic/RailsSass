@@ -114,6 +114,33 @@ class BillingCheckoutsRequestTest < ActionDispatch::IntegrationTest
     ), text: "View pending checkout"
   end
 
+  test "checkout audit captures the current request ID without leaking the previous request" do
+    first_request_id = "checkout-request-first-#{SecureRandom.hex(5)}"
+    second_request_id = "checkout-request-second-#{SecureRandom.hex(5)}"
+    stub_success
+
+    post_with_client(headers: { "X-Request-Id" => first_request_id })
+
+    first_event = @organization.audit_events
+      .where(action: "billing.checkout.started")
+      .order(:id)
+      .last
+    assert_equal first_request_id, first_event.request_id
+
+    @organization.billing_checkout_attempts
+      .find(first_event.subject_id)
+      .update!(status: :expired, completed_at: Time.current)
+    stub_success(checkout_id: "9e8b546c-c561-4a2c-a586-40c18bb2a195")
+
+    post_with_client(headers: { "X-Request-Id" => second_request_id })
+
+    events = @organization.audit_events
+      .where(action: "billing.checkout.started")
+      .order(:id)
+      .last(2)
+    assert_equal [ first_request_id, second_request_id ], events.map(&:request_id)
+  end
+
   test "provider return page remains pending and never changes subscription or entitlement" do
     stub_success
     assert_no_difference -> { Billing::Subscription.count } do
@@ -235,10 +262,11 @@ class BillingCheckoutsRequestTest < ActionDispatch::IntegrationTest
   end
 
   private
-    def post_with_client
+    def post_with_client(headers: {})
       with_lemon_configuration do
         post organization_billing_checkouts_path(organization_slug: @organization.slug),
-          params: { plan_price_id: @plan_price.id }
+          params: { plan_price_id: @plan_price.id },
+          headers: headers
       end
     end
 

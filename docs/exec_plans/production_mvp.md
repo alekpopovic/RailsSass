@@ -1180,6 +1180,12 @@ Scope:
   never guess an audit tenant.
 - Enforce create/read-only application behavior, allowlisted metadata, actor/
   organization correlation, and reason-code errors.
+- Provide a tenant-scoped, read-only owner/admin viewer. Global catalog changes
+  remain exclusively in the separate `Platform::AuditEvent` ledger.
+- Create verified-webhook lifecycle email through a durable per-recipient
+  primary-database outbox, unique source-event deduplication, bounded delivery
+  retries, and a tenant-scoped recovery sweeper. Invitation delivery keeps its
+  existing one-time raw-token boundary.
 - Complete log/parameter/header filtering and automated capture tests.
 - After the required legal/privacy approval, add the dedicated 180-day audit
   retention job; it is the only `AuditEvent` application delete path and is
@@ -1189,8 +1195,11 @@ Scope:
   evidence and tenant/provider idempotency keys as required. Configure 30-day
   request-log retention; backup retention remains PR-19 infrastructure scope.
 
-Migrations: focused additive audit indexes/constraints only if PR-06 evidence
-shows they are needed; the sink choice is already fixed to PostgreSQL.
+Migrations: add the tenant lifecycle-delivery outbox with composite tenant
+foreign keys, deduplication and lifecycle constraints; add the bounded audit
+metadata constraint and the backward-compatible `created_at` dual-write bridge.
+The deprecated `occurred_at` column is removed only in a later contract release
+after old writers are retired. The sink choice remains PostgreSQL.
 
 Tests: event coverage, actor/system shapes, update prohibition, metadata/log
 redaction, tenant scope, per-record retention boundaries/idempotency, active

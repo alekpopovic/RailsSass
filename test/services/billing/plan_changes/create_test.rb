@@ -51,6 +51,7 @@ class Billing::PlanChanges::CreateTest < ActiveSupport::TestCase
       organization: @organization,
       membership: @owner_membership
     )
+    Current.request_id = "plan-change-request-#{SecureRandom.hex(6)}"
 
     @source_plan = create_test_plan(name: "Source plan")
     @source_price, = create_mapped_price(plan: @source_plan)
@@ -92,6 +93,17 @@ class Billing::PlanChanges::CreateTest < ActiveSupport::TestCase
     assert_equal @source_price, @subscription.reload.plan_price
     assert_equal @source_plan, @organization.effective_plan
     assert_equal [ expected_provider_call ], client.calls
+    audit_event = @organization.audit_events.find_by!(
+      action: "billing.plan_change.requested",
+      subject_type: "Billing::PlanChange",
+      subject_id: result.plan_change.id
+    )
+    assert_equal @owner, audit_event.actor_user
+    assert_equal Current.request_id, audit_event.request_id
+    assert_equal(
+      expected_audit_metadata,
+      audit_event.metadata
+    )
   end
 
   test "an active billing member can request a plan change" do
@@ -155,6 +167,8 @@ class Billing::PlanChanges::CreateTest < ActiveSupport::TestCase
     assert_predicate duplicate, :duplicate?
     assert_equal first.plan_change, duplicate.plan_change
     assert_equal 1, @organization.billing_plan_changes.count
+    assert_equal 1,
+      @organization.audit_events.where(action: "billing.plan_change.requested").count
     assert_equal [ expected_provider_call ], client.calls
     assert_equal @source_price, @subscription.reload.plan_price
   end
@@ -197,7 +211,26 @@ class Billing::PlanChanges::CreateTest < ActiveSupport::TestCase
     assert_predicate error.plan_change.reload, :status_failed?
     assert_equal "provider_rejected", error.plan_change.failure_code
     assert error.plan_change.completed_at
+    failed_event = @organization.audit_events.find_by!(
+      action: "billing.plan_change.failed",
+      subject_type: "Billing::PlanChange",
+      subject_id: error.plan_change.id
+    )
+    assert_equal @owner, failed_event.actor_user
+    assert_equal expected_audit_metadata.merge("reason_code" => "provider_rejected"),
+      failed_event.metadata
     assert_equal [ expected_provider_call ], client.calls
+  end
+
+  test "an audit failure rolls back a new command before provider access" do
+    client = fake_client
+    Current.request_id = "r" * (AuditEvent::CORRELATION_ID_MAX_LENGTH + 1)
+
+    assert_no_difference -> { @organization.billing_plan_changes.count } do
+      assert_raises(ActiveRecord::RecordInvalid) { create_change(client: client) }
+    end
+
+    assert_empty client.calls
   end
 
   test "an explicit provider variant mismatch fails with its stable safe code" do
@@ -330,6 +363,17 @@ class Billing::PlanChanges::CreateTest < ActiveSupport::TestCase
       {
         provider_subscription_id: @subscription.provider_subscription_id,
         variant_id: @target_mapping.provider_variant_id
+      }
+    end
+
+    def expected_audit_metadata
+      {
+        "from_plan_price_id" => @source_price.id,
+        "to_plan_price_id" => @target_price.id,
+        "from_plan_key" => @source_plan.key,
+        "to_plan_key" => @target_plan.key,
+        "environment" => "test",
+        "test_mode" => true
       }
     end
 

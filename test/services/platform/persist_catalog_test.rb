@@ -77,6 +77,23 @@ class Platform::PersistCatalogTest < ActiveSupport::TestCase
       events.second.change_set.fetch("active"))
   end
 
+  test "keeps global catalog audit separate from tenant audit ledgers" do
+    product = Product.new(
+      key: unique_catalog_key("global_only"),
+      name: "Global Catalog Product",
+      description: "A platform-owned catalog record.",
+      active: true
+    )
+
+    assert_no_difference -> { AuditEvent.count } do
+      assert_difference -> { Platform::AuditEvent.count }, 1 do
+        persist(product, {})
+      end
+    end
+
+    assert_equal "catalog.created", Platform::AuditEvent.order(:id).last.action
+  end
+
   test "rejects stable identity attributes on update without partially applying changes" do
     product = create_test_product(name: "Stable Product")
     original_key = product.key

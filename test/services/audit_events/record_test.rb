@@ -41,6 +41,51 @@ class AuditEvents::RecordTest < ActiveSupport::TestCase
     assert_equal "job-123", event.job_id
   end
 
+  test "uses current request and job correlation by default" do
+    event = Current.set(request_id: "request-current", job_id: "job-current") do
+      AuditEvents::Record.call(
+        organization: @organization,
+        actor_user: nil,
+        action: "system.reconciled",
+        subject: @organization
+      )
+    end
+
+    assert_equal "request-current", event.request_id
+    assert_equal "job-current", event.job_id
+  end
+
+  test "accepts only typed safe billing metadata" do
+    plan = create_plan(key: "audit_professional")
+    price = PlanPrice.create!(
+      plan: plan,
+      billing_interval: :monthly,
+      currency: "USD",
+      amount_cents: 2_000,
+      active: true
+    )
+
+    event = AuditEvents::Record.call(
+      organization: @organization,
+      actor_user: nil,
+      action: "billing.subscription.updated",
+      subject: @organization,
+      metadata: {
+        plan_price_id: price.id,
+        plan_key: plan.key,
+        from_status: "past_due",
+        to_status: "active",
+        environment: "test",
+        test_mode: true,
+        reason_code: "verified_webhook",
+        webhook_event_id: 123
+      }
+    )
+
+    assert_equal "active", event.metadata.fetch("to_status")
+    assert_equal plan.key, event.metadata.fetch("plan_key")
+  end
+
   test "accepts allowlisted stable product and product role keys" do
     product = Product.create!(
       key: "audit_product",
@@ -77,7 +122,11 @@ class AuditEvents::RecordTest < ActiveSupport::TestCase
       { membership_id: "123" },
       { organization_role: "super_owner" },
       { product_key: "Invalid Product" },
-      { product_role_key: "viewer;delete" }
+      { product_role_key: "viewer;delete" },
+      { provider_payload: { status: "active" } },
+      { signed_url: "https://example.test/secret" },
+      { to_status: "provider_new_status" },
+      { reason_code: "Contains spaces" }
     ].each do |metadata|
       assert_raises(ArgumentError) do
         AuditEvents::Record.call(
@@ -135,4 +184,17 @@ class AuditEvents::RecordTest < ActiveSupport::TestCase
       )
     end
   end
+
+
+  private
+    def create_plan(key:)
+      Plan.create!(
+        key: key,
+        name: key.titleize,
+        description: "Audit metadata plan.",
+        active: true,
+        free: false,
+        position: 100
+      )
+    end
 end

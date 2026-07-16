@@ -97,6 +97,7 @@ Rails.application.routes.draw do
         patch :reactivate
       end
     end
+    resources :audit_events, path: "audit-events", only: :index
     resources :invitations, only: %i[new create] do
       member do
         post :resend

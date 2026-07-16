@@ -557,6 +557,12 @@ unsupported or quarantined envelopes are durably represented by the global
 `Billing::WebhookEvent` ledger. A tenant audit row begins only after trusted
 provider-locator resolution and tenant reload.
 
+The tenant audit viewer is read-only and available only to an active
+organization owner or admin. Its policy scope starts from
+`Current.organization.audit_events`; billing/member roles and a global
+platform-admin role without the tenant role have no bypass. Global catalog
+history remains a separate platform ledger.
+
 ## 11. Test strategy
 
 ### 11.1 Organization role table

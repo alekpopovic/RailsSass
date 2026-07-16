@@ -1015,6 +1015,28 @@ customer names, API keys, or signed checkout/portal URLs in this ledger. After
 verification, persist only the fields/digests required to locate, refetch, and
 project the provider resource.
 
+### 8.7 `Billing::LifecycleDelivery` / `billing_lifecycle_deliveries`
+
+This tenant-owned table is the durable, per-recipient outbox for customer
+billing lifecycle email. A row references the organization, the immutable
+tenant `AuditEvent`, the projected `Billing::Subscription`, the verified source
+`Billing::WebhookEvent`, and one recipient user. Composite foreign keys bind the
+audit, subscription, and webhook rows to the same organization.
+
+- `kind` is one of `subscription_activated`, `payment_problem`,
+  `cancellation_scheduled`, `subscription_expired`, or
+  `plan_change_completed`;
+- `status` is `pending`, `processing`, `delivered`, `failed`, or `discarded`;
+- `attempts_count`, `available_at`, `enqueued_at`, `claimed_at`,
+  `delivered_at`, and a redacted `failure_code` describe delivery state;
+- ordinary timestamps apply because delivery state is mutable.
+
+The unique `(source_webhook_event_id, kind, recipient_user_id)` index is the
+webhook-retry deduplication boundary. Rows are created in the same primary-
+database transaction as their audit event and subscription projection. Queue
+handoff happens after that transaction; an enqueue failure leaves a durable row
+for the periodic tenant-scoped sweeper.
+
 ## 9. Audit events
 
 ### 9.1 `AuditEvent` / `audit_events`
@@ -1025,24 +1047,35 @@ It is introduced by the audit/membership-administration follow-up rather than th
 initial organization-foundation change; no retroactive events are fabricated.
 
 - `organization_id`: not-null foreign key, delete restricted.
-- `actor_user_id`: nullable user foreign key, delete restricted; null represents
-  an authenticated provider/system action.
+- `actor_user_id` (exposed as `actor_id`/`actor` by the model): nullable user
+  foreign key, delete restricted; null represents an authenticated
+  provider/system action.
 - `action`: non-blank stable dot-separated action code.
 - `subject_type`, `subject_id`: bounded descriptors, not treated as a
   polymorphic relational foreign key.
 - `request_id`, `job_id`: nullable bounded correlation IDs.
 - `metadata`: non-null JSONB object containing allowlisted non-sensitive IDs and
   reason codes only.
-- `occurred_at`: non-null event time.
+- `created_at`: non-null event time. The table intentionally has no
+  `updated_at` because events never change.
 
-Indexes support `(organization_id, occurred_at)` and `action`. Application
+The first rollout retains the deprecated non-null `occurred_at` column and a
+database insert trigger that keeps it equal to `created_at`. This is an
+expand/contract compatibility bridge: both the previous writer
+(`occurred_at`) and the current writer (`created_at`) remain safe during a
+rolling deploy. A later contract migration may remove `occurred_at` and the
+bridge only after every old application process has been retired.
+
+Indexes support `(organization_id, created_at)` and `action`. Application
 models expose create/read only; ordinary application code cannot update rows.
 A single recording service verifies that every non-organization subject carries
 the same `organization_id` and accepts only typed, explicitly allowlisted
-metadata keys; arbitrary nested values, emails, and token material are rejected.
+metadata keys; arbitrary nested values, emails, token material, credentials,
+signed URLs, card data, and provider payloads are rejected. The JSON object is
+bounded to 16 KiB. Request and job correlation IDs are captured automatically.
 A dedicated retention service may delete expired rows under the documented
-policy and audit that operation. Tenant UI/support queries, if added, are rooted
-at `Current.organization.audit_events`.
+policy and audit that operation. The owner/admin tenant viewer is rooted at
+`Current.organization.audit_events` and exposes no mutation action.
 
 ### 9.2 `Platform::AuditEvent` / `platform_audit_events`
 

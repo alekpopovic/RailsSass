@@ -1,0 +1,7 @@
+<h1>Plan change completed</h1>
+
+<p>Hello <%= @recipient.name %>,</p>
+
+<p>The plan change for <%= @organization.name %> is complete. The current subscription plan is <strong><%= @plan.name %></strong>.</p>
+
+<p><%= link_to "Review billing", @billing_url %></p>

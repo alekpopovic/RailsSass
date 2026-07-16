@@ -2,6 +2,8 @@ class ApplicationController < ActionController::Base
   include Authentication
   include Pundit::Authorization
 
+  before_action :set_request_context
+
   rescue_from ActiveRecord::RecordNotFound, with: :render_not_found
   rescue_from Pundit::NotAuthorizedError, with: :render_forbidden
 
@@ -12,6 +14,10 @@ class ApplicationController < ActionController::Base
   stale_when_importmap_changes
 
   private
+    def set_request_context
+      Current.request_id = request.request_id
+    end
+
     def pundit_user
       AuthorizationContext.current
     end

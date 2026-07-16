@@ -25,6 +25,7 @@ class Billing::Checkouts::CreateTest < ActiveSupport::TestCase
       organization: @organization,
       membership: @membership
     )
+    Current.request_id = "checkout-request-#{SecureRandom.hex(6)}"
     @plan = create_test_plan(name: "Checkout Professional")
     @plan_price = create_test_plan_price(
       plan: @plan,
@@ -54,7 +55,11 @@ class Billing::Checkouts::CreateTest < ActiveSupport::TestCase
     assert_no_difference -> { Billing::Subscription.count } do
       assert_difference -> { @organization.billing_checkout_attempts.count }, 1 do
         assert_difference -> { @organization.billing_provider_locators.count }, 1 do
-          result = create_checkout
+          assert_difference -> {
+            @organization.audit_events.where(action: "billing.checkout.started").count
+          }, 1 do
+            result = create_checkout
+          end
         end
       end
     end
@@ -77,6 +82,22 @@ class Billing::Checkouts::CreateTest < ActiveSupport::TestCase
     assert_equal checkout_url, result.checkout_url
     assert_equal Billing::Checkouts::ReturnUrl.call(organization: @organization), captured_return_url
     assert_nil @organization.effective_plan
+    audit_event = @organization.audit_events.find_by!(
+      action: "billing.checkout.started",
+      subject_type: "Billing::CheckoutAttempt",
+      subject_id: attempt.id
+    )
+    assert_equal @user, audit_event.actor_user
+    assert_equal Current.request_id, audit_event.request_id
+    assert_equal(
+      {
+        "plan_price_id" => @plan_price.id,
+        "plan_key" => @plan.key,
+        "environment" => "test",
+        "test_mode" => true
+      },
+      audit_event.metadata
+    )
     assert_not_includes Billing::CheckoutAttempt.column_names, "nonce"
     assert_not_includes Billing::CheckoutAttempt.column_names, "checkout_url"
     assert_requested :post, API_URL, times: 1
@@ -93,7 +114,21 @@ class Billing::Checkouts::CreateTest < ActiveSupport::TestCase
     assert_equal first.attempt.id, error.attempt.id
     assert_equal 1, @organization.billing_checkout_attempts.count
     assert_equal 1, @organization.billing_provider_locators.count
+    assert_equal 1,
+      @organization.audit_events.where(action: "billing.checkout.started").count
     assert_requested :post, API_URL, times: 1
+  end
+
+  test "an audit failure rolls back the attempt and locator before provider access" do
+    Current.request_id = "r" * (AuditEvent::CORRELATION_ID_MAX_LENGTH + 1)
+
+    assert_no_difference -> { @organization.billing_checkout_attempts.count } do
+      assert_no_difference -> { @organization.billing_provider_locators.count } do
+        assert_raises(ActiveRecord::RecordInvalid) { create_checkout }
+      end
+    end
+
+    assert_not_requested :any, %r{api\.lemonsqueezy\.com}
   end
 
   test "definitive provider rejection fails attempt and resolves its locator" do

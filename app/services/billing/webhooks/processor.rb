@@ -43,10 +43,12 @@ module Billing
         new(webhook_event_id:, **options).call
       end
 
-      def initialize(webhook_event_id:, client: nil, now: Time.current)
+      def initialize(webhook_event_id:, client: nil, now: Time.current, job_id: Current.job_id)
         @webhook_event_id = webhook_event_id
         @client = client
         @now = now
+        @job_id = job_id
+        @lifecycle_delivery_ids = []
       end
 
       def call
@@ -192,7 +194,7 @@ module Billing
           raise PermanentError, "checkout_context_not_found" unless organization
 
           Current.organization = organization
-          ApplicationRecord.transaction do
+          result = ApplicationRecord.transaction do
             organization.lock!
             locked_event = locked_processing_event!
             scoped_locator = Current.organization.billing_provider_locators.lock.find(locator.id)
@@ -200,6 +202,7 @@ module Billing
               scoped_locator.billing_checkout_attempt_id
             )
             validate_checkout_context!(locked_event, scoped_locator, attempt, context, snapshot)
+            correlate_event_to_current_organization!(locked_event)
 
             if scoped_locator.billing_subscription_id.present?
               subscription = Current.organization.billing_subscriptions.lock.find(
@@ -257,6 +260,7 @@ module Billing
             supersede_competing_attempts!(attempt)
             customer = upsert_customer!(locked_event, snapshot)
 
+            previous_audit_state = subscription_audit_state(subscription) if subscription
             if subscription
               subscription.assign_attributes(existing_snapshot_attributes(subscription, snapshot, mapping.plan_price))
               subscription.save!
@@ -278,8 +282,25 @@ module Billing
               subscription: subscription,
               snapshot: snapshot
             )
+            audit_event = if previous_audit_state
+              record_subscription_transition!(
+                event: locked_event,
+                subscription: subscription,
+                previous_state: previous_audit_state
+              )
+            else
+              record_subscription_created!(locked_event, subscription)
+            end
+            record_subscription_lifecycle_deliveries!(
+              event: locked_event,
+              subscription: subscription,
+              audit_event: audit_event,
+              previous_state: previous_audit_state
+            )
             complete_event!(locked_event, snapshot, subscription: subscription)
           end
+          enqueue_recorded_lifecycle_deliveries
+          result
         end
 
         def project_existing(event, snapshot)
@@ -296,7 +317,7 @@ module Billing
           raise PermanentError, "subscription_locator_invalid" unless organization
 
           Current.organization = organization
-          ApplicationRecord.transaction do
+          result = ApplicationRecord.transaction do
             organization.lock!
             locked_event = locked_processing_event!
             scoped_locator = Current.organization.billing_provider_locators.lock.find(locator.id)
@@ -304,13 +325,17 @@ module Billing
               scoped_locator.billing_subscription_id
             )
             validate_locator_subscription!(scoped_locator, subscription, snapshot)
+            correlate_event_to_current_organization!(locked_event)
             apply_existing_snapshot!(locked_event, subscription, snapshot)
           end
+          enqueue_recorded_lifecycle_deliveries
+          result
         end
 
         def apply_existing_snapshot!(event, subscription, snapshot)
           last_seen_at = subscription.last_seen_provider_updated_at
           incoming_at = snapshot.provider_updated_at
+          previous_audit_state = subscription_audit_state(subscription)
 
           if incoming_at < last_seen_at
             return ignore_event!(event, snapshot, "stale_provider_snapshot", subscription: subscription)
@@ -322,6 +347,12 @@ module Billing
             end
 
             subscription.update!(sync_state: :invalid)
+            record_subscription_transition!(
+              event: event,
+              subscription: subscription,
+              previous_state: previous_audit_state,
+              reason_code: "provider_timestamp_conflict"
+            )
             return fail_in_transaction!(
               event,
               "provider_timestamp_conflict",
@@ -335,6 +366,12 @@ module Billing
             subscription.update!(
               last_seen_provider_updated_at: incoming_at,
               sync_state: :mapping_error
+            )
+            record_subscription_transition!(
+              event: event,
+              subscription: subscription,
+              previous_state: previous_audit_state,
+              reason_code: "unknown_provider_variant"
             )
             return fail_in_transaction!(
               event,
@@ -355,6 +392,12 @@ module Billing
               sync_state: :invalid,
               raw_payload: subscription_payload(snapshot, event_name: event.event_name)
             )
+            record_subscription_transition!(
+              event: event,
+              subscription: subscription,
+              previous_state: previous_audit_state,
+              reason_code: "unknown_subscription_status"
+            )
             return fail_in_transaction!(
               event,
               "unknown_subscription_status",
@@ -368,6 +411,12 @@ module Billing
               last_seen_provider_updated_at: incoming_at,
               sync_state: :invalid
             )
+            record_subscription_transition!(
+              event: event,
+              subscription: subscription,
+              previous_state: previous_audit_state,
+              reason_code: "invalid_subscription_timestamps"
+            )
             return fail_in_transaction!(
               event,
               "invalid_subscription_timestamps",
@@ -379,7 +428,19 @@ module Billing
           upsert_customer!(event, snapshot, expected_customer: subscription.billing_customer)
           subscription.assign_attributes(existing_snapshot_attributes(subscription, snapshot, mapping.plan_price))
           subscription.save!
-          reconcile_plan_change!(event, subscription, mapping, incoming_at)
+          plan_change_audit_event = reconcile_plan_change!(event, subscription, mapping, incoming_at)
+          subscription_audit_event = record_subscription_transition!(
+            event: event,
+            subscription: subscription,
+            previous_state: previous_audit_state
+          )
+          record_subscription_lifecycle_deliveries!(
+            event: event,
+            subscription: subscription,
+            audit_event: subscription_audit_event,
+            previous_state: previous_audit_state,
+            plan_change_audit_event: plan_change_audit_event
+          )
           complete_event!(event, snapshot, subscription: subscription)
         end
 
@@ -402,6 +463,225 @@ module Billing
             completed_at: @now,
             failure_code: nil
           )
+          record_plan_change_transition!(event, plan_change, status)
+        end
+
+        def correlate_event_to_current_organization!(event)
+          if event.organization_id.nil?
+            event.update!(organization: Current.organization)
+          elsif event.organization_id != Current.organization.id
+            raise PermanentError, "subscription_locator_invalid"
+          end
+        end
+
+        def record_subscription_lifecycle_deliveries!(
+          event:,
+          subscription:,
+          audit_event:,
+          previous_state:,
+          plan_change_audit_event: nil
+        )
+          return unless audit_event
+
+          current_state = subscription_audit_state(subscription)
+          if previous_state.nil?
+            case current_state.fetch(:status)
+            when "active", "on_trial"
+              record_lifecycle_delivery!(
+                kind: "subscription_activated",
+                audit_event: audit_event,
+                subscription: subscription,
+                webhook_event: event
+              )
+            when "past_due", "unpaid"
+              record_lifecycle_delivery!(
+                kind: "payment_problem",
+                audit_event: audit_event,
+                subscription: subscription,
+                webhook_event: event
+              )
+            when "cancelled"
+              record_lifecycle_delivery!(
+                kind: "cancellation_scheduled",
+                audit_event: audit_event,
+                subscription: subscription,
+                webhook_event: event
+              )
+            when "expired"
+              record_lifecycle_delivery!(
+                kind: "subscription_expired",
+                audit_event: audit_event,
+                subscription: subscription,
+                webhook_event: event
+              )
+            end
+            return
+          end
+
+          previous_status = previous_state.fetch(:status)
+          current_status = current_state.fetch(:status)
+          problem_statuses = %w[past_due unpaid]
+
+          if current_status.in?(problem_statuses) && !previous_status.in?(problem_statuses)
+            record_lifecycle_delivery!(
+              kind: "payment_problem",
+              audit_event: audit_event,
+              subscription: subscription,
+              webhook_event: event
+            )
+          elsif current_status == "cancelled" && previous_status != "cancelled"
+            record_lifecycle_delivery!(
+              kind: "cancellation_scheduled",
+              audit_event: audit_event,
+              subscription: subscription,
+              webhook_event: event
+            )
+          elsif current_status == "expired" && previous_status != "expired"
+            record_lifecycle_delivery!(
+              kind: "subscription_expired",
+              audit_event: audit_event,
+              subscription: subscription,
+              webhook_event: event
+            )
+          end
+
+          return unless previous_state.fetch(:plan_price_id) != current_state.fetch(:plan_price_id)
+
+          completed_audit_event = if plan_change_audit_event&.action == "billing.plan_change.applied"
+            plan_change_audit_event
+          else
+            audit_event
+          end
+          record_lifecycle_delivery!(
+            kind: "plan_change_completed",
+            audit_event: completed_audit_event,
+            subscription: subscription,
+            webhook_event: event
+          )
+        end
+
+        def record_lifecycle_delivery!(kind:, audit_event:, subscription:, webhook_event:)
+          deliveries = Billing::LifecycleDeliveries::Record.call(
+            kind: kind,
+            audit_event: audit_event,
+            subscription: subscription,
+            webhook_event: webhook_event,
+            now: @now
+          )
+          @lifecycle_delivery_ids.concat(deliveries.map(&:id))
+        end
+
+        def enqueue_recorded_lifecycle_deliveries
+          @lifecycle_delivery_ids.uniq.each do |delivery_id|
+            Billing::LifecycleDeliveries::Enqueue.call(
+              delivery_id: delivery_id,
+              now: @now
+            )
+          rescue StandardError => error
+            Rails.logger.warn(
+              "billing_lifecycle_enqueue_deferred " \
+                "organization_id=#{Current.organization.id} " \
+                "delivery_id=#{delivery_id} error_class=#{error.class.name}"
+            )
+          end
+        ensure
+          @lifecycle_delivery_ids.clear
+        end
+
+        def record_subscription_created!(event, subscription)
+          AuditEvents::Record.call(
+            organization: Current.organization,
+            actor_user: nil,
+            action: "billing.subscription.created",
+            subject: subscription,
+            job_id: @job_id,
+            metadata: {
+              plan_price_id: subscription.plan_price_id,
+              plan_key: subscription.plan_price.plan.key,
+              to_status: subscription.status,
+              environment: subscription.environment,
+              test_mode: subscription.test_mode,
+              webhook_event_id: event.id
+            }
+          )
+        end
+
+        def record_subscription_transition!(event:, subscription:, previous_state:, reason_code: nil)
+          current_state = subscription_audit_state(subscription)
+          return if previous_state == current_state
+
+          action = if previous_state.fetch(:status) != current_state.fetch(:status)
+            case current_state.fetch(:status)
+            when "cancelled" then "billing.subscription.cancelled"
+            when "expired" then "billing.subscription.expired"
+            else "billing.subscription.updated"
+            end
+          else
+            "billing.subscription.updated"
+          end
+
+          metadata = {
+            from_plan_price_id: previous_state.fetch(:plan_price_id),
+            to_plan_price_id: current_state.fetch(:plan_price_id),
+            from_plan_key: previous_state.fetch(:plan_key),
+            to_plan_key: current_state.fetch(:plan_key),
+            from_status: previous_state.fetch(:status),
+            to_status: current_state.fetch(:status),
+            environment: subscription.environment,
+            test_mode: subscription.test_mode,
+            webhook_event_id: event.id
+          }
+          metadata[:reason_code] = reason_code if reason_code
+
+          AuditEvents::Record.call(
+            organization: Current.organization,
+            actor_user: nil,
+            action: action,
+            subject: subscription,
+            job_id: @job_id,
+            metadata: metadata
+          )
+        end
+
+        def record_plan_change_transition!(event, plan_change, status)
+          action = status == :applied ?
+            "billing.plan_change.applied" :
+            "billing.plan_change.failed"
+          metadata = {
+            from_plan_price_id: plan_change.from_plan_price_id,
+            to_plan_price_id: plan_change.to_plan_price_id,
+            from_plan_key: plan_change.from_plan_price.plan.key,
+            to_plan_key: plan_change.to_plan_price.plan.key,
+            environment: plan_change.environment,
+            test_mode: plan_change.test_mode,
+            webhook_event_id: event.id
+          }
+          metadata[:reason_code] = "superseded_by_provider_variant" if status == :superseded
+
+          AuditEvents::Record.call(
+            organization: Current.organization,
+            actor_user: nil,
+            action: action,
+            subject: plan_change,
+            job_id: @job_id,
+            metadata: metadata
+          )
+        end
+
+        def subscription_audit_state(subscription)
+          {
+            plan_price_id: subscription.plan_price_id,
+            plan_key: subscription.plan_price.plan.key,
+            status: subscription.status,
+            trial_ends_at: subscription.trial_ends_at,
+            renews_at: subscription.renews_at,
+            ends_at: subscription.ends_at,
+            past_due_started_at: subscription.past_due_started_at,
+            pause: subscription.pause,
+            card_brand: subscription.card_brand,
+            card_last_four: subscription.card_last_four,
+            sync_state: subscription.sync_state
+          }
         end
 
         def verified_checkout_context(event)

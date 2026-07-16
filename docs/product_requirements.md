@@ -82,6 +82,7 @@ An `OrganizationMembership` has exactly one organization role:
 | Invite or manage member/admin memberships | Yes | Yes | No | No |
 | Grant/revoke owner or billing roles | Yes | No | No | No |
 | Assign product memberships and product roles | Yes | Yes | No | No |
+| View the immutable organization audit log | Yes | Yes | No | No |
 | View subscription and billing screens | Yes | No | Yes | No |
 | Start checkout or open the customer portal | Yes | No | Yes | No |
 | Use an entitled product | Product gate | Product gate | No | Product gate |
@@ -279,6 +280,10 @@ explicit deny permission.
   entitlement records.
 - Signed webhook ingestion, durable receipt, local idempotency, asynchronous
   projection, duplicate handling, and out-of-order protection.
+- Accepted semantic billing transitions append immutable tenant audit evidence
+  in the same transaction. Active owner/billing contacts receive separate
+  lifecycle messages through a durable per-recipient outbox whose unique
+  source-event key suppresses webhook-retry duplicates.
 - Subscription-to-plan mapping by exact provider environment, store, and
   variant identifiers.
 - Explicit local access policy for every provider status, defined once in

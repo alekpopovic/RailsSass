@@ -192,7 +192,9 @@ app/
     billing/...
     webhooks/lemon_squeezy_controller.rb
   jobs/
+    billing/deliver_lifecycle_email_job.rb
     billing/process_webhook_job.rb
+    billing/sweep_lifecycle_deliveries_job.rb
     billing/sweep_webhook_events_job.rb
   models/
     current.rb
@@ -222,6 +224,7 @@ app/
     billing/plan_change.rb
     billing/provider_locator.rb
     billing/webhook_event.rb
+    billing/lifecycle_delivery.rb
   policies/
     admin/...
     application_policy.rb
@@ -261,6 +264,8 @@ app/
       provider_price_mappings/configure.rb
       lemon_squeezy/client.rb
       lemon_squeezy/errors.rb
+      lifecycle_deliveries/record.rb
+      lifecycle_deliveries/enqueue.rb
   views/
 test/
   fixtures/
@@ -517,6 +522,9 @@ Job rules:
   redacted `failed` events and alert; ingress-envelope mismatches remain
   `quarantined` without projection.
 - Re-enqueue stale `received`/`processing` webhook rows with a periodic sweeper.
+- Commit billing lifecycle audit and per-recipient outbox rows with the local
+  projection; enqueue mail only after that transaction and recover handoff or
+  stale delivery leases through a tenant-scoped sweeper.
 - A reconciliation job may detect and report drift, but it cannot independently
   mutate local subscription state. Repair is rooted in a verified webhook
   resend or reprocessing of a previously verified event.

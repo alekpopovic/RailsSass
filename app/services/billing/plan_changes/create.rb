@@ -154,6 +154,10 @@ module Billing
               status: :pending,
               requested_at: @now
             )
+            record_audit_event!(
+              action: "billing.plan_change.requested",
+              plan_change: plan_change
+            )
 
             Result.new(plan_change: plan_change, compatibility: compatibility, duplicate: false)
           end
@@ -266,8 +270,33 @@ module Billing
                 completed_at: transition_time,
                 failure_code: code
               )
+              record_audit_event!(
+                action: "billing.plan_change.failed",
+                plan_change: scoped_change,
+                reason_code: code
+              )
             end
           end
+        end
+
+        def record_audit_event!(action:, plan_change:, reason_code: nil)
+          metadata = {
+            from_plan_price_id: plan_change.from_plan_price_id,
+            to_plan_price_id: plan_change.to_plan_price_id,
+            from_plan_key: plan_change.from_plan_price.plan.key,
+            to_plan_key: plan_change.to_plan_price.plan.key,
+            environment: plan_change.environment,
+            test_mode: plan_change.test_mode
+          }
+          metadata[:reason_code] = reason_code if reason_code
+
+          AuditEvents::Record.call(
+            organization: Current.organization,
+            actor_user: @user,
+            action: action,
+            subject: plan_change,
+            metadata: metadata
+          )
         end
 
         def transition_plan_change(plan_change)
