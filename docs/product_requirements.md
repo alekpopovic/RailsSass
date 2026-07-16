@@ -24,8 +24,9 @@ onboarding, and locator-backed tenant path bootstrap exist. Invitations,
 audited membership administration, and the constrained local product/plan
 catalog also exist. Billing now has constrained local persistence/history
 primitives and an offline-tested Lemon API adapter, but no checkout/webhook
-endpoint, provider mapping/locator, verified projection, or access predicate.
-Those billing workflows, product access, and deployment hardening remain
+endpoint, provider mapping/locator, or verified projection. A read-only local
+Entitlements resolver now covers paid status, free fallback, and catalog typing;
+full product RBAC/access, billing workflows, and deployment hardening remain
 separate execution-plan milestones.
 
 Each milestone must inspect and test existing behavior rather than assume an
@@ -34,10 +35,12 @@ earlier prompt was implemented perfectly.
 ## 3. Product statement
 
 An authenticated user can participate in multiple organizations. Each
-organization buys access to a stable-keyed local plan. The plan grants products
-and typed product features. Organization administrators assign members to specific
-products and product roles. A product action is permitted only when both the
-organization's local entitlement and the member's product permission allow it.
+organization uses a stable-keyed effective local plan, selected from an
+accessible paid subscription or the active free fallback. The plan grants
+products and typed product features. Organization administrators assign members
+to specific products and product roles. A product action is permitted only when
+both the organization's local entitlement and the member's product permission
+allow it.
 
 Lemon Squeezy handles checkout and subscription lifecycle events. The local
 PostgreSQL state is the only runtime source for access decisions. A browser
@@ -98,8 +101,9 @@ has no explicit deny permission and no tenant-defined custom roles.
 3. After a candidate root is set, every tenant-owned child query is rooted at
    `Current.organization`.
 4. Organization role and product RBAC are independent.
-5. Product access requires an access-granting local subscription, plan product
-   entitlement, product membership, and product permission.
+5. Product access requires an effective local plan (accessible paid
+   subscription or active free fallback), plan product entitlement, product
+   membership, and product permission.
 6. A feature-specific action additionally requires the enabled typed feature
    entitlement. A consuming finite-limit action additionally requires capacity;
    explicit unlimited still requires every other access factor.
@@ -154,9 +158,9 @@ has no explicit deny permission and no tenant-defined custom roles.
 - Products, product features, plans, and prices use explicit `active` flags.
   Inactive records are unavailable for new selections, while retained foreign
   keys preserve the historical meaning of existing local records.
-- `Plan.free` is catalog metadata used for presentation and catalog rules only.
-  It never assigns a plan to an organization and is never an authorization
-  fallback; at most one free plan may be active.
+- `Plan.free` identifies the system-managed fallback plan. When no current paid
+  subscription is access-eligible, the one active free plan is effective; it
+  never creates or changes a subscription and at most one may be active.
 - A `PlanProduct` row grants base product access for its plan.
 - Product features are either `flag` or `limit`. A feature entitlement has an
   explicit `enabled` value; a limit is either a finite non-negative integer or
@@ -189,8 +193,9 @@ has no explicit deny permission and no tenant-defined custom roles.
 ### 6.4 Billing
 
 - Persist tenant-owned provider customers, checkout attempts, subscriptions and
-  plan-change command history, plus a global minimal webhook-event ledger. These
-  foundation records alone are not payment proof and do not grant access.
+  plan-change command history, plus a global minimal webhook-event ledger. Only
+  the current local subscription is an Entitlements input; checkout attempts,
+  plan-change commands, and outbound responses never grant or change access.
 - Keep subscription history by archiving prior rows rather than deleting them,
   with at most one row marked current per organization. Archived state is
   one-way and subscription rows cannot be deleted through ordinary or direct
@@ -278,8 +283,9 @@ has no explicit deny permission and no tenant-defined custom roles.
    non-authoritative provider locator, establishes
    `Current.organization`, validates tenant/provider mappings, and updates the
    local subscription in a transaction. Plaintext token is never persisted.
-6. Subsequent requests resolve the exact local plan by its stable identity; no
-   request calls Lemon Squeezy for authorization.
+6. Subsequent requests resolve the exact local paid plan by its stable identity,
+   or the active free fallback when paid access is unavailable; no request calls
+   Lemon Squeezy for authorization.
 
 ### 7.4 Consume a limited feature
 
@@ -297,9 +303,10 @@ has no explicit deny permission and no tenant-defined custom roles.
   coupons, tax calculation, invoice accounting, or a custom payment UI.
 - Runtime provider lookups, access changes from redirects, or access changes
   from unverified/manual database edits.
-- Automatic free-plan fallback/access, manual entitlement grants, trials not
-  represented by Lemon Squeezy, or multiple simultaneous subscriptions per
-  organization. `Plan.free` remains non-authoritative catalog metadata.
+- Manual or tenant-specific entitlement grants, trials not represented by Lemon
+  Squeezy, or multiple simultaneous paid subscriptions per organization. The
+  only non-subscription grant is the single system-managed active free-plan
+  fallback.
 - Tenant-defined products, plans, roles, permissions, or arbitrary policy
   scripting.
 - Explicit deny permissions, resource-level ACL sharing, or organization role
@@ -347,8 +354,8 @@ The MVP is acceptable when all of the following are demonstrated:
 5. A product member with permission but no plan entitlement is denied.
 6. Flag, finite-limit, and unlimited feature decisions behave as documented,
    including an atomic finite numeric boundary under concurrency.
-7. All subscription status and time-boundary cases match the canonical billing
-   matrix.
+7. All paid subscription status/time boundaries and active-free fallback cases
+   match the canonical billing matrix.
 8. A checkout redirect, outbound API success, duplicate webhook, stale webhook,
    unknown variant, and unknown status cannot over-grant access.
 9. A valid webhook can activate, change, cancel, recover, and expire a local

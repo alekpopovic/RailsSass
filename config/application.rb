@@ -35,6 +35,14 @@ module RailsSass
     config.time_zone = "Europe/Belgrade"
     config.active_record.default_timezone = :utc
 
+    # Runtime entitlement checks use only the local subscription projection.
+    # Invalid policy configuration fails boot instead of silently over-granting.
+    past_due_grace_days = Integer(ENV.fetch("ENTITLEMENTS_PAST_DUE_GRACE_DAYS", "15"), 10)
+    unless past_due_grace_days >= 0
+      raise ArgumentError, "ENTITLEMENTS_PAST_DUE_GRACE_DAYS must be a non-negative integer"
+    end
+    config.x.entitlements.past_due_grace_period = past_due_grace_days.days
+
     # Action Mailer debug logging includes the complete encoded message. Auth
     # messages contain signed reset and verification URLs, so delivery bodies
     # must never be written to application logs. Active Job still reports

@@ -52,4 +52,8 @@ class Organization < ApplicationRecord
     length: { maximum: SLUG_MAX_LENGTH },
     format: { with: SLUG_PATTERN },
     uniqueness: true
+
+  def effective_plan(now: Time.current)
+    Entitlements::Resolver.new(organization: self, now: now).effective_plan
+  end
 end

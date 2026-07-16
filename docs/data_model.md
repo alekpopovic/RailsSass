@@ -8,10 +8,10 @@ Last updated: 2026-07-16
 This document is the canonical relational model for the production MVP. It
 defines ownership, names, relationships, indexes, foreign keys, and database
 constraints. Account/session, organization, invitation/audit, and local catalog
-migrations exist. A constrained Billing persistence foundation also exists, but
-its provider mapping, locator, verified projection, access predicate, later
-access-control, and product-domain work remain planned in the documented
-execution order.
+migrations exist. A constrained Billing persistence foundation and read-only
+Entitlements resolver also exist, but provider mapping, locator, verified
+projection, full Access/RBAC composition, and product-domain work remain planned
+in the documented execution order.
 
 Behavioral interpretation is defined in
 [Authorization Model](authorization_model.md) and
@@ -322,19 +322,21 @@ Constraints and indexes:
 - partial unique index allowing at most one row where `active AND free`;
 - non-negative `position` check.
 
-`key` is readonly after creation. `free` is catalog metadata; it does not attach
-the plan to any organization, bypass subscription synchronization, or create a
-fallback entitlement. An inactive plan is unavailable for new catalog and
-future checkout selection, but changing `active` does not itself change a local
-subscription.
+`key` is readonly after creation. `free` identifies the system fallback class;
+the one active free plan becomes effective when no current paid subscription is
+accessible. It does not attach a plan ID to an organization, mutate a
+subscription, or permit manual grants. An inactive plan is unavailable for new
+catalog and future checkout selection, but changing `active` does not itself
+change a local paid subscription.
 
 ### 6.4 `PlanProduct` / `plan_products`
 
 - `plan_id`: not-null foreign key to `plans`, delete restricted.
 - `product_id`: not-null foreign key to `products`, delete restricted.
 
-Presence grants base product entitlement when the selected local subscription
-resolves to that plan. It grants nothing by itself. Constraints:
+Presence grants base product entitlement when the effective plan (an accessible
+paid subscription plan or the active free fallback) resolves to that plan. It
+grants nothing by itself. Constraints:
 
 - unique `(plan_id, product_id)`;
 - supporting unique `(id, product_id)` for the feature-entitlement composite
@@ -399,6 +401,10 @@ webhook projection is implemented, Billing must add and validate exact test/live
 environment and store isolation; production code must not infer it from display
 price, plan name, or runtime environment alone. Provider responses remain
 authoritative for charged amount and tax.
+
+`plan_id` is immutable after price creation in both Active Record and
+PostgreSQL. A catalog change creates a new price instead of silently repointing
+every subscription/history row that references the old identity.
 
 ## 7. Product RBAC
 
@@ -494,9 +500,10 @@ never production authorization evidence.
 
 The current tables provide constrained storage and history before any external
 billing endpoint exists. They do not implement checkout, webhook receipt,
-provider lookup, subscription projection, or the runtime status predicate. No
-row described in this subsection is payment proof or an access grant. Tenant
-reads must use the corresponding `Current.organization` association.
+provider lookup, or subscription projection. A read-only runtime policy now
+uses only the current subscription row; every other foundation row remains
+non-authoritative. Tenant reads must use the corresponding
+`Current.organization` association.
 
 #### 8.2.1 `Billing::Customer` / `billing_customers`
 
@@ -540,10 +547,11 @@ The table is not currently connected to an HTTP action or Lemon checkout API.
 - `provider`, `environment`, `provider_subscription_id`, duplicated
   `provider_customer_id`, and matching non-null `test_mode`.
 - provider `status`: `on_trial`, `active`, `paused`, `past_due`, `unpaid`,
-  `cancelled`, `expired`, or fail-closed `unknown`.
+  `cancelled`, `expired`, or `unknown`; unknown never selects a paid plan, so
+  only the explicit active free fallback may remain.
 - `current`: non-null boolean; nullable `archived_at` preserves replaced rows.
-- nullable `trial_ends_at`, `renews_at`, `ends_at`, `card_brand`, and
-  `card_last_four`; non-null `provider_updated_at`.
+- nullable `trial_ends_at`, `renews_at`, `ends_at`, `past_due_started_at`,
+  `card_brand`, and `card_last_four`; non-null `provider_updated_at`.
 - non-null JSON objects `pause` and `raw_payload`, optimistic `lock_version`, and
   ordinary timestamps.
 
@@ -556,8 +564,15 @@ archived row, or changing its archival timestamp; bounded provider fields may
 still be updated later by verified projection for historical diagnostics.
 Composite customer and supporting subscription keys prevent cross-tenant or
 provider/environment/test-mode mismatches. Further checks cover normalized
-identifiers, allowed statuses, trial/cancellation timestamps, paired bounded
-card display fields, and JSON object/size limits.
+identifiers, allowed statuses, trial/cancellation timestamps, a past-due cycle
+timestamp required only for `past_due` and no later than `provider_updated_at`,
+paired bounded card display fields, and JSON object/size limits.
+
+The additive past-due check is installed `NOT VALID`: PostgreSQL enforces it for
+every new or changed row, while a pre-existing past-due row is deliberately not
+given a fabricated cycle start. Such a legacy row fails closed in the policy
+until a future verified projection re-synchronizes it. After that remediation a
+separate operational migration may validate the constraint globally.
 
 Despite its name, `raw_payload` is only a bounded, recursively screened,
 minimal diagnostic snapshot. The model accepts only explicit normalized field
@@ -565,9 +580,10 @@ keys, rejects sensitive key families (including snake/camel-case variants), and
 the database limits it to a JSON object of at most 64 KiB. It must never store a
 raw webhook body, complete provider response, authorization/signature/token,
 email/name, custom data, or signed checkout/portal URL. `pause` has its own
-minimal key allowlist plus the same object/size bound. Neither `current` nor any
-provider status authorizes access until the future mapping, verified projection,
-and access predicate exist.
+minimal key allowlist plus the same object/size bound. The Entitlements resolver
+now consumes the current row and status locally; no browser/provider response
+writes it, and production population remains blocked on the future exact mapping
+and verified projection.
 
 #### 8.2.4 `Billing::WebhookEvent` / `billing_webhook_events`
 
@@ -680,9 +696,10 @@ token is transient correlation data, not proof of access.
 ### 8.4 Future authoritative `Billing::Subscription` projection
 
 This target is an additive expansion of the implemented subscription history
-table. The origin mapping, synchronization state, monotonic provider timestamps,
-and exact environment-qualified price foreign key below are not implemented by
-the foundation and are prerequisites for runtime access.
+table. `past_due_started_at` and the read-only runtime status policy are already
+implemented. Origin mapping, synchronization state, monotonic provider
+timestamps, and the exact environment-qualified price foreign key below remain
+future verified-writer prerequisites.
 
 - `organization_id`: not-null tenant foreign key.
 - `plan_price_id`: not-null current local plan-price foreign key.
@@ -747,11 +764,12 @@ exact mapping foreign key. A first subscription with no valid mapping creates no
 subscription row and grants nothing.
 
 There is no `organizations.plan_id` and no separate mutable effective-plan row.
-The one current, synchronized, access-granting local subscription derives its
-canonical plan through its current `PlanPrice`. `PlanPrice` alone still grants
-nothing: the synchronized subscription and exact future environment-qualified
-provider mapping are required. A verified plan change updates only the current
-`plan_price_id` and matching provider identifiers; origin fields stay unchanged.
+An accessible current paid subscription derives its canonical plan through its
+current `PlanPrice`; otherwise the resolver selects the one active free plan.
+`PlanPrice` alone still grants nothing. The future subscription writer must
+validate synchronization and exact environment-qualified provider mapping. A
+verified plan change updates only the current `plan_price_id` and matching
+provider identifiers; origin fields stay unchanged.
 
 Only `expired` is terminal for starting a replacement subscription in the MVP.
 When a verified new subscription is correlated after an expired current row,

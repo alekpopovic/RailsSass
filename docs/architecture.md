@@ -36,8 +36,9 @@ Related contracts:
    dependency direction explicitly.
 2. **Tenant context is mandatory.** Tenant-owned data is queried through
    `Current.organization`; ambient `default_scope` tenancy is prohibited.
-3. **Fail closed.** Missing context, unknown billing state, mapping errors, and
-   incomplete authorization input deny access.
+3. **Fail closed.** Missing tenant/authorization context and incomplete
+   entitlement input deny access. Unknown billing state and mapping errors deny
+   paid-plan selection; only the explicit active free-plan fallback remains.
 4. **Local decisions.** Runtime authorization uses local database state only.
 5. **Webhook authority.** Only verified webhook-rooted processing changes local
    subscription state; redirects and outbound API responses are informational.
@@ -77,13 +78,16 @@ network boundary.
 | Tenancy | `Organization`, memberships, `Organizations::*` commands, invitations, global access locators, `Current`, tenant loader | Accounts | Product permission logic, provider calls |
 | Catalog | Products, features, stable-keyed plans, plan-product/feature entitlements, and local plan-price records | None of the tenant modules | Organization state, usage, subscription lifecycle |
 | Billing | Customers, checkout attempts, subscriptions/history, plan-change commands, webhook ledger, future environment-specific mapping/provider locators, and Lemon adapter | Tenancy, Catalog | Product RBAC or product resource data |
-| Access Control | Product memberships, roles, permissions, Pundit base integration, central common gate | Tenancy, Catalog, Billing | Provider HTTP, product-specific record/usage mutations |
+| Entitlements | Paid-status policy, effective-plan selection, typed product/feature result, versioned catalog snapshot | Tenancy, Catalog, Billing | Product RBAC, provider HTTP, usage mutation |
+| Access Control | Product memberships, roles, permissions, Pundit base integration, central common gate | Tenancy, Catalog, Billing, Entitlements | Provider HTTP, product-specific record/usage mutations |
 | Product modules | Tenant product records, Pundit record rules, authoritative numeric usage/commands | Tenancy, Access Control | Subscription projection or global role definitions |
 | Platform | Jobs, mail, audit/logging, health, deployment and observability | Explicit module APIs | Business decisions hidden in callbacks |
 
-Organization role checks belong to Tenancy. Subscription eligibility belongs to
-Billing. Catalog entitlement lookup belongs to Catalog. Access Control composes
-those answers with product RBAC. Product modules add record and capacity rules.
+Organization role checks belong to Tenancy. Billing owns persisted provider
+state. Entitlements composes the local paid-status policy with Catalog to return
+an effective paid/free plan and typed entitlement result, without RBAC. Access
+Control composes that answer with product RBAC. Product modules add record and
+capacity rules.
 
 ### 4.1 Dependency direction
 
@@ -95,6 +99,10 @@ flowchart TD
   Tenancy --> Access[Access Control]
   Catalog --> Access
   Billing --> Access
+  Tenancy --> Entitlements
+  Catalog --> Entitlements
+  Billing --> Entitlements
+  Entitlements --> Access
   Tenancy --> Products[Product modules]
   Access --> Products
   Accounts --> Web[Web delivery]
@@ -105,7 +113,8 @@ flowchart TD
 ```
 
 The arrows mean "is used by." Product modules do not query billing tables
-directly; they ask the Access Control gate. Billing does not grant permissions.
+directly; they ask the Access Control gate. Entitlements does not grant product
+permissions, and Billing does not grant permissions.
 
 ## 5. Code organization
 
@@ -114,7 +123,7 @@ Rails clarity (`User`, `Organization`, `Plan`, `ProductMembership`). Namespace
 orchestration and provider-specific code by owning module.
 
 Implemented and planned layout (provider mapping, locator, webhook delivery,
-jobs, Access, and product RBAC remain planned):
+jobs, full Access composition, and product RBAC remain planned):
 
 ```text
 app/
@@ -160,6 +169,10 @@ app/
       memberships/remove.rb
     tenancy/...
     catalog/...
+    entitlements/
+      resolver.rb
+      result.rb
+      subscription_access_policy.rb
     access/decision.rb
     billing/...
       lemon_squeezy/client.rb
@@ -261,12 +274,19 @@ A central, pure `Access::Decision` composes:
 ```text
 active organization
 AND active organization membership
-AND locally access-granting synchronized subscription
+AND effective local plan (accessible paid subscription or active free fallback)
 AND plan product entitlement
 AND optional enabled flag or finite/unlimited feature entitlement
 AND product membership
 AND product-role permission
 ```
+
+`Entitlements::Resolver` evaluates the time-sensitive paid-status policy on
+every resolver construction. It caches only a primitive catalog snapshot for 12
+hours, keyed by `cache_key_with_version` for the effective plan, candidate
+subscription, products, features, plan products, and entitlement rows. No Active
+Record objects, RBAC result, or cancellation/grace decision is cached. Versioned
+keys invalidate catalog changes and old key generations expire naturally.
 
 The product Pundit policy then applies tenant record rules. A consuming product
 command revalidates the common grant and atomically enforces product-owned usage
@@ -299,8 +319,9 @@ controls but never replace request authorization.
 - Cross-tenant and cross-product joins use composite foreign keys, not only
   model validation.
 - Catalog identities use stable keys and explicit active flags. Catalog writes
-  are deployment-controlled; an active/free/price flag never assigns a plan to
-  an organization or changes subscription state.
+  are deployment-controlled. An active/free/price flag never creates a
+  persisted organization-plan assignment or changes subscription state;
+  `active AND free` may select only the documented runtime fallback.
 - `PlanPrice` is catalog/display data and a future Billing input, not an access
   grant. Billing must add and validate exact test/live environment mapping
   before exposing checkout or webhook projection.

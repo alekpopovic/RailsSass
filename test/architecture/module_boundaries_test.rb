@@ -6,9 +6,10 @@ class ModuleBoundariesTest < ActiveSupport::TestCase
     "Tenancy" => %w[Accounts],
     "Catalog" => [],
     "Billing" => %w[Tenancy Catalog],
-    "Access" => %w[Tenancy Catalog Billing],
+    "Entitlements" => %w[Tenancy Catalog Billing],
+    "Access" => %w[Tenancy Catalog Billing Entitlements],
     "Products" => %w[Tenancy Access],
-    "Platform" => %w[Accounts Tenancy Catalog Billing Access Products]
+    "Platform" => %w[Accounts Tenancy Catalog Billing Entitlements Access Products]
   }.freeze
 
   test "module dependencies follow the documented direction" do

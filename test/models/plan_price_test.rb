@@ -68,6 +68,22 @@ class PlanPriceTest < ActiveSupport::TestCase
     assert_nil unmapped.lemon_variant_id
   end
 
+  test "plan identity cannot be repointed after price creation" do
+    price = create_test_plan_price(plan: create_test_plan)
+    other_plan = create_test_plan
+
+    assert_raises(ActiveRecord::ReadonlyAttributeError) do
+      price.update!(plan: other_plan)
+    end
+
+    error = assert_raises(ActiveRecord::StatementInvalid) do
+      ApplicationRecord.transaction(requires_new: true) do
+        PlanPrice.where(id: price.id).update_all(plan_id: other_plan.id)
+      end
+    end
+    assert_kind_of PG::CheckViolation, error.cause
+  end
+
   private
     def build_price_with_mapping(plan, variant_id)
       PlanPrice.new(

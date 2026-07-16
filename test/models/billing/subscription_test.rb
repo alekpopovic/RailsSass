@@ -67,6 +67,33 @@ class Billing::SubscriptionTest < ActiveSupport::TestCase
     assert_includes subscription.errors[:card_last_four], "must be provided with card brand"
   end
 
+  test "requires a stable past-due cycle start only while past due" do
+    organization, = create_billing_tenant(prefix: "subscription-past-due")
+    provider_updated_at = Time.current
+    subscription = create_billing_subscription(
+      organization: organization,
+      status: "past_due",
+      provider_updated_at: provider_updated_at,
+      past_due_started_at: provider_updated_at - 2.days
+    )
+
+    assert_in_delta (provider_updated_at - 2.days).to_f,
+      subscription.past_due_started_at.to_f,
+      0.000001
+
+    subscription.past_due_started_at = nil
+    assert_not subscription.valid?
+    assert_includes subscription.errors[:past_due_started_at], "must be present"
+
+    subscription.past_due_started_at = provider_updated_at + 1.second
+    assert_not subscription.valid?
+    assert_includes subscription.errors[:past_due_started_at], "cannot be after the provider update"
+
+    subscription.status = "active"
+    assert_not subscription.valid?
+    assert_includes subscription.errors[:past_due_started_at], "must be blank outside a past-due cycle"
+  end
+
   test "rejects raw or sensitive diagnostic payloads recursively" do
     organization, = create_billing_tenant(prefix: "subscription-payload")
     customer = create_billing_customer(organization: organization)

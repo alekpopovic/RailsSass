@@ -21,24 +21,29 @@ Use PostgreSQL as the only runtime source for subscription eligibility and plan
 entitlements.
 
 Implementation note (2026-07-16): the repository has added constrained Billing
-persistence/history tables and the Lemon API adapter, but not the
-environment-qualified mapping, provider locator, verified-webhook projection,
-or access predicate required by this decision. Foundational rows are inert and
-must not be consulted as access grants until those later milestones land.
+persistence/history tables, the Lemon API adapter, and the read-only
+`Entitlements` status/catalog resolver. The resolver consumes a current local
+subscription but the application still has no checkout, webhook ingress,
+provider locator, or subscription writer. Paid rows remain synthetic outside a
+future verified-webhook projection; no browser or outbound API path can create
+or change one.
 
-- `Billing::Subscription` is a local projection of the provider subscription
-  and references an exact `PlanPrice` and `Plan` through an exact
-  environment-qualified provider mapping.
+- `Billing::Subscription` is the local runtime projection of the provider
+  subscription and references its `Plan` through `PlanPrice`. The future
+  verified writer must resolve that price through an exact
+  environment-qualified provider mapping before persistence.
 - The current catalog `PlanPrice` fields are not sufficient production mapping
   evidence because they have no test/live environment dimension. Billing must
   add that isolation before checkout or webhook projection is exposed.
 - Plan and price `active` flags stop new selection but do not revoke or rewrite
   an already synchronized subscription.
-- The current synchronized subscription plus the canonical status/time matrix in
-  [Billing Model](../billing_model.md#8-subscription-access-matrix) yields either
-  one effective plan or no plan.
-- `Plan.free` is catalog metadata only. There is no automatic free/manual
-  fallback plan in the MVP.
+- The current subscription plus the canonical status/time matrix in
+  [Billing Model](../billing_model.md#8-subscription-access-matrix) selects its
+  paid plan when accessible. Otherwise the one active free plan is the
+  effective plan; absence of that plan fails closed.
+- `Plan.free` is an explicit system-managed fallback class, not a manual grant.
+  It never changes subscription state and the database permits at most one
+  active free plan.
 - Product authorization composes the local subscription result with plan
   product/feature entitlements and product RBAC.
 - Runtime authorization makes no provider HTTP request.
@@ -54,10 +59,13 @@ must not be consulted as access grants until those later milestones land.
   provider resend or reprocessing of an already verified event; reconciliation
   alone does not write subscription state.
 
-Unknown/malformed status, variant, plan, environment, timestamp, or conflicting
-projection fails closed. Catalog entitlement changes are reviewed,
-deployment-controlled local changes; they never mutate subscription state or
-derive authority from a browser redirect/provider command response.
+Unknown/malformed paid-subscription status, variant, plan, environment,
+timestamp, or conflicting projection fails closed for paid-plan selection; only
+the explicit active free-plan fallback remains. Missing or malformed effective
+plan/catalog entitlement input denies the applicable product or feature.
+Catalog entitlement changes are reviewed, deployment-controlled local changes;
+they never mutate subscription state or derive authority from a browser
+redirect/provider command response.
 
 ## Consequences
 
@@ -81,8 +89,8 @@ derive authority from a browser redirect/provider command response.
   rows affects every synchronized subscription that references that plan. Such
   changes require explicit review and audit; future immutable plan versioning
   would require a separate migration and ADR update.
-- Status time bounds and the 15-day past-due policy require consistent clocks and
-  deterministic boundary tests.
+- Status time bounds and the configurable past-due policy (15 days by default)
+  require consistent clocks and deterministic boundary tests.
 - Operators cannot “quick fix” access with an unverified database edit.
 
 ## Operational requirements
@@ -121,8 +129,9 @@ graph.
 
 ## Revisit triggers
 
-- Supporting free/manual grants requires a separate, auditable local grant model
-  and ADR; it must not overload subscription state.
+- Supporting manual or tenant-specific grants requires a separate, auditable
+  local grant model and ADR; it must not overload subscription state or the
+  single system free-plan fallback.
 - Requiring immutable historical offerings would add plan versions and an
   explicit subscription/price migration rather than renaming a stable key.
 - Extracting Billing requires a durable local projection with the same runtime

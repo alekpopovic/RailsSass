@@ -42,11 +42,12 @@ Implementation PRs may not silently change these decisions:
   `Organizations::Memberships::{ChangeRole,Remove,Reactivate}`; `Remove`
   soft-suspends and never deletes a membership row.
 - Owner/admin have no product-access bypass.
-- Product access requires local subscription eligibility AND plan entitlement
-  AND product membership/permission.
+- Product access requires an effective local plan (accessible paid subscription
+  or active free fallback) AND plan entitlement AND product
+  membership/permission.
 - Catalog plans use globally unique stable keys, explicit active/free/display
-  metadata, and typed plan-product/feature rows. `Plan.free` never assigns an
-  organization plan or creates an authorization fallback.
+  metadata, and typed plan-product/feature rows. The one active `Plan.free` row
+  is the deterministic fallback and never mutates subscription state.
 - Limit entitlements use an explicit finite non-negative value or explicit
   unlimited state; `enabled` remains the master grant switch.
 - `PlanPrice` is local catalog/display data, not payment proof or an access
@@ -90,9 +91,10 @@ Observed on 2026-07-16:
   attempts, subscriptions with archival history, plan-change commands, a
   provider-wide minimal webhook-event ledger, and a fixed-origin Lemon client.
   It has no checkout/webhook controller, mapping/locator, verified projection,
-  or access predicate, so none of these rows grants access.
-- Product RBAC/access, billing synchronization, and production hardening remain
-  unimplemented milestones.
+  or writer. A read-only Entitlements status/catalog resolver now uses current
+  local subscriptions and the active free fallback without provider I/O.
+- Product RBAC/full Access composition, billing synchronization, and production
+  hardening remain unimplemented milestones.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
 
@@ -480,7 +482,8 @@ Scope:
   feature, entitlement, price, or production Lemon values.
 - Use stable lowercase keys and active flags; use display names only for
   presentation.
-- Treat `Plan.free` as metadata only and enforce at most one active free plan.
+- Treat `Plan.free` as the system fallback class and enforce at most one active
+  free plan; it never creates or mutates a subscription.
 - Enforce same-product feature attachment with composite foreign keys.
 - Model flag entitlements through `enabled`. Model limit capacity as exactly one
   finite non-negative value or explicit unlimited state regardless of enabled;
@@ -500,8 +503,10 @@ Tests:
 - duplicates and invalid keys/kinds/typed capacities/settings/prices fail at DB;
 - cross-product and feature-kind mismatch fail at DB;
 - only one free plan may be active, including under concurrent writes;
-- `PlanPrice` and free/active flags create no tenant/subscription rows and grant
-  no access;
+- `PlanPrice` and free/active flags create no tenant/subscription rows and cannot
+  authorize a product action by themselves; `active AND free` only selects the
+  documented runtime fallback, which still requires plan-product/feature rows
+  and later RBAC;
 - data task is repeatable.
 
 Acceptance: catalog reads are global/read-only to tenant users; no global admin
@@ -514,6 +519,10 @@ Depends on: PR-07.
 **Goal:** expose deterministic Catalog-owned reads and reviewed mutation paths
 without coupling the catalog to tenant or provider state.
 
+Implementation update (2026-07-16): the read side landed as
+`Entitlements::Resolver` together with the local paid-status policy and active
+free fallback. Controlled production catalog mutation/audit remains outstanding.
+
 Scope:
 
 - Add a catalog query returning product/feature entitlement for an exact stable
@@ -522,8 +531,9 @@ Scope:
   missing or disabled rows deny.
 - Add deployment-controlled mutation services with audit coverage before any
   catalog management UI or production data loader.
-- Keep display names, active/free metadata, and price records outside the
-  authorization decision that selects an organization's plan.
+- Keep display names, product/feature/paid-plan selection flags, and price
+  records outside entitlement lookup. Only `active AND free` participates as
+  the explicit fallback selector.
 
 Migrations: none expected for the base graph; any audit/history requirement
 discovered here lands explicitly rather than weakening PR-07 constraints.
@@ -601,10 +611,10 @@ access.
 
 The repository added constrained `Billing::Customer`, `CheckoutAttempt`,
 `Subscription`, `WebhookEvent`, and `PlanChange` records plus the basic
-`Billing::LemonSqueezy::Client` before PR-11. This is an inert persistence and
-adapter slice, not an authorization projection: there is no provider mapping,
-provider locator, controller, webhook verifier/processor, access predicate, or
-external side effect. `raw_payload` is restricted to a bounded screened
+`Billing::LemonSqueezy::Client` before PR-11. It now also has a read-only
+Entitlements policy/resolver, but no provider mapping, provider locator,
+controller, webhook verifier/processor, projection writer, or external side
+effect. `raw_payload` is restricted to a bounded screened
 diagnostic snapshot and never means a raw request or complete provider payload.
 Subscription history is one-way and deletion-protected. The event ledger keeps
 a mandatory content fingerprint plus a unique optional provider event identity;
@@ -664,9 +674,9 @@ infrastructure before accepting provider traffic.
 
 Scope:
 
-- Extend the existing `Billing::Subscription` and `Billing::WebhookEvent` from
-  inert storage primitives into projection-ready constrained records, and add
-  the global non-authoritative `Billing::ProviderLocator`.
+- Extend the existing `Billing::Subscription` and inert
+  `Billing::WebhookEvent` into projection-ready constrained records, and add the
+  global non-authoritative `Billing::ProviderLocator`.
 - Bind subscriptions to their original attempt/provider mapping while allowing
   verified current mapping changes; derive the exact plan only through the
   current environment-qualified mapping and `PlanPrice`.
@@ -677,7 +687,8 @@ Scope:
 - Add services for pending-attempt serialization and event claiming/state
   transition, with no external endpoint.
 - Define filtered provider envelope DTO and log filtering.
-- Implement pure local subscription access predicate matching every matrix row.
+- Extend the existing pure local subscription policy with future verified
+  synchronization/mapping preconditions without duplicating its status matrix.
 
 Migrations: subscription, provider-locator, and webhook-event tables; exact
 current provider-mapping composite FK, retained origin attempt/mapping composite FK, one
@@ -693,14 +704,15 @@ Tests:
 - event storage rejects raw/unallowlisted fixture fields at the service boundary;
 - malformed/test-live/unknown mapping fails closed without violating exact
   current mapping FK;
-- table-driven matrix with exact trial/cancelled/past-due boundaries;
+- table-driven matrix with trial status plus exact cancelled/configurable
+  past-due boundaries and free fallback;
 - an existing synchronized subscription retains its referenced inactive plan
   while new checkout remains blocked;
 - provider timestamps beyond the five-minute future-skew allowance fail closed;
 - access predicate performs zero network calls.
 
-Acceptance: synthetic local records produce deterministic plan/no-plan answers;
-no public path can create/mutate a subscription.
+Acceptance: synthetic local records produce deterministic paid/free/no-plan
+answers; no public path can create/mutate a subscription.
 
 ### PR-13: Add signed webhook ingress and durable receipt
 
@@ -826,12 +838,15 @@ server-side action.
 Scope:
 
 - Add `Access::Decision` with structured internal reason codes.
+- Compose the existing `Entitlements::Result`; do not duplicate paid-status,
+  free-fallback, catalog typing, or cache logic inside Access.
 - Add server-owned action registry mapping product action to permission,
   required feature, and consumption contract; clients cannot supply/omit those
   semantics.
-- Keep `Access::Decision` pure: compose active tenant membership, local
-  subscription plan, product/feature entitlement/typed limit, product
-  membership, and permission only.
+- Keep `Access::Decision` pure: compose active tenant membership, the effective
+  local plan (accessible paid subscription or active free fallback),
+  product/feature entitlement/typed limit, product membership, and permission
+  only.
 - Add product-owned Pundit record rules and a minimal product route/action
   demonstrating base, boolean-feature, and numeric-capacity behavior.
 - Implement a product command that revalidates the common grant and atomically
@@ -1157,7 +1172,7 @@ baseline evidence.
 | A7 | Cross-product roles/permissions/assignments are impossible | PR-09–10 DB/request tests |
 | A8 | Owner/admin have no product bypass; all entitlement+RBAC factors are required | PR-15 truth table |
 | A9 | Flag, finite/unlimited limits, and concurrent final-unit consumption are correct | PR-15 service/concurrency tests |
-| A10 | Every billing status/time boundary matches the one canonical matrix | PR-12/14B table tests |
+| A10 | Every paid billing status/time boundary and active-free fallback matches the one canonical matrix | PR-12/14B table tests |
 | A11 | Redirect/API/portal success never changes access | PR-16–17 request/integration tests |
 | A12 | Forged/mutated/replayed/reordered/mismatched webhooks cannot over-grant | PR-13–14B tests/drills |
 | A13 | Verified webhook activates/changes/cancels/recovers/expires local plan | PR-14B test-mode contract |
@@ -1198,8 +1213,9 @@ access must arrive through the same verified webhook path as production.
   durable receipt is healthy; otherwise return 503 so provider retries and alert.
 - Disabling checkout/portal UI cannot be used as authorization mitigation;
   server policy remains enforced.
-- On ambiguous billing state, fail closed, preserve verified ledger evidence,
-  stop new checkout if necessary, and repair by provider resend/verified-event
+- On ambiguous billing state, fail closed for paid-plan selection, preserve
+  verified ledger evidence, leave only the explicit active free fallback, stop
+  new checkout if necessary, and repair by provider resend/verified-event
   reprocessing.
 - Rollback never rewrites local subscription state from redirect/API response.
 

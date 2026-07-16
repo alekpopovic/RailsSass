@@ -31,6 +31,8 @@ class PlanPrice < ApplicationRecord
   normalizes :lemon_store_id, :lemon_product_id, :lemon_variant_id,
     with: ->(identifier) { identifier.to_s.strip.presence }
 
+  attr_readonly :plan_id
+
   validates :currency,
     presence: true,
     length: { is: 3 },

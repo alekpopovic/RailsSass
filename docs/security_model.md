@@ -38,7 +38,7 @@ not a control.
 | Sensitive signed URL | Checkout URL, customer portal/payment-method URL | Return only after authorization; short-lived; do not log; portal URL not persisted; checkout URL encrypted and short-retained only if necessary |
 | PII | Email address, optional billing/customer identifiers, IP/user agent | Minimize, access-control, redact logs, retain only for defined purpose |
 | Tenant business data | Organization memberships, product resources, assignments, usage | Non-null tenant ownership, scoped query, policy, database constraints, backup encryption |
-| Authorization catalog | Stable-keyed plans, entitlements, roles, permissions, local plan prices | Reviewed deployment-controlled changes, database constraints, audit trail; display names and `free`/`active` metadata never grant access |
+| Authorization catalog | Stable-keyed plans, entitlements, roles, permissions, local plan prices | Reviewed deployment-controlled changes, database constraints, audit trail; display names never grant access, while only the unique active free plan is a fallback |
 | Operational metadata | Event fingerprint, status reason code, timestamps, request/job IDs | Retain for diagnosis without raw payloads or secrets |
 
 The webhook ledger stores an allowlisted normalized envelope, mandatory content
@@ -76,7 +76,7 @@ plaintext tokens are never stored.
 | Billing confused deputy | Webhook token/variant attaches subscription to wrong organization | Persist token digest only; global provider locator selects candidate after HMAC; exact store/environment/variant/attempt cross-check; tenant reload | Mismatch/digest locator matrix tests |
 | Checkout tampering | Client submits cheap variant, custom price, live/test flag, or attacker redirect | Accept local price ID only; server allowlist; one enabled variant; canonical return URL; validate response | Request/client-parameter tests |
 | Redirect-based grant | Browser fakes success URL | Return page reads local state only; no subscription mutation | Redirect/API-success tests assert unchanged access |
-| Unknown provider change | New status/event/property is interpreted as allowed | Allowlist events, normalize known values, unknown/malformed fail closed and alert | Unknown status/event/field tests |
+| Unknown provider change | New status/event/property is interpreted as allowed | Allowlist events, normalize known values, unknown/malformed deny paid-plan selection and alert; only the explicit active free fallback remains | Unknown status/event/field tests |
 | SSRF | Payload relationship or redirect URL points to internal host | Fixed Lemon API origin; construct resource paths; validate checkout URL origin; never follow payload links | Adapter URL tests |
 | CSRF | Malicious site changes membership or starts checkout | Rails CSRF on all session routes; exemption only for signed webhook endpoint; SameSite secure cookies | Request tests with missing token |
 | Session theft/fixation | Stolen or reused session token | Secure/HttpOnly/SameSite cookies, rotate on login, revoke sessions on password/security change, TLS | Session lifecycle/request tests |
@@ -172,7 +172,9 @@ The normative decision flow is in
   server-owned test/live environment and configured-store mapping; the price
   row itself never proves payment or subscription eligibility.
 - Do not use organization role as a product permission shortcut.
-- Do not cache authorization across requests in the MVP.
+- Cache only the primitive entitlement catalog snapshot across requests. Key it
+  by plan/subscription/catalog record versions; re-evaluate subscription time
+  boundaries and all tenant/RBAC/record decisions on every request.
 - Put active-owner role/status checks, access-eligible-owner account-disable
   checks, product-assignment removal, and numeric consumption checks in locked
   service/product-command transactions, not view helpers or preflight requests.
@@ -191,10 +193,11 @@ The normative decision flow is in
 The complete flow is in [Billing Model](billing_model.md). Required security
 properties are:
 
-The implemented persistence/client foundation is intentionally inert: it has no
-checkout or webhook controller, no provider locator or projection writer, and no
-runtime access decision. Existing billing rows cannot be treated as verified
-payment state until the later signed-webhook pipeline is complete.
+The implemented persistence/client foundation still has no checkout or webhook
+controller and no provider locator or projection writer. The read-only
+Entitlements policy consumes current local subscription rows, but no production
+application path can create them yet. A future signed-webhook pipeline remains
+the only permitted writer.
 
 - Store API keys and webhook secrets only in environment/credential stores.
 - Use separate live/test keys, webhook endpoints/configuration, and mappings.
@@ -397,8 +400,9 @@ Minimum runbooks cover:
 - vulnerable dependency/image rollback.
 
 For billing incidents, revoke/rotate credentials, preserve redacted ledger/audit
-evidence, fail closed on uncertain mappings, request provider webhook resend,
-and reprocess only verified events. Direct subscription edits are prohibited.
+evidence, fail closed for paid-plan selection on uncertain mappings, leave only
+the explicit active free fallback, request provider webhook resend, and
+reprocess only verified events. Direct subscription edits are prohibited.
 
 ## 18. Accepted MVP risks and deferred controls
 
@@ -412,8 +416,9 @@ and reprocess only verified events. Direct subscription edits are prohibited.
 - Flat plan entitlements are not historical versions. A reviewed catalog change
   can affect every synchronized subscription referencing that plan, so catalog
   write access and audit evidence are production-sensitive.
-- The 15-day local past-due grace policy accepts bounded overgrant risk to avoid
-  immediate interruption during provider retries.
+- The configurable local past-due grace policy (15 days by default) accepts
+  bounded overgrant risk to avoid immediate interruption during provider
+  retries.
 - A completely missed terminal webhook can leave local `active` access in place
   until the six-hour reconciliation detects drift and an operator obtains a
   verified resend/replay. There is no active freshness cutoff because valid

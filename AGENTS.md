@@ -93,7 +93,8 @@ passing.
 - Use singular model names, plural table names, and descriptive route/action
   names. Do not abbreviate durable domain identifiers.
 - Namespace domain behavior by module (`Accounts`, `Tenancy`, `Catalog`,
-  `Billing`, `Access`, and product modules) according to the architecture.
+  `Billing`, `Entitlements`, `Access`, and product modules) according to the
+  architecture.
 - Service objects represent one command or query, use a descriptive operation
   name, accept explicit keyword inputs, and expose one public `#call` method.
 - Initializers assign inputs only. Side effects happen in `#call` and are covered
@@ -131,14 +132,19 @@ passing.
   controllers and only narrow, documented exclusions.
 - UI hiding is presentation only and is never a substitute for server-side
   authorization. Test direct HTTP mutations for denied actors.
-- Fail closed when user, organization, membership, subscription, entitlement,
-  product membership, role, permission, or numeric-limit input is missing or
-  inconsistent.
+- Fail closed when user, organization, membership, entitlement, product
+  membership, role, permission, or numeric-limit input is missing or
+  inconsistent. A missing, blocked, or inconsistent paid subscription cannot
+  select a paid plan; only the explicit active free-plan fallback may supply an
+  effective plan, and it never bypasses the remaining authorization factors.
 - Organization roles do not imply product permissions. Product access requires
   both a local plan entitlement and the matching product permission, plus active
   organization and product memberships.
 - Numeric limits are enforced by the product-owned command using authoritative
   usage and a server-calculated delta in the same transaction as the mutation.
+- Authorization-affecting catalog writes must advance `updated_at` so
+  version-keyed entitlement caches invalidate; do not use unversioned
+  `update_all` or direct SQL for those mutations.
 
 ## Billing and webhooks
 

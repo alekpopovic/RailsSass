@@ -24,21 +24,21 @@ Related documents:
 
 ### 1.1 Current implementation boundary
 
-The repository currently contains only the local Billing persistence foundation
-and the outbound `Billing::LemonSqueezy::Client`. The persistence layer includes
-tenant-owned customers, checkout attempts, subscriptions, and plan-change
-commands plus the provider-wide webhook-event ledger. It deliberately exposes
-no checkout route, webhook controller, webhook processor, provider locator,
-environment-qualified price mapping, subscription projection service, portal,
-or runtime access predicate yet.
+The repository currently contains the local Billing persistence foundation, the
+outbound `Billing::LemonSqueezy::Client`, and the read-only
+`Entitlements::SubscriptionAccessPolicy`/`Resolver`. The persistence layer
+includes tenant-owned customers, checkout attempts, subscriptions, and
+plan-change commands plus the provider-wide webhook-event ledger. It still
+exposes no checkout route, webhook controller, webhook processor, provider
+locator, environment-qualified price mapping, subscription projection service,
+or portal.
 
-These rows are therefore storage primitives, not evidence that a payment or
-entitlement was verified. In particular, neither a `current` subscription row,
-a completed checkout attempt, a plan-change command, nor a successful Lemon API
-response can grant or change product access. The future projection milestone
-must add the exact environment/store/variant mapping and provider locator, then
-make verified-webhook-rooted processing the only writer of authoritative local
-subscription state before the access matrix in section 8 is enabled.
+The entitlement resolver reads a current local subscription and never calls the
+provider. No application path currently creates paid subscription state. The
+future projection milestone must add exact environment/store/variant mapping
+and make verified-webhook-rooted processing the only application writer. A
+checkout attempt, plan-change command, redirect, or successful Lemon API
+response still cannot create or change product access.
 
 `Billing::Subscription#raw_payload` is a compatibility-oriented column name for
 a bounded, recursively screened, explicitly allowlisted diagnostic snapshot. It
@@ -78,9 +78,10 @@ cannot contact Lemon Squeezy.
 7. Verified delivery is durably recorded before HTTP 200.
 8. Duplicate and out-of-order deliveries cannot regress or repeat state.
 9. Unknown store, environment, variant, plan, status, or malformed data denies
-   access and alerts when tenant/subscription correlation is safely resolved;
-   when tenant resolution itself is untrusted, only the event is quarantined and
-   no tenant state is guessed.
+   paid-plan selection and alerts when tenant/subscription correlation is safely
+   resolved; only the explicit active free fallback may remain. When tenant
+   resolution itself is untrusted, only the event is quarantined and no tenant
+   state is guessed.
 10. Runtime authorization never calls Lemon Squeezy.
 11. Test and live credentials/data/mappings are strictly separated; test data
     never grants access in production.
@@ -155,8 +156,9 @@ Rules:
   authoritative subscription projection.
 - An incoming variant with no exact active/historical mapping is quarantined and
   fail-closed. It does not inherit a nearby plan by product name or price.
-- `Plan.free` is catalog metadata only. It does not create a subscription or a
-  free/manual runtime fallback.
+- The one active `Plan.free` row is the local runtime fallback when no paid
+  subscription is accessible. It does not create a subscription, prove a
+  payment, or permit tenant/manual grants.
 
 ## 5. Checkout sequence
 
@@ -375,8 +377,8 @@ The asynchronous processor:
    environment/time correlation is trusted, a first unknown mapping consumes
    the checkout locator and creates an unresolved subscription locator so the
    token cannot be reused and a controlled replay can recover. It creates no
-   subscription row or grant. Unknown status or malformed input
-   sets a safely resolved existing subscription to fail-closed `unknown`/`invalid`.
+   subscription row or paid grant. Unknown status or malformed input sets a
+   safely resolved existing subscription to paid-fail-closed `unknown`/`invalid`.
    An unknown variant retains the last accepted mapping and sets
    `sync_state = mapping_error`; the unknown snapshot stays in the filtered
    event. A first invalid/unmapped subscription creates no subscription grant.
@@ -433,41 +435,45 @@ events normally converge on the newest provider state. Rules:
 
 ## 8. Subscription access matrix
 
-This is the single canonical MVP billing predicate. Other documents and code
-reference it rather than define alternatives.
-
-Every `ALLOW` also requires all preconditions:
-
-- one current, non-archived local subscription;
-- `sync_state = synced`;
-- correct application environment and test/live mapping;
-- exact known `PlanPrice`, plan, and environment-qualified provider mapping;
-- no mapping conflict or invalid provider snapshot;
-- tenant-scoped lookup through `Current.organization`.
+This is the single canonical MVP paid-subscription predicate. Other documents
+and code reference it rather than define alternatives. The resolver always
+loads the candidate through `Current.organization.billing_subscriptions`, and
+requires one current, non-archived row with a known `PlanPrice` and paid `Plan`.
+The future verified writer additionally owns environment mapping, provenance,
+and synchronization validation before it may persist that row.
 
 | Local normalized status | Runtime billing decision | Time condition |
 | --- | ---: | --- |
-| no subscription | DENY | None |
-| `on_trial` | ALLOW | `now < trial_ends_at`; missing timestamp is invalid/deny |
+| no subscription | DENY paid; use free fallback | None |
+| `on_trial` | ALLOW | Status is authoritative until a verified update changes it |
 | `active` | ALLOW | None |
-| `paused` | ALLOW | Explicit MVP policy: payment collection pause is not product suspension |
-| `past_due` | ALLOW temporarily | `now < past_due_started_at + 15 days` |
-| `unpaid` | DENY | Immediate |
-| `cancelled` | ALLOW | `now < ends_at`; missing timestamp is invalid/deny |
-| `expired` | DENY | Immediate |
-| `unknown` or new provider value | DENY | Immediate |
-| any `sync_state` other than `synced` | DENY | Immediate |
+| `paused` | DENY paid; use free fallback | Immediate |
+| `past_due` | ALLOW paid temporarily; then free fallback | `now < past_due_started_at + configured grace period` |
+| `unpaid` | DENY paid; use free fallback | Immediate |
+| `cancelled` | ALLOW paid; then free fallback | `now < ends_at`; missing timestamp denies paid |
+| `expired` | DENY paid; use free fallback | Immediate |
+| `unknown` or new provider value | DENY paid; use free fallback | Immediate |
 
-The 15-day past-due window is an application policy, not a provider guarantee.
-It slightly exceeds the currently documented roughly two-week retry period while
-bounding access if a terminal webhook is missed. Exact boundaries are strict:
-access ends at, not after, the stored timestamp.
+The past-due window is an application policy, not a provider guarantee. It is
+configured through `ENTITLEMENTS_PAST_DUE_GRACE_DAYS` (exposed internally as
+`config.x.entitlements.past_due_grace_period`) and defaults to 15 days, slightly
+exceeding the currently documented roughly two-week retry period while bounding
+access if a terminal webhook is missed. The stored
+`past_due_started_at` remains fixed through one cycle. Exact boundaries are
+strict: access ends at, not after, the stored timestamp.
 
-This predicate returns an exact `Plan` only when allowed. `Plan.free` does not
-change the predicate; with no allowed subscription there is no automatic
-catalog-plan fallback. Organization and
-billing administration remain available according to organization roles, while
-product access denies.
+The additive database constraint is initially `NOT VALID` so existing rows are
+not backfilled from a potentially later repeated provider update. New/changed
+rows must carry a valid cycle start. A legacy past-due row with no start denies
+paid access until verified re-synchronization; only then may operations validate
+the constraint for all rows.
+
+An accessible paid row returns its exact `Plan` through `PlanPrice`. When the
+paid predicate denies or no current paid row exists, the resolver uses the one
+`active: true, free: true` plan. If that row is absent, there is no effective
+plan and product entitlement fails closed. The fallback never changes local
+subscription state. Organization and billing administration remain available
+according to organization roles.
 
 `quarantined` is a webhook-event processing state, not a subscription state. If
 a verified invalid event safely resolves an existing subscription, projection
@@ -613,7 +619,8 @@ this accepted operational risk without creating a second mutation authority.
   `Current.organization`.
 - Older/equal-conflicting/concurrent events follow section 7.
 - Network 429/timeouts/5xx retry; permanent failures quarantine.
-- Unknown status or variant fails closed instead of retaining a prior grant.
+- Unknown status or variant fails closed for paid-plan selection instead of
+  retaining a prior paid grant; only the active free fallback may remain.
 - A controlled replay of the same verified snapshot can recover after a
   mapping/code repair, but altered equal-timestamp data remains quarantined.
 - One attempt cannot create two subscriptions; one organization cannot have two
@@ -625,9 +632,10 @@ this accepted operational risk without creating a second mutation authority.
 
 ### 11.4 Matrix and runtime
 
-Table-driven tests cover every row and exact trial, cancellation, and 15-day
-past-due boundary, including missing timestamps and repeated past-due cycles.
-Recovery to active and later new past-due cycles reset time correctly.
+Table-driven tests cover every row, free fallback, exact cancellation boundary,
+and configurable past-due boundary, including missing timestamps and repeated
+past-due cycles. Recovery to active and later new past-due cycles reset time
+correctly.
 
 Authorization tests assert zero provider HTTP requests.
 

@@ -24,6 +24,8 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
         pause test_mode raw_payload lock_version created_at updated_at
       ]
     )
+    assert Billing::Subscription.columns_hash.key?("past_due_started_at")
+    assert_predicate Billing::Subscription.columns_hash.fetch("past_due_started_at"), :null
     assert_required_columns(
       Billing::WebhookEvent,
       %w[
@@ -46,6 +48,7 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
       billing_subscriptions_current_archive_consistent
       billing_subscriptions_trial_end_required
       billing_subscriptions_cancelled_end_required
+      billing_subscriptions_past_due_cycle_consistent
       billing_subscriptions_pause_object_bounded
       billing_subscriptions_raw_payload_object_bounded
       billing_subscriptions_card_display_consistent
@@ -55,6 +58,10 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
       billing_webhook_events_lifecycle
       billing_webhook_events_snapshot_object_bounded
     ])
+    past_due_constraint = Billing::Subscription.connection
+      .check_constraints(:billing_subscriptions)
+      .find { |constraint| constraint.name == "billing_subscriptions_past_due_cycle_consistent" }
+    assert_equal false, past_due_constraint.options.fetch(:validate)
   end
 
   test "indexes enforce provider identities one current subscription and pending commands" do
@@ -210,6 +217,26 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
         customer: customer,
         provider_subscription_id: "subscription_missing_trial_end",
         status: "on_trial"
+      ),
+      raw_subscription_attributes(
+        organization: organization,
+        customer: customer,
+        provider_subscription_id: "subscription_missing_past_due_start",
+        status: "past_due"
+      ),
+      raw_subscription_attributes(
+        organization: organization,
+        customer: customer,
+        provider_subscription_id: "subscription_stale_past_due_start",
+        status: "active",
+        past_due_started_at: Time.current
+      ),
+      raw_subscription_attributes(
+        organization: organization,
+        customer: customer,
+        provider_subscription_id: "subscription_future_past_due_start",
+        status: "past_due",
+        past_due_started_at: 1.hour.from_now
       ),
       raw_subscription_attributes(
         organization: organization,

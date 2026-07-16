@@ -13,12 +13,11 @@ The relational structures are in [Data Model](data_model.md). The canonical
 subscription predicate is in
 [Billing Model](billing_model.md#8-subscription-access-matrix).
 
-The current Billing persistence foundation does not implement that predicate or
-the verified subscription projection it consumes. A foundational
-`Billing::Subscription` row, including one marked `current`, is not sufficient
-authorization. Product access remains unavailable until the exact provider
-mapping, verified-webhook writer, synchronization state, and central
-`Access::Decision` milestone are implemented together.
+The read-only `Entitlements::Resolver` now implements local subscription status,
+effective-plan selection, and typed catalog entitlement results. The application
+still has no production subscription writer: only the future verified-webhook
+projection may create or change paid local state. Product RBAC and the complete
+`Access::Decision` composition remain separate later milestones.
 
 ## 2. Security invariants
 
@@ -33,9 +32,9 @@ mapping, verified-webhook writer, synchronization state, and central
 7. Owner/admin/billing/member never bypass product RBAC or entitlements.
 8. A product membership without a role grants no permission.
 9. A permission without a product membership grants nothing.
-10. Missing or disabled entitlement rows, exhausted finite capacity for a
-    consuming/increasing action, unknown billing state, and mapping/sync errors
-    deny.
+10. Missing or disabled entitlement rows and exhausted finite capacity deny the
+    applicable action. Unknown/blocked billing state can never grant a paid
+    plan; only the explicit active free fallback remains available.
 11. UI hiding is never a security boundary.
 12. Authorization makes no provider network call and uses no checkout redirect
     parameter.
@@ -156,8 +155,9 @@ applicable step succeeds:
 1. authenticated, enabled Current.user
 2. active Current.organization
 3. active Current.membership for Current.organization
-4. current local Billing::Subscription is synchronized and access-granting now
-5. subscription's exact Plan has a PlanProduct row for the product
+4. resolve an effective local plan: use an accessible current paid
+   `Billing::Subscription`, otherwise the one active free plan
+5. the effective Plan has a PlanProduct row for the product
 6. when feature is required:
    a. PlanFeatureEntitlement exists for that product feature
    b. enabled is true
@@ -167,10 +167,12 @@ applicable step succeeds:
 8. union of assigned ProductRoles includes the required ProductPermission
 ```
 
-Any false, null, unknown, malformed, or exceptional result denies. The decision
-returns a structured grant containing `allowed?`, a stable internal reason code,
-and finite/unlimited capacity when applicable. It does not load product records,
-measure usage, or mutate product data.
+Any false, null, unknown, malformed, or exceptional result denies. The
+Entitlements layer returns an immutable `Entitlements::Result` containing
+`allowed?`, a stable internal reason code, paid/free plan source, and
+finite/unlimited capacity when applicable. `Access::Decision` later composes
+that result with organization and product RBAC. Neither layer measures usage or
+mutates product data.
 
 Final server authorization composes three owned layers:
 
@@ -191,8 +193,10 @@ An action that is not feature-specific still requires common steps 1-5 and 7-8,
 then its product policy. A plan product row does not imply every feature, and a
 feature row is not required for the base product shell.
 
-`Plan.free`, `Plan.active`, and `PlanPrice.active` never replace step 4. They are
-catalog/selection metadata, not an organization grant or billing projection.
+The unique active `Plan.free` row is step 4's deterministic fallback when no
+paid subscription is accessible. It does not create or mutate a subscription.
+For an existing paid subscription, `Plan.active` and `PlanPrice.active` remain
+selection metadata rather than authorization kill switches.
 
 ### 5.4 Flag features
 
@@ -223,6 +227,26 @@ catalog/selection metadata, not an organization grant or billing projection.
   release capacity.
 
 Time-window metering is not part of the MVP.
+
+### 5.6 Entitlements resolver contract
+
+`Entitlements::Resolver` is constructed only for `Current.organization`; a
+different organization raises not found. Its stable-key API is:
+
+- `product_enabled?(product_key)` and
+  `feature_enabled?(product_key, feature_key)` return booleans;
+- `limit(product_key, feature_key)` returns a finite integer (including `0`),
+  `:unlimited`, or `nil` when no enabled limit is available;
+- `enabled_products` returns sorted stable product keys;
+- `explain(product_key:, feature_key: nil)` returns `Entitlements::Result` with
+  `allowed?`, `reason_code`, plan key/source, feature kind, and typed capacity.
+
+Representative denial codes are `no_effective_plan`, `product_not_found`,
+`product_not_in_plan`, `feature_not_found`, `feature_not_entitled`,
+`feature_disabled`, `invalid_limit_configuration`, and the explicit
+`subscription_*` matrix codes. `feature_enabled?` fails closed for a missing
+feature key. The resolver has no user, membership, ProductRole,
+ProductPermission, usage, or provider-HTTP logic.
 
 ## 6. Pundit integration
 
@@ -340,15 +364,21 @@ Tests must show that:
 
 ## 9. Caching and consistency
 
-Authorization decisions are not cached across requests in the MVP. This avoids
-stale grants after membership, role, plan, or subscription changes. Within one
-request, memoization is allowed only when keyed by organization membership,
-product, action, feature, and the relevant records' versions/timestamps.
+Final authorization, subscription time decisions, RBAC, record policy, and
+usage decisions are not cached across requests. The Entitlements resolver may
+cache only its primitive catalog snapshot for 12 hours. The key contains the
+effective plan and subscription `cache_key_with_version` plus collection
+versions for products, features, plan products, and entitlement rows. A catalog
+or subscription update therefore selects a new key, and old generations expire.
+Authorization-affecting catalog writers must preserve this contract by updating
+`updated_at`; unversioned `update_all`/direct-SQL catalog mutations are
+prohibited.
 
 Product membership rows may survive loss of entitlement. They become effective
-again only when a later verified webhook restores an access-granting local plan.
-They do **not** survive organization-membership suspension; that service
-removes them, so reactivation requires explicit reassignment.
+again only when a later verified webhook restores paid access or a reviewed
+catalog change grants the product through the active free fallback. They do
+**not** survive organization-membership suspension; that service removes them,
+so reactivation requires explicit reassignment.
 
 ## 10. Audit requirements
 
@@ -435,7 +465,8 @@ cannot affect an access decision.
   only non-authoritative global locators to select a candidate root, then must
   immediately reload tenant-owned rows through that root.
 - Organization roles match the canonical matrix exactly.
-- Subscription eligibility matches the single billing matrix exactly.
+- Paid subscription eligibility and active-free fallback match the single
+  billing matrix exactly.
 - Every product action requires entitlement and permission, and owner/admin have
   no bypass.
 - Numeric consumption is database-atomic under concurrency.

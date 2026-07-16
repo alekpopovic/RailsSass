@@ -83,6 +83,13 @@ On a host with different IDs, rebuild with explicit values:
 LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose build app
 ```
 
+## Entitlement policy
+
+`ENTITLEMENTS_PAST_DUE_GRACE_DAYS` is a non-secret non-negative integer and
+defaults to `15` for host and Compose Rails processes. Invalid values fail boot.
+The status policy uses this duration from the stable local
+`past_due_started_at`; changing it never writes subscription state.
+
 ## Lemon Squeezy adapter
 
 Ordinary setup, boot, and tests do not require provider credentials. The tracked

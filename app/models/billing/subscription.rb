@@ -5,8 +5,8 @@ module Billing
     SNAPSHOT_KEYS = %w[
       card_brand card_last_four ends_at event_name mode pause provider_customer_id
       provider_product_id provider_resource_id provider_store_id
-      provider_subscription_id provider_updated_at provider_variant_id reason_code
-      renews_at resource_type resumes_at status test_mode trial_ends_at
+      past_due_started_at provider_subscription_id provider_updated_at provider_variant_id
+      reason_code renews_at resource_type resumes_at status test_mode trial_ends_at
     ].freeze
 
     belongs_to :organization, inverse_of: :billing_subscriptions
@@ -111,6 +111,16 @@ module Billing
       def status_timestamps_are_present
         errors.add(:trial_ends_at, "must be present") if status_on_trial? && trial_ends_at.blank?
         errors.add(:ends_at, "must be present") if status_cancelled? && ends_at.blank?
+
+        if status_past_due?
+          errors.add(:past_due_started_at, "must be present") if past_due_started_at.blank?
+          if past_due_started_at.present? && provider_updated_at.present? &&
+              past_due_started_at > provider_updated_at
+            errors.add(:past_due_started_at, "cannot be after the provider update")
+          end
+        elsif past_due_started_at.present?
+          errors.add(:past_due_started_at, "must be blank outside a past-due cycle")
+        end
       end
 
       def card_display_is_consistent

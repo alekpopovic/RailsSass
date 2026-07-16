@@ -31,8 +31,7 @@ module BillingTestHelper
   def create_billing_subscription(organization:, billing_customer: nil, plan_price: nil, **overrides)
     billing_customer ||= create_billing_customer(organization: organization)
     plan_price ||= create_test_plan_price(plan: create_test_plan)
-
-    organization.billing_subscriptions.create!({
+    attributes = {
       billing_customer: billing_customer,
       plan_price: plan_price,
       provider: "lemon_squeezy",
@@ -46,7 +45,12 @@ module BillingTestHelper
       test_mode: billing_customer.test_mode,
       raw_payload: {},
       archived_at: nil
-    }.merge(overrides))
+    }.merge(overrides)
+    if attributes[:status].to_s == "past_due" && !overrides.key?(:past_due_started_at)
+      attributes[:past_due_started_at] = attributes[:provider_updated_at]
+    end
+
+    organization.billing_subscriptions.create!(attributes)
   end
 
   def create_billing_checkout_attempt(organization:, membership:, plan_price: nil, **overrides)
