@@ -1,0 +1,11 @@
+<% content_for :title, "New #{@product.name} feature · Platform administration" %>
+
+<section class="mx-auto max-w-2xl py-10 sm:py-12" aria-labelledby="new-feature-title">
+  <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+    <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600"><%= @product.name %></p>
+    <h1 id="new-feature-title" class="mt-2 text-2xl font-bold tracking-tight text-slate-950">New product feature</h1>
+    <p class="mt-2 text-sm text-slate-600">The stable key and feature kind become immutable after creation.</p>
+
+    <%= render "form", product: @product, product_feature: @product_feature %>
+  </div>
+</section>

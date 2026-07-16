@@ -1,0 +1,66 @@
+<% content_for :title, "#{@product.name} features · Platform administration" %>
+
+<section class="py-10 sm:py-12" aria-labelledby="features-title">
+  <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600"><%= @product.name %></p>
+      <h1 id="features-title" class="mt-2 text-3xl font-bold tracking-tight text-slate-950">Product features</h1>
+      <p class="mt-2 text-sm text-slate-600">Stable feature definitions for <span class="font-mono"><%= @product.key %></span>.</p>
+    </div>
+
+    <%= link_to "New feature",
+      new_admin_product_feature_path(@product.key),
+      class: "inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+  </div>
+
+  <div class="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <% if @product_features.any? %>
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200">
+          <caption class="sr-only">Features for <%= @product.name %></caption>
+          <thead class="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+            <tr>
+              <th scope="col" class="px-5 py-3">Feature</th>
+              <th scope="col" class="px-5 py-3">Stable key</th>
+              <th scope="col" class="px-5 py-3">Kind</th>
+              <th scope="col" class="px-5 py-3">Status</th>
+              <th scope="col" class="px-5 py-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-200">
+            <% @product_features.each do |feature| %>
+              <tr>
+                <td class="px-5 py-4">
+                  <p class="font-semibold text-slate-950"><%= feature.name %></p>
+                  <% if feature.description.present? %>
+                    <p class="mt-1 max-w-lg text-sm text-slate-600"><%= truncate(feature.description, length: 120) %></p>
+                  <% end %>
+                </td>
+                <td class="whitespace-nowrap px-5 py-4 font-mono text-sm text-slate-700"><%= feature.key %></td>
+                <td class="whitespace-nowrap px-5 py-4 text-sm font-semibold text-slate-700"><%= feature.kind.humanize %></td>
+                <td class="whitespace-nowrap px-5 py-4">
+                  <span class="rounded-full px-2.5 py-1 text-xs font-semibold <%= feature.active? ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-700" %>">
+                    <%= feature.active? ? "Active" : "Inactive" %>
+                  </span>
+                </td>
+                <td class="whitespace-nowrap px-5 py-4 text-right text-sm font-semibold">
+                  <div class="flex justify-end gap-3">
+                    <%= link_to "View", admin_product_feature_path(@product.key, feature.key), class: "text-indigo-700 hover:text-indigo-900" %>
+                    <%= link_to "Edit", edit_admin_product_feature_path(@product.key, feature.key), class: "text-indigo-700 hover:text-indigo-900" %>
+                  </div>
+                </td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+    <% else %>
+      <div class="px-5 py-12 text-center">
+        <h2 class="font-semibold text-slate-950">No product features yet</h2>
+        <p class="mt-2 text-sm text-slate-600">Add a reviewed flag or limit definition for this product.</p>
+      </div>
+    <% end %>
+  </div>
+
+  <%= link_to "Back to product", admin_product_path(@product.key), class: "mt-6 inline-flex font-semibold text-indigo-700 hover:text-indigo-900" %>
+</section>

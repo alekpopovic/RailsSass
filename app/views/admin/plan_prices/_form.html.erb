@@ -1,0 +1,24 @@
+<%= render "admin/shared/errors", record: price %>
+<%= form_with model: price, url: price.persisted? ? admin_plan_plan_price_path(@plan.key, price) : admin_plan_plan_prices_path(@plan.key), class: "mt-6 space-y-5" do |form| %>
+  <p class="text-sm text-slate-600">Plan: <code class="rounded bg-slate-100 px-2 py-1"><%= @plan.key %></code>. A price cannot be moved to another plan.</p>
+  <% if @plan_price_referenced %>
+    <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+      <p class="font-semibold">Commercial and provider fields are locked.</p>
+      <p class="mt-1">Billing history references this price. Create a new price for amount, interval, currency, or Lemon mapping changes.</p>
+    </div>
+    <dl class="grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+      <div><dt class="text-xs uppercase text-slate-500">Interval</dt><dd class="mt-1 font-semibold"><%= price.billing_interval.titleize %></dd></div>
+      <div><dt class="text-xs uppercase text-slate-500">Amount</dt><dd class="mt-1 font-semibold"><%= price.currency %> <%= price.amount_cents %> cents</dd></div>
+      <div><dt class="text-xs uppercase text-slate-500">Store ID</dt><dd class="mt-1 break-all font-mono text-xs"><%= price.lemon_store_id.presence || "Not mapped" %></dd></div>
+      <div><dt class="text-xs uppercase text-slate-500">Product ID</dt><dd class="mt-1 break-all font-mono text-xs"><%= price.lemon_product_id.presence || "Not mapped" %></dd></div>
+      <div><dt class="text-xs uppercase text-slate-500">Variant ID</dt><dd class="mt-1 break-all font-mono text-xs"><%= price.lemon_variant_id.presence || "Not mapped" %></dd></div>
+    </dl>
+  <% else %>
+    <div><%= form.label :billing_interval, class: "block text-sm font-semibold" %><%= form.select :billing_interval, PlanPrice.billing_intervals.keys.map { |value| [value.titleize, value] }, {}, class: "mt-2 w-full rounded-lg border-slate-300" %></div>
+    <div class="grid gap-5 sm:grid-cols-2"><div><%= form.label :currency, class: "block text-sm font-semibold" %><%= form.text_field :currency, maxlength: 3, required: true, class: "mt-2 w-full rounded-lg border-slate-300 uppercase" %></div><div><%= form.label :amount_cents, class: "block text-sm font-semibold" %><%= form.number_field :amount_cents, min: 0, required: true, class: "mt-2 w-full rounded-lg border-slate-300" %></div></div>
+    <% %i[lemon_store_id lemon_product_id lemon_variant_id].each do |attribute| %><div><%= form.label attribute, class: "block text-sm font-semibold" %><%= form.text_field attribute, autocomplete: "off", class: "mt-2 w-full rounded-lg border-slate-300 font-mono" %></div><% end %>
+  <% end %>
+  <label class="flex items-center gap-2 text-sm font-medium"><%= form.checkbox :active, class: "rounded border-slate-300 text-indigo-600" %> Active for new selection</label>
+  <p class="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">Deactivation retains every subscription and historical reference. This interface never deletes prices.</p>
+  <div class="flex gap-3"><%= form.submit class: "cursor-pointer rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white" %><%= link_to "Cancel", price.persisted? ? admin_plan_plan_price_path(@plan.key, price) : admin_plan_plan_prices_path(@plan.key), class: "rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold" %></div>
+<% end %>

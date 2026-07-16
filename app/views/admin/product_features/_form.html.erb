@@ -1,0 +1,83 @@
+<% form_url = if product_feature.persisted?
+  admin_product_feature_path(product.key, product_feature.key)
+else
+  admin_product_features_path(product.key)
+end %>
+<% form_method = product_feature.persisted? ? :patch : :post %>
+
+<%= render "admin/shared/errors", record: product_feature %>
+
+<%= form_with model: product_feature, url: form_url, method: form_method, class: "mt-6 space-y-5" do |form| %>
+  <% unless product_feature.persisted? %>
+    <div>
+      <%= form.label :key, "Stable feature key", class: "block text-sm font-medium text-slate-700" %>
+      <p id="feature-key-hint" class="mt-1 text-xs text-slate-500">Unique within <%= product.key %>; immutable after creation.</p>
+      <%= form.text_field :key,
+        required: true,
+        autofocus: true,
+        maxlength: ProductFeature::KEY_MAX_LENGTH,
+        pattern: "[a-z][a-z0-9]*(?:_[a-z0-9]+)*",
+        autocomplete: "off",
+        aria: { describedby: "feature-key-hint" },
+        class: "mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+    </div>
+  <% else %>
+    <div class="grid gap-4 sm:grid-cols-2">
+      <div>
+        <p class="text-sm font-medium text-slate-700">Stable feature key</p>
+        <p class="mt-2 rounded-lg bg-slate-100 px-3 py-2 font-mono text-sm text-slate-900"><%= product_feature.key %></p>
+      </div>
+      <div>
+        <p class="text-sm font-medium text-slate-700">Feature kind</p>
+        <p class="mt-2 rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-900"><%= product_feature.kind.humanize %></p>
+      </div>
+    </div>
+  <% end %>
+
+  <div>
+    <%= form.label :name, class: "block text-sm font-medium text-slate-700" %>
+    <%= form.text_field :name,
+      required: true,
+      maxlength: ProductFeature::NAME_MAX_LENGTH,
+      autofocus: product_feature.persisted?,
+      class: "mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+  </div>
+
+  <div>
+    <%= form.label :description, class: "block text-sm font-medium text-slate-700" %>
+    <%= form.text_area :description,
+      rows: 5,
+      maxlength: ProductFeature::DESCRIPTION_MAX_LENGTH,
+      class: "mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+  </div>
+
+  <% unless product_feature.persisted? %>
+    <div>
+      <%= form.label :kind, "Feature kind", class: "block text-sm font-medium text-slate-700" %>
+      <p id="feature-kind-hint" class="mt-1 text-xs text-slate-500">Flags are boolean. Limits require a finite value or explicit unlimited capacity in each plan entitlement.</p>
+      <%= form.select :kind,
+        ProductFeature.kinds.keys.map { |kind| [ kind.humanize, kind ] },
+        {},
+        aria: { describedby: "feature-kind-hint" },
+        class: "mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+    </div>
+  <% end %>
+
+  <div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+    <div class="flex items-start gap-3">
+      <%= form.checkbox :active, class: "mt-1 size-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" %>
+      <div>
+        <%= form.label :active, "Active for new entitlement selections", class: "font-medium text-slate-900" %>
+        <p class="mt-1 text-sm text-slate-600">Deactivation preserves existing entitlement history and stable identity.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+    <%= link_to "Cancel",
+      product_feature.persisted? ? admin_product_feature_path(product.key, product_feature.key) : admin_product_features_path(product.key),
+      class: "rounded-lg border border-slate-300 px-4 py-2.5 text-center font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+    <%= form.submit product_feature.persisted? ? "Save feature" : "Create feature",
+      class: "cursor-pointer rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+  </div>
+<% end %>

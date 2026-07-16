@@ -27,7 +27,9 @@ primitives and an offline-tested Lemon API adapter, but no checkout/webhook
 endpoint, provider mapping/locator, or verified projection. A read-only local
 Entitlements resolver now covers paid status, free fallback, and catalog typing;
 product-RBAC persistence, transactional assignment commands, and the central
-runtime Access decision/Pundit integration also exist. Product-domain routes,
+runtime Access decision/Pundit integration also exist. A Pundit-protected
+internal `/admin` surface now provides audited catalog maintenance and bounded,
+read-only billing diagnostics for `platform_admin` users. Product-domain routes,
 UI/action registry, atomic capacity commands, billing workflows, and deployment
 hardening remain separate execution-plan milestones.
 
@@ -57,7 +59,9 @@ organizations. Registration creates only this global account and does not
 create an organization. A user must verify the current normalized email and
 remain enabled before authenticating, and has no tenant access without an
 active organization membership. Every user has a system role of `user` or
-`platform_admin`; the MVP exposes no platform-admin interface.
+`platform_admin`. The latter may enter the internal `/admin` surface only after
+the live database role is revalidated on the request. It is independent from
+organization membership and grants no implicit tenant or product access.
 
 ### 4.2 Organization roles
 
@@ -101,8 +105,8 @@ explicit deny permission.
 ## 5. Immutable product invariants
 
 1. Every ordinary tenant URL is under `/o/:organization_slug/`, except global
-   account/organization creation, health, authentication, and provider webhook
-   routes.
+   account/organization creation, internal platform administration, health,
+   authentication, and provider webhook routes.
 2. Ordinary tenant context selects an active candidate organization through a
    non-authoritative account locator, then verifies the active membership through
    `Current.organization`; a slug/locator alone never authorizes.
@@ -124,6 +128,9 @@ explicit deny permission.
 9. Runtime authorization makes no Lemon Squeezy API call.
 10. Only processing rooted in a verified, durably stored, idempotent webhook
     may change local subscription state.
+11. Public signup and account parameters never accept `system_role`; the first
+    platform administrator is promoted explicitly by normalized email through a
+    production task that rejects missing, unverified, or disabled accounts.
 
 ## 6. MVP scope
 
@@ -168,8 +175,11 @@ explicit deny permission.
 - Stable product, feature, plan, role, and permission keys in English. Runtime
   lookup never identifies a catalog record by its display name.
 - Products, product features, plans, and prices use explicit `active` flags.
-  Inactive records are unavailable for new selections, while retained foreign
-  keys preserve the historical meaning of existing local records.
+  Creating a `PlanProduct` requires an active plan and product; creating a
+  `PlanPrice` requires an active plan; and creating a feature entitlement
+  requires its active plan, product, and feature. Deactivation blocks those new
+  relationships while retained foreign keys preserve every existing catalog
+  and billing-history row.
 - `Plan.free` identifies the system-managed fallback plan. When no current paid
   subscription is access-eligible, the one active free plan is effective; it
   never creates or changes a subscription and at most one may be active.
@@ -239,7 +249,39 @@ explicit deny permission.
 - Customer portal URLs are requested only after authorization and are not
   persisted or logged.
 
-### 6.5 User experience
+### 6.5 Internal platform administration
+
+- Every `/admin` route requires a currently authenticated, verified, enabled
+  user whose live database `system_role` is `platform_admin`. Organization owner
+  or admin membership is neither required nor sufficient.
+- The first platform administrator is promoted explicitly by an email-accepting
+  Rake task. No public signup or update endpoint accepts `system_role`.
+- The internal Tailwind UI manages products, features, plans, plan-product rows,
+  feature entitlements, and plan prices by stable identity. Stable keys and
+  identity relationships are immutable after creation.
+- Catalog writes are performed by one audited mutation boundary. Product,
+  feature, plan, and price lifecycle uses deactivation rather than hard delete;
+  a plan product is create-only, and a feature entitlement is disabled by
+  retaining its row with `enabled=false`. Cross-product or kind-inconsistent
+  feature input is rejected with a visible validation error and no partial
+  write.
+- New plan-product, price, and entitlement relationships require active parent
+  catalog records, and feature submission uses one composite stable
+  product/feature identity. Existing relationships remain available for history
+  and reviewed lifecycle updates after a parent is deactivated. Once any
+  billing-history row references a price, its amount, interval, currency, plan,
+  and Lemon identifiers are immutable in the UI; only active status may change,
+  and commercial changes require a new price row.
+- Subscription diagnostics are read-only and accept one exact organization
+  `public_id`; they never load a global organization dropdown. Subscription rows
+  are then loaded through `Current.organization.billing_subscriptions` in pages
+  of at most 100. Failed webhook events are read from their global
+  provider-ingress ledger in pages of at most 100.
+- The admin surface never renders credentials, configuration secrets, raw
+  provider payloads, diagnostic JSON snapshots, entitlement settings, or signed
+  provider URLs.
+
+### 6.6 User experience
 
 - Server-rendered Hotwire/Turbo flows with focused Stimulus controllers.
 - Tailwind-based responsive pages for authentication, organization switching,
@@ -250,7 +292,7 @@ explicit deny permission.
 - UI controls use the same permission predicates for presentation while the
   server independently enforces every request.
 
-### 6.6 Production operations
+### 6.7 Production operations
 
 - PostgreSQL-backed CI and Minitest coverage before behavioral work lands.
 - Separate web and Solid Queue worker processes for production billing jobs.
@@ -313,6 +355,21 @@ explicit deny permission.
    remains within the local limit.
 4. Concurrent requests cannot both consume the same final unit.
 
+### 7.5 Maintain the platform catalog
+
+1. An operator explicitly promotes an existing verified, enabled account with
+   `platform_admin:promote[email]`; no browser parameter can perform this step.
+2. The authenticated platform administrator enters `/admin`; the policy checks
+   the live database role independently of every organization membership.
+3. A catalog mutation preserves its stable identity and commits together with
+   append-only platform audit evidence. Lifecycle removal uses deactivate or
+   `enabled=false`, not row deletion.
+4. To inspect subscriptions, the administrator explicitly selects one
+   organization and the server reloads rows from
+   `Current.organization.billing_subscriptions`. Failed webhook-event diagnostics
+   use the global ledger. Neither view can mutate billing or reveal stored
+   payload/snapshot/configuration secrets.
+
 ## 8. Non-goals
 
 - Multiple billing providers, one-time purchases, usage-based provider billing,
@@ -334,8 +391,10 @@ explicit deny permission.
 - Metered/rolling usage windows and provider-reported usage. MVP limits are
   local finite capacity or explicit unlimited capacity, never an implicit
   sentinel.
-- A global back-office catalog editor. Catalog changes ship through reviewed,
-  idempotent application data tasks.
+- Support impersonation, arbitrary cross-tenant product-data browsing, user-role
+  management through the browser, and destructive catalog history editing. The
+  internal admin surface is limited to the documented catalog commands and
+  read-only billing diagnostics.
 - User file uploads unless a concrete product module requires them; local
   Active Storage is not accepted as durable production storage.
 - Concrete product-domain functionality beyond the thin vertical slice needed
@@ -386,6 +445,10 @@ The MVP is acceptable when all of the following are demonstrated:
 13. Critical authentication, tenant, membership, assignment, checkout, and
     billing flows are responsive, keyboard-operable, and expose semantic error
     and status feedback.
+14. Every `/admin` route denies an ordinary user and organization owner, catalog
+    identity fields cannot be changed, catalog mutations are audited, billing
+    diagnostics remain read-only and tenant-rooted, and no admin response exposes
+    provider secrets or stored diagnostic payloads.
 
 ## 11. Required product inputs before launch
 

@@ -83,7 +83,7 @@ network boundary.
 | Entitlements | Paid-status policy, effective-plan selection, typed product/feature result, versioned catalog snapshot | Tenancy, Catalog, Billing | Product RBAC, provider HTTP, usage mutation |
 | Access Control | Product memberships, roles, permissions, Pundit base integration, central common gate | Tenancy, Catalog, Billing, Entitlements | Provider HTTP, product-specific record/usage mutations |
 | Product modules | Tenant product records, Pundit record rules, authoritative numeric usage/commands | Tenancy, Access Control | Subscription projection or global role definitions |
-| Platform | Jobs, mail, audit/logging, health, deployment and observability | Explicit module APIs | Business decisions hidden in callbacks |
+| Platform | Internal admin delivery/policies, `Platform::PersistCatalog`, platform and tenant audit/logging, jobs, mail, health, deployment and observability | Accounts, Catalog, bounded Billing reads, and other explicit module APIs | Business decisions hidden in callbacks |
 
 Organization role checks belong to Tenancy. Billing owns persisted provider
 state. Entitlements composes the local paid-status policy with Catalog to return
@@ -107,11 +107,16 @@ flowchart TD
   Entitlements --> Access
   Tenancy --> Products[Product modules]
   Access --> Products
+  Accounts --> Platform
+  Catalog --> Platform
+  Billing --> Platform
   Accounts --> Web[Web delivery]
   Tenancy --> Web
   Billing --> Web
+  Catalog --> Web
   Access --> Web
   Products --> Web
+  Platform --> Web
 ```
 
 The arrows mean "is used by." Product modules do not query billing tables
@@ -127,6 +132,12 @@ gate for a future controller/UI surface. System roles are global reviewed
 definitions; the nullable organization scope is schema support for future
 custom roles, not an MVP custom-role builder.
 
+The internal platform-admin web layer orchestrates Accounts authentication,
+Catalog mutation commands, and bounded Billing reads. It does not move catalog
+rules into controllers and does not reuse tenant controllers for cross-tenant
+access. `User.system_role` is re-read from PostgreSQL for every admin request;
+organization roles do not participate in that decision.
+
 ## 5. Code organization
 
 Keep conventional top-level Active Record aggregate names where they improve
@@ -139,6 +150,7 @@ jobs, product-domain policies/UI, and atomic capacity commands remain planned):
 ```text
 app/
   controllers/
+    admin/...
     concerns/tenant_context.rb
     organizations/...
     billing/...
@@ -165,6 +177,7 @@ app/
     product_permission.rb
     product_role_permission.rb
     audit_event.rb
+    platform/audit_event.rb
     billing/customer.rb
     billing/provider_price_mapping.rb
     billing/checkout_attempt.rb
@@ -173,9 +186,11 @@ app/
     billing/provider_locator.rb
     billing/webhook_event.rb
   policies/
+    admin/...
     application_policy.rb
     product_membership_policy.rb
   services/
+    platform/persist_catalog.rb
     organizations/
       create.rb
       memberships/change_role.rb
@@ -222,12 +237,12 @@ violations become recurrent.
 ### 6.1 Global requests
 
 Authentication, password reset, verified-and-authenticated onboarding at
-`POST /organizations`, the root
-landing page, `/up`, readiness, and `POST /webhooks/lemon_squeezy` are outside
-ordinary tenant routes. Global application controllers still authenticate and
-authorize where appropriate. `Organizations::Create`, which is owned by the
-Tenancy module despite its public namespace, atomically inserts the active
-organization and first active owner membership. It sets
+`POST /organizations`, the internal `/admin` namespace, the root landing page,
+`/up`, readiness, and `POST /webhooks/lemon_squeezy` are outside ordinary tenant
+routes. Global application controllers still authenticate and authorize where
+appropriate. `Organizations::Create`, which is owned by the Tenancy module
+despite its public namespace, atomically inserts the active organization and
+first active owner membership. It sets
 `Current.organization` and `Current.membership` only after the
 outermost transaction commits, so rollback cannot leave request-local context
 pointing at uncommitted records. Registration and email verification never
@@ -241,7 +256,31 @@ ownership guard can enumerate locator candidates and check every tenant's
 access-eligible-owner state through `Current.organization` under stable-order
 locks.
 
-### 6.2 Tenant requests
+### 6.2 Internal admin requests
+
+Every controller in the `/admin` namespace inherits one authenticated base
+controller and authorizes the live PostgreSQL `platform_admin` role before
+loading or rendering a resource. A stale in-memory role, organization owner
+membership, and navigation visibility are never authorization evidence. Catalog
+records are global system records, but writes go through the Platform-owned
+Catalog persistence command that preserves immutable identities and lifecycle
+rules and records global audit evidence. A new plan-product requires an active
+plan and product, a new plan-price requires an active plan, and a new feature
+entitlement requires its plan, product, and feature to be active. Deactivation
+retains every existing relationship and billing-history reference.
+
+Subscription diagnostics deliberately do not perform an unscoped cross-tenant
+child query. The administrator submits one exact organization `public_id`; the
+application does not load a global organization dropdown. The request sets
+`Current.organization` to that explicit root, and subscriptions are then read
+through `Current.organization.billing_subscriptions` in pages of at most 100.
+The diagnostic surface is read-only and does not establish an organization
+membership or grant tenant/product authority. Failed webhook events are
+different: they belong to the global provider-ingress ledger and may be read
+through its restricted admin policy, also in pages of at most 100, without
+pretending that an unresolved event has a tenant.
+
+### 6.3 Tenant requests
 
 All organization application routes are nested under:
 
@@ -271,7 +310,7 @@ The invitation-acceptance route is a special pre-membership flow: it sets a
 tentative organization root from the public slug and may query only that
 organization's invitation association until token/email validation succeeds.
 
-### 6.3 Background jobs
+### 6.4 Background jobs
 
 Every tenant job accepts an immutable `organization_id`, loads only that tenant
 root, establishes context through a dedicated job wrapper, reloads all tenant
@@ -346,9 +385,11 @@ controls but never replace request authorization.
 - Cross-tenant and cross-product joins use composite foreign keys, not only
   model validation.
 - Catalog identities use stable keys and explicit active flags. Catalog writes
-  are deployment-controlled. An active/free/price flag never creates a
-  persisted organization-plan assignment or changes subscription state;
-  `active AND free` may select only the documented runtime fallback.
+  use the platform-admin-only transactional command and append-only global audit
+  ledger; destructive graph repair remains deployment-controlled. An active/
+  free/price flag never creates a persisted organization-plan assignment or
+  changes subscription state; `active AND free` may select only the documented
+  runtime fallback.
 - `PlanPrice` is catalog/display data and a future Billing input, not an access
   grant. Billing must add and validate exact test/live environment mapping
   before exposing checkout or webhook projection.

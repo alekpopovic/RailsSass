@@ -1,0 +1,30 @@
+<% content_for :title, "Plans · Admin" %>
+
+<section class="py-8">
+  <div class="flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-wide text-indigo-700">Catalog</p>
+      <h1 class="mt-1 text-3xl font-bold tracking-tight">Plans</h1>
+    </div>
+    <%= link_to "New plan", new_admin_plan_path, class: "rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+  </div>
+
+  <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <table class="min-w-full divide-y divide-slate-200 text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+        <tr><th class="px-4 py-3">Key</th><th class="px-4 py-3">Name</th><th class="px-4 py-3">Type</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Position</th></tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        <% @plans.each do |plan| %>
+          <tr>
+            <td class="px-4 py-3 font-mono text-xs"><%= link_to plan.key, admin_plan_path(plan.key), class: "font-semibold text-indigo-700 hover:text-indigo-900" %></td>
+            <td class="px-4 py-3"><%= plan.name %></td>
+            <td class="px-4 py-3"><%= plan.free? ? "Free fallback" : "Paid" %></td>
+            <td class="px-4 py-3"><%= plan.active? ? "Active" : "Inactive" %></td>
+            <td class="px-4 py-3"><%= plan.position %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+</section>

@@ -6,6 +6,52 @@ Rails.application.routes.draw do
   resource :email_verification, only: %i[ new create edit update ]
   resources :organizations, only: %i[ new create ]
 
+  namespace :admin do
+    root "products#index"
+
+    resources :products, param: :key, except: :destroy do
+      resources :features,
+        controller: :product_features,
+        param: :key,
+        except: :destroy
+    end
+
+    resources :plans, param: :key, except: :destroy do
+      resources :plan_products,
+        path: "products",
+        param: :product_key,
+        only: %i[index show new create]
+      resources :plan_prices,
+        path: "prices",
+        only: %i[index show new create edit update]
+    end
+
+    get "plans/:plan_key/products/:product_key/entitlements",
+      to: "plan_feature_entitlements#index",
+      as: :plan_feature_entitlements
+    get "plans/:plan_key/products/:product_key/entitlements/new",
+      to: "plan_feature_entitlements#new",
+      as: :new_plan_feature_entitlement
+    post "plans/:plan_key/products/:product_key/entitlements",
+      to: "plan_feature_entitlements#create",
+      as: :create_plan_feature_entitlement
+    get "plans/:plan_key/products/:product_key/entitlements/:feature_key",
+      to: "plan_feature_entitlements#show",
+      as: :plan_feature_entitlement
+    get "plans/:plan_key/products/:product_key/entitlements/:feature_key/edit",
+      to: "plan_feature_entitlements#edit",
+      as: :edit_plan_feature_entitlement
+    patch "plans/:plan_key/products/:product_key/entitlements/:feature_key",
+      to: "plan_feature_entitlements#update"
+    put "plans/:plan_key/products/:product_key/entitlements/:feature_key",
+      to: "plan_feature_entitlements#update"
+
+    namespace :billing do
+      resources :subscriptions, only: %i[index show]
+      resources :webhook_events, only: %i[index show]
+    end
+  end
+
   scope "/o/:organization_slug", as: :organization, module: :organizations do
     get "dashboard", to: "dashboard#show", as: :dashboard
     get "invitations/accept", to: "invitation_acceptances#show", as: :invitation_acceptance

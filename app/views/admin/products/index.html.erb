@@ -1,0 +1,63 @@
+<% content_for :title, "Products · Platform administration" %>
+
+<section class="py-10 sm:py-12" aria-labelledby="products-title">
+  <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Platform catalog</p>
+      <h1 id="products-title" class="mt-2 text-3xl font-bold tracking-tight text-slate-950">Products</h1>
+      <p class="mt-2 max-w-3xl text-sm text-slate-600">Manage stable product identities and their presentation state.</p>
+    </div>
+
+    <%= link_to "New product",
+      new_admin_product_path,
+      class: "inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+  </div>
+
+  <div class="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <% if @products.any? %>
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200">
+          <caption class="sr-only">Platform product catalog</caption>
+          <thead class="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+            <tr>
+              <th scope="col" class="px-5 py-3">Product</th>
+              <th scope="col" class="px-5 py-3">Stable key</th>
+              <th scope="col" class="px-5 py-3">Status</th>
+              <th scope="col" class="px-5 py-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-200">
+            <% @products.each do |product| %>
+              <tr>
+                <td class="px-5 py-4">
+                  <p class="font-semibold text-slate-950"><%= product.name %></p>
+                  <% if product.description.present? %>
+                    <p class="mt-1 max-w-xl text-sm text-slate-600"><%= truncate(product.description, length: 140) %></p>
+                  <% end %>
+                </td>
+                <td class="whitespace-nowrap px-5 py-4 font-mono text-sm text-slate-700"><%= product.key %></td>
+                <td class="whitespace-nowrap px-5 py-4">
+                  <span class="rounded-full px-2.5 py-1 text-xs font-semibold <%= product.active? ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-700" %>">
+                    <%= product.active? ? "Active" : "Inactive" %>
+                  </span>
+                </td>
+                <td class="whitespace-nowrap px-5 py-4 text-right text-sm font-semibold">
+                  <div class="flex justify-end gap-3">
+                    <%= link_to "View", admin_product_path(product.key), class: "text-indigo-700 hover:text-indigo-900" %>
+                    <%= link_to "Features", admin_product_features_path(product.key), class: "text-indigo-700 hover:text-indigo-900" %>
+                    <%= link_to "Edit", edit_admin_product_path(product.key), class: "text-indigo-700 hover:text-indigo-900" %>
+                  </div>
+                </td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+    <% else %>
+      <div class="px-5 py-12 text-center">
+        <h2 class="font-semibold text-slate-950">No products yet</h2>
+        <p class="mt-2 text-sm text-slate-600">Create the first stable product identity for the platform catalog.</p>
+      </div>
+    <% end %>
+  </div>
+</section>

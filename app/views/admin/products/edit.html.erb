@@ -1,0 +1,11 @@
+<% content_for :title, "Edit #{@product.name} · Platform administration" %>
+
+<section class="mx-auto max-w-2xl py-10 sm:py-12" aria-labelledby="edit-product-title">
+  <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+    <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Product</p>
+    <h1 id="edit-product-title" class="mt-2 text-2xl font-bold tracking-tight text-slate-950">Edit <%= @product.name %></h1>
+    <p class="mt-2 text-sm text-slate-600">Update presentation details or catalog availability without changing the stable key.</p>
+
+    <%= render "form", product: @product %>
+  </div>
+</section>

@@ -1,0 +1,9 @@
+<% content_for :title, "Add product to #{@plan.key} · Admin" %>
+<section class="mx-auto max-w-2xl py-8">
+  <h1 class="text-3xl font-bold">Add product to <%= @plan.key %></h1>
+  <%= render "admin/shared/errors", record: @plan_product %>
+  <%= form_with scope: :plan_product, url: admin_plan_plan_products_path(@plan.key), class: "mt-6 space-y-5" do |form| %>
+    <div><%= form.label :product_key, "Product", class: "block text-sm font-semibold" %><%= form.select :product_key, @available_products.map { |product| ["#{product.name} (#{product.key})", product.key] }, { include_blank: "Select a product" }, required: true, class: "mt-2 w-full rounded-lg border-slate-300" %></div>
+    <div class="flex gap-3"><%= form.submit "Add product", class: "cursor-pointer rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white" %><%= link_to "Cancel", admin_plan_plan_products_path(@plan.key), class: "rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold" %></div>
+  <% end %>
+</section>

@@ -1,0 +1,35 @@
+<%= render "admin/shared/errors", record: plan %>
+
+<%= form_with model: plan, url: plan.persisted? ? admin_plan_path(plan.key) : admin_plans_path, class: "mt-6 space-y-5" do |form| %>
+  <% if plan.new_record? %>
+    <div>
+      <%= form.label :key, class: "block text-sm font-semibold text-slate-800" %>
+      <%= form.text_field :key, required: true, autocomplete: "off", class: "mt-2 w-full rounded-lg border-slate-300 font-mono focus:border-indigo-500 focus:ring-indigo-500" %>
+      <p class="mt-1 text-xs text-slate-500">Stable application identity; it cannot be changed later.</p>
+    </div>
+  <% else %>
+    <p class="text-sm text-slate-600">Stable key: <code class="rounded bg-slate-100 px-2 py-1"><%= plan.key %></code></p>
+  <% end %>
+
+  <div>
+    <%= form.label :name, class: "block text-sm font-semibold text-slate-800" %>
+    <%= form.text_field :name, required: true, class: "mt-2 w-full rounded-lg border-slate-300 focus:border-indigo-500 focus:ring-indigo-500" %>
+  </div>
+  <div>
+    <%= form.label :description, class: "block text-sm font-semibold text-slate-800" %>
+    <%= form.text_area :description, rows: 4, class: "mt-2 w-full rounded-lg border-slate-300 focus:border-indigo-500 focus:ring-indigo-500" %>
+  </div>
+  <div>
+    <%= form.label :position, class: "block text-sm font-semibold text-slate-800" %>
+    <%= form.number_field :position, min: 0, required: true, class: "mt-2 w-full rounded-lg border-slate-300 focus:border-indigo-500 focus:ring-indigo-500" %>
+  </div>
+  <div class="flex flex-wrap gap-6">
+    <label class="flex items-center gap-2 text-sm font-medium"><%= form.checkbox :active, class: "rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" %> Active for new selection</label>
+    <label class="flex items-center gap-2 text-sm font-medium"><%= form.checkbox :free, class: "rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" %> Free fallback plan</label>
+  </div>
+  <p class="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">Deactivation changes catalog selection only. It does not rewrite existing subscription history.</p>
+  <div class="flex gap-3">
+    <%= form.submit class: "cursor-pointer rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500" %>
+    <%= link_to "Cancel", plan.persisted? ? admin_plan_path(plan.key) : admin_plans_path, class: "rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" %>
+  </div>
+<% end %>

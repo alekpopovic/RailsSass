@@ -38,7 +38,7 @@ not a control.
 | Sensitive signed URL | Checkout URL, customer portal/payment-method URL | Return only after authorization; short-lived; do not log; portal URL not persisted; checkout URL encrypted and short-retained only if necessary |
 | PII | Email address, optional billing/customer identifiers, IP/user agent | Minimize, access-control, redact logs, retain only for defined purpose |
 | Tenant business data | Organization memberships, product resources, assignments, usage | Non-null tenant ownership, scoped query, policy, database constraints, backup encryption |
-| Authorization catalog | Stable-keyed plans, entitlements, roles, permissions, local plan prices | Reviewed deployment-controlled changes, database constraints, audit trail; display names never grant access, while only the unique active free plan is a fallback |
+| Authorization catalog | Stable-keyed plans, entitlements, roles, permissions, local plan prices | Reviewed platform-admin commands, immutable identities, database constraints, append-only audit trail; display names never grant access, while only the unique active free plan is a fallback |
 | Operational metadata | Event fingerprint, status reason code, timestamps, request/job IDs | Retain for diagnosis without raw payloads or secrets |
 
 The webhook ledger stores an allowlisted normalized envelope, mandatory content
@@ -67,6 +67,7 @@ plaintext tokens are never stored.
 | --- | --- | --- | --- |
 | Tenant IDOR | Member of A guesses B's slug or record ID | Account locator selects candidate only; authoritative membership and records reload through `Current.organization`; Pundit scope/policy; composite tenant FKs | Cross-tenant request/model tests for every controller family |
 | Stale tenant context | Reused thread/job retains prior organization | Establish context explicitly; reset in `ensure`; fail closed without context | Sequential request/job tests including exceptions |
+| Platform privilege escalation | Signup submits `system_role`, an organization owner enters `/admin`, a revoked/stale role remains accepted, or a hidden admin action is called directly | Public role parameter exclusion; explicit verified-user promotion task; live PostgreSQL role check in `PlatformAdminPolicy`; one admin base controller and policy scopes; no organization-role substitution | Task, policy, request, and system tests for ordinary user/owner denial, role revocation, and direct mutations |
 | Organization privilege escalation | Admin grants owner/billing, concurrent removal leaves no owner, user disable or reactivation orphans/resurrects access, or UI-hidden POST succeeds | Exact role matrix; organization-row locking in `Organizations::Memberships::ChangeRole`/`Remove`/`Reactivate`; soft suspension removes locators/product assignments once present; server authorization; cross-organization account-disable guard added with locator/bootstrap | Table-driven service/policy, reactivation, direct request, and concurrency tests |
 | Product privilege escalation | Owner assumes implicit access; billing role reaches product data; a cross-product or cross-tenant custom role is attached; suspended membership or inactive role remains effective | Central ordered Access gate: authenticated user, active tenant/member, entitlement, active product membership, non-billing role, and permission from an active correctly scoped role; no owner/admin bypass; composite tenant/product FKs plus same-tenant custom-role trigger | Constraint/trigger, central truth-table, permission-union, policy, and two-tenant scope tests; direct-request tests land with the first product controller |
 | Numeric-limit race/bypass | Two concurrent creates consume the final unit, or client omits feature/delta | Server-owned action registry; product command revalidates common grant and locks/conditionally mutates usage in one transaction | Parameter-tamper plus concurrency test proving at most one commit |
@@ -111,9 +112,14 @@ loaders that run before tenant setup, or global uniqueness/locator presence as a
 substitute for scope. Invitation, job, and verified webhook context establishment
 follow the bounded procedures in the authorization model.
 
-Support/administrative cross-tenant access is a non-goal. If later required, it
-needs explicit impersonation/audit design and cannot reuse ordinary tenant
-controllers.
+Support impersonation and arbitrary cross-tenant product-data access remain
+non-goals. The sole MVP diagnostic exception is the dedicated read-only admin
+billing surface: a platform administrator submits one exact organization
+`public_id`, without a global organization dropdown, sets
+`Current.organization`, and reads only its subscription association. It does not
+reuse tenant controllers, establish membership, or grant mutation authority.
+Subscription and global failed-webhook ledger indexes are each bounded to 100
+rows per page.
 
 ## 7. Authentication and account security
 
@@ -133,6 +139,11 @@ controllers.
   on logout, password reset, account disablement, and other security-sensitive
   changes. Runtime authorization revalidates the live unexpired session row and
   current verified/enabled user state instead of trusting cached model objects.
+- Never accept `system_role` from public signup or account-update parameters.
+  Promote the first platform administrator only with the explicit email-based
+  Rake task, which normalizes and locks the account and rejects missing,
+  unverified, or disabled users. Revalidate the role from PostgreSQL on every
+  `/admin` request.
 - Account disablement remains unexposed until its dedicated guard locks affected
   organizations and rejects a disable operation if it would leave any
   organization without another enabled active owner.
@@ -157,8 +168,10 @@ controllers.
 - Rate-limit registration, login, reset request/update, verification
   delivery/confirmation, invitation acceptance, checkout creation, and webhook
   ingress at the proxy and/or application with separate thresholds.
-- MFA/SSO are out of MVP, so owner/billing accounts carry residual phishing
-  risk. This is documented and revisited before enterprise onboarding.
+- MFA/SSO are out of MVP, so owner/billing and platform-admin accounts carry
+  residual phishing risk. This is documented and revisited before enterprise
+  onboarding; platform-admin accounts should not be used for ordinary tenant
+  work.
 
 ## 8. Authorization controls
 
@@ -166,12 +179,17 @@ The normative decision flow is in
 [Authorization Model](authorization_model.md). Security-specific requirements:
 
 - Enable Pundit verification hooks in authenticated controllers.
+- Require `PlatformAdminPolicy` for every `/admin` route and return an empty
+  policy scope to ordinary users. Organization ownership is not platform
+  authority, and hiding the admin link is not a control.
 - Treat every submitted organization/member/product/role/permission/price ID as
   untrusted and re-resolve it through owned associations/catalog allowlists.
 - Treat `PlanPrice` and its Lemon identifiers as catalog input only. Checkout
   and webhook processing remain unavailable until Billing validates an exact
   server-owned test/live environment and configured-store mapping; the price
-  row itself never proves payment or subscription eligibility.
+  row itself never proves payment or subscription eligibility. Lock commercial
+  and provider-mapping fields after any checkout, subscription, or plan-change
+  history references the price; use a new price row for corrected terms.
 - Do not use owner/admin organization role as a product permission shortcut;
   billing organization membership is categorically ineligible for product-data
   access.
@@ -203,6 +221,16 @@ The normative decision flow is in
   registry; never accept those security semantics as optional client input.
 - Audit both successful sensitive changes and denied high-risk attempts without
   logging sensitive input.
+- Route catalog writes through the transactional audited persistence command;
+  keep stable keys/identity associations immutable, deactivate product/feature/
+  plan/price records instead of deleting them, and preserve a disabled
+  entitlement row rather than deleting history. A new plan-product requires an
+  active plan and product, a new plan-price requires an active plan, and a new
+  entitlement requires its plan, product, and feature to be active. Inactive
+  parents retain existing relationships for catalog and billing history but
+  cannot receive new ones.
+  The UI does not expose entitlement settings, and the generic `settings`
+  parameter is log-filtered.
 
 ## 9. Billing boundary controls
 
@@ -322,9 +350,11 @@ Retention jobs are tenant-aware where applicable, idempotent, tested, and must
 not delete active billing evidence. A formal privacy/export/deletion program is
 required before collecting data beyond MVP fields.
 
-The MVP audit sink is the append-only PostgreSQL `audit_events` table defined in
-the data model, not an unresolved external-sink choice. Ordinary application
-code cannot update events; the dedicated retention path is separately tested.
+The MVP audit sinks are the append-only PostgreSQL `audit_events` tenant ledger
+and the separate `platform_audit_events` global catalog ledger defined in the
+data model, not an unresolved external-sink choice. Ordinary application code
+cannot update either ledger; retention paths, if approved, are separately
+authorized and tested.
 
 ## 14. Availability and abuse controls
 
@@ -427,8 +457,9 @@ reprocess only verified events. Direct subscription edits are prohibited.
   deferred. Tenant isolation and server authorization are not deferred.
 - Organization slugs expose a tenant-readable identifier to members and may be
   guessable; membership-scoped resolution prevents this from granting access.
-- Product/catalog management is deployment-controlled; operator access remains
-  a privileged trust boundary.
+- Product/catalog management is restricted to the internal platform-admin
+  command surface; that credentialed operator boundary remains privileged and
+  all writes require append-only audit evidence.
 - Flat plan entitlements are not historical versions. A reviewed catalog change
   can affect every synchronized subscription referencing that plan, so catalog
   write access and audit evidence are production-sensitive.
@@ -459,3 +490,6 @@ regulated data, or broader administrative access.
 - Worker alerts, backup monitoring, and isolated restore evidence exist.
 - A security reviewer confirms that every product and billing mutation is
   server-authorized and tenant-scoped.
+- Every `/admin` request revalidates the live platform role; catalog writes retain
+  immutable identity and audit evidence, diagnostics are read-only, and rendered
+  pages contain no API/webhook secret, raw payload, or stored JSON snapshot.

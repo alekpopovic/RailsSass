@@ -1,0 +1,11 @@
+<% content_for :title, "New product · Platform administration" %>
+
+<section class="mx-auto max-w-2xl py-10 sm:py-12" aria-labelledby="new-product-title">
+  <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+    <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Platform catalog</p>
+    <h1 id="new-product-title" class="mt-2 text-2xl font-bold tracking-tight text-slate-950">New product</h1>
+    <p class="mt-2 text-sm text-slate-600">Create a reviewed stable identity. It can be deactivated later, but its key cannot be changed.</p>
+
+    <%= render "form", product: @product %>
+  </div>
+</section>

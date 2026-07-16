@@ -7,5 +7,5 @@ Rails.application.config.filter_parameters += [
   :passw, :email, :secret, :token, :token_digest, :session_token,
   :reset_token, :verification_token, :_key, :crypt, :salt, :certificate,
   :otp, :ssn, :cvv, :cvc, :authorization, :api_key, :signature,
-  :raw_payload, :checkout_url, :portal_url
+  :raw_payload, :settings, :checkout_url, :portal_url
 ]

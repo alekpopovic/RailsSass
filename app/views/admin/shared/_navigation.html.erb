@@ -1,0 +1,22 @@
+<div class="border-b border-slate-800 bg-slate-950 text-slate-100">
+  <nav class="mx-auto flex max-w-7xl items-center gap-5 overflow-x-auto px-5 py-3 text-sm" aria-label="Platform administration">
+    <span class="whitespace-nowrap font-semibold text-white">Platform administration</span>
+
+    <%= link_to "Products",
+      admin_products_path,
+      class: "whitespace-nowrap font-semibold text-slate-300 hover:text-white",
+      aria: { current: ("page" if controller_path.in?([ "admin/products", "admin/product_features" ])) } %>
+    <%= link_to "Plans",
+      admin_plans_path,
+      class: "whitespace-nowrap font-semibold text-slate-300 hover:text-white",
+      aria: { current: ("page" if controller_path.in?([ "admin/plans", "admin/plan_products", "admin/plan_prices", "admin/plan_feature_entitlements" ])) } %>
+    <%= link_to "Subscriptions",
+      admin_billing_subscriptions_path,
+      class: "whitespace-nowrap font-semibold text-slate-300 hover:text-white",
+      aria: { current: ("page" if controller_path == "admin/billing/subscriptions") } %>
+    <%= link_to "Failed webhooks",
+      admin_billing_webhook_events_path,
+      class: "whitespace-nowrap font-semibold text-slate-300 hover:text-white",
+      aria: { current: ("page" if controller_path == "admin/billing/webhook_events") } %>
+  </nav>
+</div>

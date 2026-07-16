@@ -6,8 +6,9 @@ Last updated: 2026-07-16
 ## 1. Purpose
 
 This document is the normative server-side authorization contract. It combines
-path-based tenancy, organization roles, local plan entitlements, product RBAC,
-record rules, and numeric capacity. All checks fail closed.
+global platform administration, path-based tenancy, organization roles, local
+plan entitlements, product RBAC, record rules, and numeric capacity. All checks
+fail closed.
 
 The relational structures are in [Data Model](data_model.md). The canonical
 subscription predicate is in
@@ -44,6 +45,8 @@ state.
 12. UI hiding is never a security boundary.
 13. Authorization makes no provider network call and uses no checkout redirect
     parameter.
+14. `User.system_role` is database-authoritative global platform state. It is
+    never accepted from a public form, and no organization role implies it.
 
 ## 3. Current context
 
@@ -95,6 +98,36 @@ record organization ownership as defense in depth.
 Non-member tenant slugs and cross-tenant record IDs return not found. A known
 within-tenant record for which the user lacks a capability returns forbidden,
 unless disclosure of existence would itself be sensitive.
+
+### 3.3 Internal platform-admin requests
+
+The internal `/admin` namespace is outside ordinary tenant routes. Every request
+requires a live, unexpired authenticated session for a verified, enabled user and
+rechecks in PostgreSQL that the same user currently has
+`system_role = 'platform_admin'`. `PlatformAdminPolicy` and its scope fail closed
+for an absent/stale session or role. UI navigation is only presentation.
+
+The system role is orthogonal to organization membership:
+
+- organization owner/admin/billing/member never implies platform access;
+- a platform administrator receives no tenant membership, product permission,
+  or owner bypass from the system role;
+- public signup and account-update parameters omit `system_role`;
+- the first administrator is promoted only with
+  `bin/rails "platform_admin:promote[email@example.test]"`. The task normalizes
+  and locks the account, rejects a missing, unverified, or disabled user, is
+  idempotent, and changes only `system_role`.
+
+Global catalog reads and audited Catalog commands need no tenant context.
+Subscription diagnostics are different because subscriptions are tenant-owned:
+the administrator submits one exact organization `public_id`, without loading a
+global organization dropdown. The request sets `Current.organization`, and the
+collection/detail query starts at
+`Current.organization.billing_subscriptions`; the index returns at most 100
+rows per page. This read-only diagnostic context does not establish
+`Current.membership` and cannot mutate billing state. Failed webhook events
+remain provider-wide ledger rows and are read globally through the restricted
+policy, including rows whose organization is unresolved, at most 100 per page.
 
 ## 4. Organization authorization
 
@@ -284,6 +317,11 @@ Pundit policies compose the common decision with product-owned record-specific
 rules. They do not duplicate the billing matrix, entitlement/RBAC logic, or
 SQL-scoping contract.
 
+`PlatformAdminPolicy` and its `Scope` are the single global administrative
+predicate. They validate authentication and the current database-backed system
+role, allow no organization-role substitution, return no scope to ordinary
+users, and are applied by the `/admin` base controller before resource loading.
+
 `ApplicationPolicy` and its base `Scope` expose protected helpers backed by the
 same `Access::Gate` used by UI predicates. Concrete product policies must still
 assert record ownership and start collection queries at
@@ -302,6 +340,8 @@ Controller requirements:
 - explicitly and narrowly skip verification for health, authentication, and
   the verified webhook ingress where Pundit does not apply;
 - perform authorization on direct HTML, Turbo, and JSON requests equally.
+- apply the same verification to every `/admin` index/detail/mutation; an admin
+  navigation link is not authorization.
 
 The same policy/decision predicate may drive UI visibility. The controller
 still re-resolves all submitted IDs and authorizes the resulting action.
@@ -421,7 +461,7 @@ so reactivation requires explicit reassignment.
 
 ## 10. Audit requirements
 
-Once the audit-ledger follow-up lands, structured audit events are emitted for:
+Structured tenant audit events are emitted for:
 
 - organization creation;
 - invitation creation/revocation/acceptance;
@@ -431,6 +471,12 @@ Once the audit-ledger follow-up lands, structured audit events are emitted for:
 - tenant-resolved verified-webhook projection outcome and
   subscription/plan/status transitions;
 - quarantined billing mappings and administrative repair actions.
+
+Every internal catalog mutation additionally writes a global
+`Platform::AuditEvent` in the same transaction as the changed record. It records
+the platform actor, `catalog.created`/`catalog.updated`/`catalog.deactivated`, an
+immutable stable subject key, and a bounded allowlisted before/after change set.
+The global ledger is append-only and does not fabricate a tenant association.
 
 Audit output contains stable internal IDs and action codes but excludes
 passwords, session tokens, invitation plaintext tokens, API keys, signatures,
@@ -489,6 +535,16 @@ all applicable layers compose.
 - `verify_authorized`/`verify_policy_scoped` catch omitted controller checks.
 - `Current` resets between requests and after exceptions.
 - Billing owner/billing role checks are enforced server-side.
+- Every `/admin` list, detail, and mutation denies ordinary users and organization
+  owners without a platform role. A revoked platform role denies on the next
+  request even when the browser session remains valid.
+- Public account parameters cannot set `system_role`; promotion-task tests cover
+  normalized success, idempotence, and missing/unverified/disabled rejection.
+- Subscription diagnostics accept one exact organization `public_id`, never
+  load a global organization dropdown, and assert every child query starts from
+  `Current.organization`; the failed-event view reads only the global ledger.
+  Both indexes are bounded to 100 rows per page, are read-only, and omit
+  payload/snapshot fields.
 
 ### 11.4 Runtime isolation from billing provider
 
@@ -502,8 +558,9 @@ cannot affect an access decision.
   policies.
 - Every tenant-owned query in controllers, services, and jobs is visibly rooted
   in `Current.organization`; the section 7 context-establishment paths may use
-  only non-authoritative global locators to select a candidate root, then must
-  immediately reload tenant-owned rows through that root.
+  only non-authoritative global locators to select a candidate root, while the
+  section 3.3 platform diagnostic may select an explicit organization root.
+  Both immediately reload tenant-owned rows through that root.
 - Organization roles match the canonical matrix exactly.
 - Paid subscription eligibility and active-free fallback match the single
   billing matrix exactly.
@@ -511,3 +568,6 @@ cannot affect an access decision.
   no bypass.
 - Numeric consumption is database-atomic under concurrency.
 - Direct requests remain denied regardless of UI state.
+- All `/admin` routes require the live `platform_admin` role; organization owner
+  is not a substitute, catalog identities remain immutable, and every catalog
+  mutation has matching append-only platform audit evidence.

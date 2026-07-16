@@ -126,6 +126,22 @@ $$;
 
 
 --
+-- Name: prevent_platform_audit_event_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.prevent_platform_audit_event_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+BEGIN
+  RAISE EXCEPTION 'platform audit events are append-only'
+    USING ERRCODE = '55000',
+      TABLE = 'platform_audit_events';
+END;
+$$;
+
+
+--
 -- Name: protect_billing_subscription_history(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -839,6 +855,47 @@ ALTER SEQUENCE public.plans_id_seq OWNED BY public.plans.id;
 
 
 --
+-- Name: platform_audit_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.platform_audit_events (
+    id bigint NOT NULL,
+    actor_user_id bigint NOT NULL,
+    action character varying(32) NOT NULL,
+    subject_type character varying(64) NOT NULL,
+    subject_id bigint NOT NULL,
+    subject_key character varying(255) NOT NULL,
+    change_set jsonb DEFAULT '{}'::jsonb NOT NULL,
+    occurred_at timestamp(6) without time zone NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT platform_audit_events_action_allowed CHECK (((action)::text = ANY ((ARRAY['catalog.created'::character varying, 'catalog.updated'::character varying, 'catalog.deactivated'::character varying])::text[]))),
+    CONSTRAINT platform_audit_events_change_set_object_bounded CHECK (((jsonb_typeof(change_set) = 'object'::text) AND (pg_column_size(change_set) <= 16384))),
+    CONSTRAINT platform_audit_events_subject_id_positive CHECK ((subject_id > 0)),
+    CONSTRAINT platform_audit_events_subject_key_normalized CHECK ((((subject_key)::text = btrim((subject_key)::text)) AND ((char_length((subject_key)::text) >= 1) AND (char_length((subject_key)::text) <= 255)))),
+    CONSTRAINT platform_audit_events_subject_type_allowed CHECK (((subject_type)::text = ANY ((ARRAY['Product'::character varying, 'ProductFeature'::character varying, 'Plan'::character varying, 'PlanProduct'::character varying, 'PlanFeatureEntitlement'::character varying, 'PlanPrice'::character varying])::text[])))
+);
+
+
+--
+-- Name: platform_audit_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.platform_audit_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: platform_audit_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.platform_audit_events_id_seq OWNED BY public.platform_audit_events.id;
+
+
+--
 -- Name: product_features; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1281,6 +1338,13 @@ ALTER TABLE ONLY public.plans ALTER COLUMN id SET DEFAULT nextval('public.plans_
 
 
 --
+-- Name: platform_audit_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_audit_events ALTER COLUMN id SET DEFAULT nextval('public.platform_audit_events_id_seq'::regclass);
+
+
+--
 -- Name: product_features id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1469,6 +1533,14 @@ ALTER TABLE ONLY public.plan_products
 
 ALTER TABLE ONLY public.plans
     ADD CONSTRAINT plans_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: platform_audit_events platform_audit_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_audit_events
+    ADD CONSTRAINT platform_audit_events_pkey PRIMARY KEY (id);
 
 
 --
@@ -2084,6 +2156,41 @@ CREATE UNIQUE INDEX index_plans_on_single_active_free ON public.plans USING btre
 
 
 --
+-- Name: index_platform_audit_events_on_action_and_occurred_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_platform_audit_events_on_action_and_occurred_at ON public.platform_audit_events USING btree (action, occurred_at);
+
+
+--
+-- Name: index_platform_audit_events_on_actor_and_occurred_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_platform_audit_events_on_actor_and_occurred_at ON public.platform_audit_events USING btree (actor_user_id, occurred_at);
+
+
+--
+-- Name: index_platform_audit_events_on_actor_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_platform_audit_events_on_actor_user_id ON public.platform_audit_events USING btree (actor_user_id);
+
+
+--
+-- Name: index_platform_audit_events_on_subject; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_platform_audit_events_on_subject ON public.platform_audit_events USING btree (subject_type, subject_id);
+
+
+--
+-- Name: index_platform_audit_events_on_subject_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_platform_audit_events_on_subject_key ON public.platform_audit_events USING btree (subject_type, subject_key);
+
+
+--
 -- Name: index_product_features_on_id_product_and_kind; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2378,6 +2485,13 @@ CREATE TRIGGER plan_prices_plan_identity_is_immutable BEFORE UPDATE OF plan_id O
 
 
 --
+-- Name: platform_audit_events platform_audit_events_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER platform_audit_events_are_append_only BEFORE DELETE OR UPDATE ON public.platform_audit_events FOR EACH ROW EXECUTE FUNCTION public.prevent_platform_audit_event_mutation();
+
+
+--
 -- Name: product_membership_roles product_membership_roles_scope_is_valid; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -2616,6 +2730,14 @@ ALTER TABLE ONLY public.organization_memberships
 
 
 --
+-- Name: platform_audit_events fk_rails_5d380a1a25; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_audit_events
+    ADD CONSTRAINT fk_rails_5d380a1a25 FOREIGN KEY (actor_user_id) REFERENCES public.users(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: plan_products fk_rails_6cc811864d; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2782,6 +2904,7 @@ ALTER TABLE ONLY public.product_membership_roles
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20260716050000'),
 ('20260716040000'),
 ('20260716030100'),
 ('20260716030000'),

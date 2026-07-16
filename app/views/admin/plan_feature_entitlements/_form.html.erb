@@ -1,0 +1,13 @@
+<%= render "admin/shared/errors", record: entitlement %>
+<% target_url = entitlement.persisted? ? admin_plan_feature_entitlement_path(plan_key: @plan.key, product_key: @product.key, feature_key: entitlement.product_feature.key) : admin_create_plan_feature_entitlement_path(plan_key: @plan.key, product_key: @product.key) %>
+<%= form_with model: entitlement, url: target_url, class: "mt-6 space-y-5" do |form| %>
+  <% if entitlement.new_record? %>
+    <div><%= label_tag "plan_feature_entitlement_feature_identity", "Feature", class: "block text-sm font-semibold" %><%= select_tag "plan_feature_entitlement[feature_identity]", options_for_select(@available_features.map { |feature| ["#{feature.product.key}.#{feature.key} (#{feature.kind})", "#{feature.product.key}/#{feature.key}"] }), include_blank: "Select a feature", required: true, class: "mt-2 w-full rounded-lg border-slate-300" %><p class="mt-1 text-xs text-slate-500">The stable product and feature keys are submitted as one identity. A feature from another product is rejected by server validation.</p></div>
+  <% else %>
+    <p class="text-sm text-slate-600">Feature: <code class="rounded bg-slate-100 px-2 py-1"><%= entitlement.product_feature.key %></code> (<%= entitlement.feature_kind %>)</p>
+  <% end %>
+  <div class="flex flex-wrap gap-6"><label class="flex items-center gap-2 text-sm font-medium"><%= form.checkbox :enabled, class: "rounded border-slate-300 text-indigo-600" %> Enabled</label><label class="flex items-center gap-2 text-sm font-medium"><%= form.checkbox :unlimited, class: "rounded border-slate-300 text-indigo-600" %> Unlimited</label></div>
+  <div><%= form.label :limit_value, class: "block text-sm font-semibold" %><%= form.number_field :limit_value, min: 0, class: "mt-2 w-full rounded-lg border-slate-300" %><p class="mt-1 text-xs text-slate-500">Leave blank for flags or unlimited limits.</p></div>
+  <p class="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">Advanced entitlement settings are intentionally not exposed in the admin UI and may never contain credentials or secrets.</p>
+  <div class="flex gap-3"><%= form.submit class: "cursor-pointer rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white" %><%= link_to "Cancel", admin_plan_feature_entitlements_path(plan_key: @plan.key, product_key: @product.key), class: "rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold" %></div>
+<% end %>

@@ -112,6 +112,46 @@ or subscription projection. The test helper enables WebMock globally and blocks
 all non-local network traffic while allowing localhost for Rails/system tests;
 provider tests must stub every request with synthetic data.
 
+## Internal platform administration
+
+Public registration cannot assign `system_role`. After an intended administrator
+has registered and verified the email, promote that existing enabled account
+explicitly:
+
+```bash
+bin/rails "platform_admin:promote[admin@example.test]"
+```
+
+The task normalizes the email, locks the user, rejects blank/missing, unverified,
+or disabled accounts, and idempotently changes only `system_role`. It does not
+create an organization or grant an organization/product role. For containerized
+Rails, run the same command through the app service:
+
+```bash
+docker compose run --rm app bin/rails "platform_admin:promote[admin@example.test]"
+```
+
+Authenticate as that user and open <http://localhost:3000/admin>. Catalog writes
+are audited and preserve stable identities. Product, feature, plan, and price
+records are deactivated instead of deleted; plan-product rows are create-only;
+entitlements are disabled with `enabled=false` rather than deleted. A new
+plan-product requires an active plan and product, a new plan-price requires an
+active plan, and a new entitlement requires its plan, product, and feature to be
+active. Deactivation retains existing catalog and billing-history relationships
+but blocks new ones. A price with billing history can only be
+activated/deactivated; create a new price to change its commercial or Lemon
+mapping fields. Advanced entitlement settings are intentionally not rendered by
+this interface and the `settings` parameter is filtered from logs.
+
+Subscription diagnostics require one exact organization `public_id`, do not
+load a global organization dropdown, and remain scoped through
+`Current.organization`; failed webhook events are read from the global ledger.
+Both indexes are bounded to 100 rows per page and both views are read-only. They
+never display Lemon credentials, webhook secrets, raw payloads,
+`pause`/`snapshot` JSON, or signed provider URLs. Real administrator email
+addresses are operational PII and must not be added to tracked examples,
+fixtures, or documentation.
+
 ## Quality gate
 
 `bin/ci` forces `RAILS_ENV=test`, uses a single worker by default, and stops at

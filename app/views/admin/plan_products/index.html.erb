@@ -1,0 +1,9 @@
+<% content_for :title, "#{@plan.key} products · Admin" %>
+<section class="py-8">
+  <div class="flex flex-wrap items-center justify-between gap-4"><div><p class="text-sm text-slate-500">Plan <%= @plan.key %></p><h1 class="text-3xl font-bold">Plan products</h1></div><% if @plan.active? %><%= link_to "Add product", new_admin_plan_plan_product_path(@plan.key), class: "rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500" %><% else %><span class="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-600">Activate plan to add products</span><% end %></div>
+  <div class="mt-6 grid gap-4 md:grid-cols-2">
+    <% @plan_products.each do |plan_product| %>
+      <%= link_to admin_plan_plan_product_path(@plan.key, plan_product.product.key), class: "rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:border-indigo-300" do %><p class="font-mono text-xs text-indigo-700"><%= plan_product.product.key %></p><h2 class="mt-1 font-semibold"><%= plan_product.product.name %></h2><p class="mt-2 text-sm text-slate-600"><%= plan_product.plan_feature_entitlements.size %> feature entitlements</p><% end %>
+    <% end %>
+  </div>
+</section>

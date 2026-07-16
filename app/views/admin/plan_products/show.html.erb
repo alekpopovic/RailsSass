@@ -1,0 +1,6 @@
+<% content_for :title, "#{@plan.key} / #{@plan_product.product.key} · Admin" %>
+<section class="py-8">
+  <p class="text-sm text-slate-500">Plan <%= @plan.key %></p><h1 class="mt-1 text-3xl font-bold"><%= @plan_product.product.name %></h1><p class="mt-1 font-mono text-sm text-indigo-700"><%= @plan_product.product.key %></p>
+  <div class="mt-6"><%= link_to "Feature entitlements", admin_plan_feature_entitlements_path(plan_key: @plan.key, product_key: @plan_product.product.key), class: "rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500" %></div>
+  <p class="mt-6 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">Plan-product identities are retained. This interface does not hard-delete entitlement roots.</p>
+</section>

@@ -23,6 +23,11 @@ class User < ApplicationRecord
     foreign_key: :actor_user_id,
     dependent: :restrict_with_exception,
     inverse_of: :actor_user
+  has_many :platform_audit_events_as_actor,
+    class_name: "Platform::AuditEvent",
+    foreign_key: :actor_user_id,
+    dependent: :restrict_with_exception,
+    inverse_of: :actor_user
   has_many :organizations, through: :organization_memberships
 
   enum :system_role, { user: "user", platform_admin: "platform_admin" },

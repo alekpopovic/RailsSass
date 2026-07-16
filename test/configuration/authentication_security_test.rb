@@ -15,6 +15,7 @@ class AuthenticationSecurityTest < ActiveSupport::TestCase
     api_key: "provider-key",
     signature: "webhook-signature",
     raw_payload: { "customer_email" => "person@example.test" },
+    settings: { "api_key" => "operator-pasted-secret" },
     checkout_url: "https://provider.example/signed-checkout",
     portal_url: "https://provider.example/signed-portal"
   }.freeze
@@ -27,7 +28,7 @@ class AuthenticationSecurityTest < ActiveSupport::TestCase
     assert_equal [ "[FILTERED]" ], filtered.values.uniq
   end
 
-  test "billing credentials and sensitive payload fields are filtered" do
+  test "billing credentials and sensitive admin payload fields are filtered" do
     filtered = ActiveSupport::ParameterFilter
       .new(Rails.application.config.filter_parameters)
       .filter(BILLING_SENSITIVE_VALUES)

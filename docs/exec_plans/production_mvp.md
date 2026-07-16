@@ -66,6 +66,15 @@ Implementation PRs may not silently change these decisions:
 - Global catalog/roles/permissions are system-managed. Nullable
   organization-role scope is supported relationally, but tenant-custom catalog
   and a customer-facing custom-role builder are out of scope.
+- Internal `/admin` routes require a live database-backed `platform_admin` role;
+  organization ownership never substitutes. Public parameters never accept
+  `system_role`, and the first admin is promoted by the explicit verified-user
+  Rake task.
+- Platform-admin catalog writes preserve stable identity, use deactivate/disable
+  rather than hard delete, and create append-only global audit evidence in the
+  same transaction. Billing diagnostics are read-only; subscription children
+  require one exact organization `public_id`, no global organization dropdown,
+  `Current.organization` scope, and at most 100 rows per index page.
 - The common Access gate is pure entitlement+RBAC; product policies own record
   rules and product commands own atomic capacity/mutation via server action
   contracts.
@@ -89,7 +98,9 @@ Observed on 2026-07-16:
 - Organization invitations, audited member role/suspension/reactivation
   commands, digest-only invitation tokens, and pre-membership acceptance exist.
 - The constrained local catalog, development/test seed command, typed
-  entitlements, and local plan prices exist.
+  entitlements, local plan prices, and an audited platform-admin mutation surface
+  exist. A DB-authoritative internal admin policy, explicit promotion task, and
+  Tailwind `/admin` catalog/diagnostic UI are available to platform admins only.
 - A Billing persistence/client foundation exists: tenant customers, checkout
   attempts, subscriptions with archival history, plan-change commands, a
   provider-wide minimal webhook-event ledger, and a fixed-origin Lemon client.
@@ -260,8 +271,9 @@ Scope:
   disable checks. Registration creates no organization or membership.
 - Add a required non-blank `name`; normalize `email_address`; add password
   digest, nullable `email_verified_at`, and `system_role` with a database-backed
-  `user`/`platform_admin` allowlist and default `user`. Do not expose a
-  platform-admin interface.
+  `user`/`platform_admin` allowlist and default `user`. Keep public identity
+  parameters role-free; the later controlled-catalog milestone owns the internal
+  admin surface.
 - Deny session creation to unverified or disabled users with the same generic
   response used for unknown email and wrong password.
 - Use separate, state-bound Rails signed tokens: password reset expires after
@@ -517,19 +529,25 @@ Tests:
   and later RBAC;
 - data task is repeatable.
 
-Acceptance: catalog reads are global/read-only to tenant users; no global admin
-UI exists.
+Acceptance at this checkpoint: catalog reads are global/read-only to tenant
+users; a later controlled-mutation milestone must authorize any global admin UI.
 
-### PR-08: Add catalog query and controlled mutation boundaries
+### PR-08: Add catalog query and controlled mutation boundaries — implemented checkpoint
 
 Depends on: PR-07.
 
 **Goal:** expose deterministic Catalog-owned reads and reviewed mutation paths
 without coupling the catalog to tenant or provider state.
 
-Implementation update (2026-07-16): the read side landed as
-`Entitlements::Resolver` together with the local paid-status policy and active
-free fallback. Controlled production catalog mutation/audit remains outstanding.
+Implementation update (2026-07-16): `Entitlements::Resolver` supplies the
+read side. `Platform::PersistCatalog` now owns transactional create/update/
+deactivate commands and writes an append-only `Platform::AuditEvent`. The
+DB-authoritative `PlatformAdminPolicy`, explicit
+`platform_admin:promote[email]` task, and internal Tailwind UI expose only this
+reviewed boundary. Read-only subscription diagnostics require explicit
+organization `public_id` input without a global organization dropdown and a
+tenant-rooted reload; failed webhook events remain a global-ledger view. Both
+indexes return at most 100 rows per page.
 
 Scope:
 
@@ -537,24 +555,55 @@ Scope:
   plan key/record.
 - Return enabled flag or enabled finite/unlimited capacity deterministically;
   missing or disabled rows deny.
-- Add deployment-controlled mutation services with audit coverage before any
-  catalog management UI or production data loader.
+- Route catalog creation/update/deactivation through one service that records an
+  append-only global audit event in the same transaction. Product, feature,
+  plan, and price use deactivation instead of hard delete; plan-product is
+  create-only; entitlements preserve identity and disable with `enabled=false`.
+- Require an active plan and product for a new plan-product, an active plan for a
+  new plan-price, and an active plan, product, and feature for a new entitlement,
+  using one composite stable feature identity. Deactivation retains existing
+  catalog and billing-history relationships but blocks new ones. Keep
+  entitlement settings out of the web UI and filtered from request logs. Once
+  billing history references a price, permit only active-status changes and
+  require a new price for commercial/mapping changes.
+- Require the live PostgreSQL `platform_admin` role for every `/admin` route.
+  Keep `system_role` out of public parameters and bootstrap the first admin only
+  with the normalized-email task after verified/enabled checks.
+- Keep billing views diagnostic-only: accept one exact organization `public_id`,
+  load no global organization dropdown, and read its subscriptions through
+  `Current.organization`; show only failed global webhook events; bound both
+  indexes to 100 rows per page; render no payload/snapshot/secret fields.
 - Keep display names, product/feature/paid-plan selection flags, and price
   records outside entitlement lookup. Only `active AND free` participates as
   the explicit fallback selector.
 
-Migrations: none expected for the base graph; any audit/history requirement
-discovered here lands explicitly rather than weakening PR-07 constraints.
+Migrations: add the focused `platform_audit_events` append-only ledger with actor
+FK, bounded action/subject/change-set fields, lookup indexes, checks, and a
+database trigger rejecting update/delete. Existing catalog constraints remain
+unchanged.
 
 Tests:
 
 - missing/disabled flag and limit deny in the catalog query;
 - finite zero and explicit unlimited return distinct typed results;
 - lookup by display name is unavailable;
-- controlled changes are audited and cannot alter stable identity fields.
+- controlled changes are audited and cannot alter stable identity fields;
+- promotion rejects missing/unverified/disabled accounts and public mass
+  assignment cannot create an admin;
+- ordinary users and organization owners receive neither admin list nor detail;
+- critical catalog create/update/deactivate flows and inconsistent-feature
+  errors are covered by request/system tests, including rejection of new
+  relations under inactive plan/product/feature parents and preservation of
+  referenced price/catalog history;
+- subscription diagnostic SQL remains tenant-rooted after exact organization
+  `public_id` input, no global organization dropdown is loaded, both indexes are
+  bounded to 100 rows per page, all diagnostic endpoints are read-only, and
+  response bodies exclude secrets, raw payloads, and snapshots.
 
-Acceptance: given a plan and product/feature, Catalog returns one
-deterministic local answer without tenant/provider input.
+Acceptance: Catalog returns one deterministic local answer and every internal
+mutation is platform-authorized, identity-preserving, transactional, and
+audited. No admin diagnostic can mutate billing or expose another organization's
+subscription without explicit tenant selection.
 
 ### PR-09: Add product roles and permissions — implemented checkpoint
 

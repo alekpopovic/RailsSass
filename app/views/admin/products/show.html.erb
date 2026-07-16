@@ -1,0 +1,41 @@
+<% content_for :title, "#{@product.name} · Platform administration" %>
+
+<section class="py-10 sm:py-12" aria-labelledby="product-title">
+  <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Product</p>
+      <h1 id="product-title" class="mt-2 text-3xl font-bold tracking-tight text-slate-950"><%= @product.name %></h1>
+      <p class="mt-2 font-mono text-sm text-slate-600"><%= @product.key %></p>
+    </div>
+
+    <div class="flex flex-wrap gap-3">
+      <%= link_to "Manage features",
+        admin_product_features_path(@product.key),
+        class: "rounded-lg border border-slate-300 bg-white px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+      <%= link_to "Edit product",
+        edit_admin_product_path(@product.key),
+        class: "rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+    </div>
+  </div>
+
+  <div class="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <dl class="grid gap-6 sm:grid-cols-2">
+      <div>
+        <dt class="text-sm font-medium text-slate-500">Stable key</dt>
+        <dd class="mt-1 font-mono text-slate-950"><%= @product.key %></dd>
+      </div>
+      <div>
+        <dt class="text-sm font-medium text-slate-500">Catalog status</dt>
+        <dd class="mt-1 font-semibold <%= @product.active? ? "text-emerald-700" : "text-slate-700" %>">
+          <%= @product.active? ? "Active" : "Inactive" %>
+        </dd>
+      </div>
+      <div class="sm:col-span-2">
+        <dt class="text-sm font-medium text-slate-500">Description</dt>
+        <dd class="mt-1 whitespace-pre-line text-slate-900"><%= @product.description.presence || "No description provided." %></dd>
+      </div>
+    </dl>
+  </div>
+
+  <%= link_to "Back to products", admin_products_path, class: "mt-6 inline-flex font-semibold text-indigo-700 hover:text-indigo-900" %>
+</section>

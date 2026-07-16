@@ -115,6 +115,24 @@ class PasswordsTest < ActionDispatch::IntegrationTest
     assert_equal user, User.find_by_password_reset_token(token)
   end
 
+  test "password reset cannot assign a platform system role" do
+    user = create_user
+    token = user.password_reset_token
+
+    patch password_path, params: {
+      token: token,
+      user: {
+        password: NEW_PASSWORD,
+        password_confirmation: NEW_PASSWORD,
+        system_role: "platform_admin"
+      }
+    }
+
+    assert_redirected_to new_session_path
+    assert_predicate user.reload, :user?
+    assert user.authenticate(NEW_PASSWORD)
+  end
+
   private
     def create_user
       User.create!(

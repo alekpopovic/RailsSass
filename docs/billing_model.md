@@ -31,7 +31,9 @@ includes tenant-owned customers, checkout attempts, subscriptions, and
 plan-change commands plus the provider-wide webhook-event ledger. It still
 exposes no checkout route, webhook controller, webhook processor, provider
 locator, environment-qualified price mapping, subscription projection service,
-or portal.
+or portal. It does expose a platform-admin-only, read-only diagnostic view of
+local subscriptions and failed webhook ledger rows; that view is not a billing
+state writer.
 
 The entitlement resolver reads a current local subscription and never calls the
 provider. No application path currently creates paid subscription state. The
@@ -64,10 +66,15 @@ cannot contact Lemon Squeezy.
 ## 2. Billing invariants
 
 1. Only active organization `owner` and `billing` memberships can view/manage
-   billing or start checkout. `admin` and `member` cannot.
-2. Every tenant billing query is scoped through `Current.organization`. Only the
-   verified webhook resolver may query the global, non-authoritative
-   `Billing::ProviderLocator` to select a candidate tenant.
+   tenant billing or start checkout. `admin` and `member` cannot. A separate
+   `platform_admin` diagnostic view is read-only and confers no tenant billing
+   mutation authority.
+2. Every tenant billing query is scoped through `Current.organization`. The
+   platform diagnostic must first resolve one exact submitted organization
+   `public_id`, without loading a global organization dropdown, and then obey the
+   same subscription child-query rule. Only the verified webhook resolver may
+   query the global, non-authoritative `Billing::ProviderLocator` to select a
+   candidate tenant.
 3. The browser supplies a local plan-price ID only. Provider store, product,
    variant, price, custom price, environment, and redirect URL are server-owned.
 4. Checkout correlation uses a transient high-entropy local token. Only its
@@ -85,6 +92,29 @@ cannot contact Lemon Squeezy.
 10. Runtime authorization never calls Lemon Squeezy.
 11. Test and live credentials/data/mappings are strictly separated; test data
     never grants access in production.
+
+### 2.1 Internal billing diagnostics
+
+The `/admin` subscription index is a bounded support view, not a global
+tenant-child query. A live platform administrator submits one exact organization
+`public_id`; the application does not load a global organization dropdown.
+`Current.organization` is set for that request, and subscription list/detail
+records are loaded only through its association, with the index bounded to 100
+rows per page. Safe presentation fields are the local/organization/plan/price
+identifiers, provider and environment, provider subscription ID,
+status/current/archive state, and lifecycle/provider timestamps. The controller
+exposes no create, update, archive, replay, or delete action.
+
+The failed-webhook view reads only `status = 'failed'` rows from the global
+`Billing::WebhookEvent` ingress ledger, at most 100 rows per page. It may show
+bounded operational identity, event/resource IDs, environment, timestamps,
+attempt count, and `error_code`. It does not treat `quarantined` as `failed`, and
+it does not infer a tenant for an unresolved row.
+
+Neither view renders `raw_payload`, `pause`, `snapshot`, full record attributes,
+credentials/configuration, authorization/signature data, checkout/portal URLs,
+or unnecessary customer/payment metadata. In particular, an API key or webhook
+secret is never loaded for presentation.
 
 ## 3. Current provider contract
 
@@ -664,6 +694,20 @@ Webhook configuration subscribes exactly to `subscription_created` and
 `subscription_updated`; lifecycle drills verify the accompanying catch-all
 updated event drives projection rather than relying on an unregistered granular
 event.
+
+### 11.7 Internal diagnostic views
+
+- Ordinary users and organization owners without `platform_admin` receive no
+  subscription or webhook-event list/detail response.
+- Subscription requests require one exact allowed organization `public_id`, do
+  not load a global organization dropdown, and instrument SQL to prove child
+  rows load through `Current.organization`; a guessed subscription from another
+  organization is absent.
+- Index/detail responses are read-only and omit `raw_payload`, `pause`,
+  `snapshot`, credentials, signatures, and secret-bearing configuration.
+- The webhook collection contains failed rows only; processed, ignored,
+  quarantined, received, and processing rows remain absent.
+- Subscription and failed-webhook indexes return at most 100 rows per page.
 
 ## 12. Monitoring and operational acceptance
 

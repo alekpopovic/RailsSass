@@ -49,21 +49,29 @@ Behavioral interpretation is defined in
 | --- | --- | --- |
 | Global account | `users`, `sessions` | Through authenticated account/session |
 | Tenant-owned | organizations' memberships, invitations, product assignments, organization-specific product roles, billing customers, checkout attempts, subscriptions, plan changes, product-domain records | Through `Current.organization` after bootstrap |
-| Global system catalog | products, features, plans, plan products, feature entitlements, plan prices, system product roles, and product permissions | Read through explicit catalog/Access services; writes are deployment-controlled |
+| Global system catalog | products, features, plans, plan products, feature entitlements, plan prices, system product roles, and product permissions | Read through explicit catalog/Access services; platform-admin writes use audited Catalog commands |
 | Global locator infrastructure | `organization_access_locators`, `billing_provider_locators` | Discovery only; never sufficient authorization; immediately reload tenant records through `Current.organization` |
-| Provider ingress ledger | `billing_webhook_events` | No ordinary user query; verified system resolver, then tenant reload when associated |
+| Provider ingress ledger | `billing_webhook_events` | No ordinary user query; verified system processing plus a restricted read-only platform-admin failure view |
 
 `organizations` is the tenant root. Global locator rows may identify a candidate
 tenant but never grant access. After setting the candidate root, every
 tenant-owned child query, including the authoritative membership/subscription
 check, is reloaded through `Current.organization`. The bootstraps are documented
 in [Authorization Model](authorization_model.md#7-context-establishment-boundaries).
+The read-only platform subscription diagnostic follows the same child-query
+rule: a platform administrator supplies one exact organization `public_id`
+without loading a global organization list, the request sets
+`Current.organization`, and only then reads its subscription association in
+pages of at most 100. The global webhook-event failure view is not treated as a
+tenant child because unresolved provider-ingress rows may have no organization;
+that view is independently limited to 100 rows per page.
 
 ## 4. Relationship overview
 
 ```mermaid
 erDiagram
   USER ||--o{ ORGANIZATION_MEMBERSHIP : has
+  USER ||--o{ PLATFORM_AUDIT_EVENT : performs
   ORGANIZATION ||--o{ ORGANIZATION_MEMBERSHIP : contains
   ORGANIZATION_MEMBERSHIP ||--o| ORGANIZATION_ACCESS_LOCATOR : locates
   ORGANIZATION_MEMBERSHIP ||--o{ PRODUCT_MEMBERSHIP : receives
@@ -109,7 +117,7 @@ Constraints and indexes:
 - checks that `name` is trimmed/non-blank and that the stored email is trimmed,
   lowercase, and non-blank;
 - check that `system_role` is in the allowlist; the default role is `user` and
-  no platform-admin interface is part of the MVP;
+  public signup/update parameters never accept this field;
 - unverified or disabled users cannot establish a new session or tenant
   context;
 - disabling an account is allowed only through the locked ownership service
@@ -118,6 +126,12 @@ Constraints and indexes:
 Authentication secrets are one-way digests. Plain passwords are never stored.
 Registration creates only the global account and sends verification; it does
 not create an organization or tenant membership.
+
+`system_role` is global account state, not an organization role. The internal
+admin policy revalidates `platform_admin` from PostgreSQL on every request. The
+first such role is assigned only by the explicit
+`platform_admin:promote[email]` task after it locks and validates an existing,
+verified, enabled user; organization ownership cannot substitute for promotion.
 
 ### 5.2 `Session` / `sessions`
 
@@ -285,7 +299,8 @@ the digest and expiry. The invitation itself never authorizes tenant access.
 `description` are presentation values and are never lookup or authorization
 inputs. Setting `active` false removes the product from new catalog selections;
 it does not delete retained references and is not an emergency authorization
-kill switch.
+kill switch. The internal catalog UI deactivates a product and never hard-deletes
+it.
 
 ### 6.2 `ProductFeature` / `product_features`
 
@@ -308,6 +323,8 @@ registry from each limit feature key to its unit, authoritative usage query, and
 atomic consuming operation. Arbitrary constant lookup from database text is
 prohibited. `product_id`, `key`, and `kind` are readonly identities. Setting
 `active` false blocks new catalog selection but does not rewrite existing rows.
+The internal catalog UI uses that lifecycle transition and never hard-deletes a
+feature.
 
 ### 6.3 `Plan` / `plans`
 
@@ -328,8 +345,12 @@ Constraints and indexes:
 the one active free plan becomes effective when no current paid subscription is
 accessible. It does not attach a plan ID to an organization, mutate a
 subscription, or permit manual grants. An inactive plan is unavailable for new
-catalog and future checkout selection, but changing `active` does not itself
-change a local paid subscription.
+plan-product, plan-price, feature-entitlement, and future checkout relationships,
+but changing `active` does not remove existing catalog rows or change a local
+paid subscription.
+The internal catalog UI deactivates plans rather than deleting them. Changing
+plan catalog state is an audited authorization-affecting operation and does not
+rewrite subscription rows.
 
 ### 6.4 `PlanProduct` / `plan_products`
 
@@ -346,6 +367,11 @@ grants nothing by itself. Constraints:
 - supporting index on `product_id`.
 
 Absence denies the product.
+
+The internal admin surface may create this stable plan/product association once,
+but only while both its plan and product are active. Deactivation retains every
+existing `PlanProduct`; the UI does not repoint, update, or remove it, and
+broader destructive catalog graph editing remains deployment-controlled.
 
 ### 6.5 `PlanFeatureEntitlement` / `plan_feature_entitlements`
 
@@ -382,6 +408,16 @@ registry contract before it is consumed.
 This shape prevents a feature entitlement without its product entitlement,
 wrong-product feature attachment, and value-type drift.
 
+The web admin surface may create a consistent entitlement only while its plan,
+product, and feature are active, and may update only its mutable typed values;
+all identity fields remain immutable. Advanced `settings` remain a
+code-reviewed, non-web boundary and are never rendered or submitted by this UI.
+Setting `enabled` false is the disable path, and no admin action deletes the row.
+Deactivation of a parent retains existing entitlement history. The composite
+foreign keys and typed validation are still authoritative, and validation
+failures are rendered instead of coercing a wrong-product or wrong-kind feature
+into a valid row.
+
 ### 6.6 `PlanPrice` / `plan_prices`
 
 A global local-catalog price belonging to one plan:
@@ -407,6 +443,10 @@ authoritative for charged amount and tax.
 `plan_id` is immutable after price creation in both Active Record and
 PostgreSQL. A catalog change creates a new price instead of silently repointing
 every subscription/history row that references the old identity.
+The internal catalog UI creates a price only for an active plan, deactivates
+prices instead of hard-deleting them, and retains prices after their plan is
+deactivated. Existing subscription history continues to resolve its retained
+price.
 
 ## 7. Product RBAC
 
@@ -965,6 +1005,25 @@ A dedicated retention service may delete expired rows under the documented
 policy and audit that operation. Tenant UI/support queries, if added, are rooted
 at `Current.organization.audit_events`.
 
+### 9.2 `Platform::AuditEvent` / `platform_audit_events`
+
+An append-only global ledger records catalog changes made through the internal
+platform-admin surface. It is separate from tenant-owned `AuditEvent`, because a
+global catalog mutation must not invent an organization or organization
+membership for its actor.
+
+- `actor_user_id`: not-null restricted foreign key to the platform-admin user;
+- `action`: `catalog.created`, `catalog.updated`, or `catalog.deactivated`;
+- bounded subject type, internal ID, and immutable stable subject key;
+- non-null bounded JSON `change_set` containing allowlisted before/after display
+  and lifecycle values, but no settings contents, credentials, payloads, or PII;
+- `occurred_at` plus ordinary creation timestamp.
+
+Indexes support actor/time, action/time, and subject lookup. The application
+exposes creation only, and a PostgreSQL trigger rejects update or deletion.
+`Platform::PersistCatalog` writes the catalog record and its matching audit
+event in the same transaction; a failed audit insert rolls back the mutation.
+
 ## 10. Product-owned tenant data and numeric usage
 
 Every product-domain table must:
@@ -989,8 +1048,9 @@ entitlement boolean; `-1` and null are never implicit unlimited sentinels.
 | Organization | Retain; organization archive and hard deletion are outside the MVP |
 | Membership | Soft-suspend; service deletes product memberships/role joins and the global access locator atomically once those records exist |
 | Invitation | Revoke/expire; retain minimal audit metadata for a bounded period |
-| Product/feature/role/permission | Deactivate products/features/roles; permissions have stable reviewed definitions; restrict deletion whenever referenced |
-| Plan/product/feature entitlement/price | Deactivate or update through deployment-controlled catalog changes; restrict deletion when referenced |
+| Platform audit event | Append-only global catalog evidence; no ordinary application update/delete path |
+| Product/feature/role/permission | Platform admins deactivate products/features through audited commands; roles follow their reviewed lifecycle; stable identities are never renamed and no internal UI hard-deletes them |
+| Plan/product/feature entitlement/price | Platform admins deactivate plans/prices, create a plan-product once, and create or enable/disable entitlements through audited commands; a price referenced by billing history permits active-status changes only, and broader destructive graph edits remain deployment-controlled |
 | Billing customer/checkout attempt/subscription/plan change/webhook | Retain per billing/security retention policy; archive subscription history and never cascade from ordinary UI operations |
 
 Default foreign-key deletion is `RESTRICT`/`NO ACTION`. Intentional database

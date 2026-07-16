@@ -36,6 +36,9 @@
         <div class="flex items-center gap-3 text-sm">
           <% if authenticated? %>
             <span class="hidden text-slate-600 sm:inline"><%= Current.user.name %></span>
+            <% if policy(:platform_admin).access? %>
+              <%= link_to "Admin", admin_root_path, class: "font-semibold text-slate-700 hover:text-slate-950" %>
+            <% end %>
             <%= link_to "Create organization", new_organization_path, class: "font-semibold text-slate-700 hover:text-slate-950" %>
             <%= link_to "Sessions", active_sessions_path, class: "font-semibold text-slate-700 hover:text-slate-950" %>
             <%= button_to "Sign out", session_path, method: :delete, class: "cursor-pointer rounded-lg border border-slate-300 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
@@ -47,7 +50,9 @@
       </nav>
     </header>
 
-    <% if Current.organization.present? && Current.membership.present? %>
+    <% if controller_path.start_with?("admin/") %>
+      <%= render "admin/shared/navigation" %>
+    <% elsif Current.organization.present? && Current.membership.present? %>
       <%= render "shared/tenant_navigation" %>
     <% end %>
 
