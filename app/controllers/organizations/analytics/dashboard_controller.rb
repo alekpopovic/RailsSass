@@ -6,7 +6,11 @@ class Organizations::Analytics::DashboardController < Organizations::BaseControl
 
     @reports_decision = analytics_decision(:report_read)
     @create_decision = analytics_decision(:report_create)
-    @report_count = Current.organization.analytics_reports.count if @reports_decision.allowed?
+    @report_usage = Entitlements::LimitEnforcer.new(
+      organization: Current.organization,
+      product_key: Products::Analytics::ActionRegistry::PRODUCT_KEY,
+      feature_key: "report_limit"
+    ).status if @reports_decision.allowed?
   end
 
   private

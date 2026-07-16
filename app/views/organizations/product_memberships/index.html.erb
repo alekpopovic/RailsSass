@@ -29,11 +29,19 @@
     </div>
   <% end %>
 
+  <% if @seat_usage %>
+    <div class="mt-6">
+      <%= render "shared/entitlement_usage", usage: @seat_usage, label: "Product member seats" %>
+    </div>
+  <% end %>
+
   <section class="mt-8 rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="add-product-member-title">
     <h2 id="add-product-member-title" class="text-lg font-semibold text-slate-950">Add product member</h2>
 
     <% if !@product.active? %>
       <p class="mt-3 text-sm text-slate-600">This product is inactive. Existing assignments can be revoked, but new assignments are unavailable.</p>
+    <% elsif @seat_usage && !@seat_usage.allows?(1) %>
+      <p class="mt-3 text-sm text-amber-800">The current seat limit is full. Suspend or remove a product member, or change plan, before adding another seat.</p>
     <% elsif @available_memberships.any? %>
       <%= form_with url: organization_product_members_path(
           organization_slug: Current.organization.slug,
@@ -85,7 +93,7 @@
                     ), method: :patch,
                     form: { data: { turbo_confirm: "Suspend product access for this member?" } },
                     class: "cursor-pointer rounded-lg border border-amber-300 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2" %>
-                <% elsif policy(product_membership).reactivate? %>
+                <% elsif policy(product_membership).reactivate? && (!@seat_usage || @seat_usage.allows?(1)) %>
                   <%= button_to "Reactivate",
                     reactivate_organization_product_member_path(
                       organization_slug: Current.organization.slug,
@@ -93,6 +101,8 @@
                       id: product_membership.id
                     ), method: :patch,
                     class: "cursor-pointer rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2" %>
+                <% elsif policy(product_membership).reactivate? %>
+                  <span class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-500">Seat limit full</span>
                 <% end %>
 
                 <% if policy(product_membership).destroy? %>

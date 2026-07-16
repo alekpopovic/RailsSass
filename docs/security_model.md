@@ -70,7 +70,7 @@ Passwords, API credentials, signatures, and plaintext tokens are never stored.
 | Platform privilege escalation | Signup submits `system_role`, an organization owner enters `/admin`, a revoked/stale role remains accepted, or a hidden admin action is called directly | Public role parameter exclusion; explicit verified-user promotion task; live PostgreSQL role check in `PlatformAdminPolicy`; one admin base controller and policy scopes; no organization-role substitution | Task, policy, request, and system tests for ordinary user/owner denial, role revocation, and direct mutations |
 | Organization privilege escalation | Admin grants owner/billing, concurrent removal leaves no owner, user disable or reactivation orphans/resurrects access, or UI-hidden POST succeeds | Exact role matrix; organization-row locking in `Organizations::Memberships::ChangeRole`/`Remove`/`Reactivate`; soft suspension removes locators/product assignments once present; server authorization; cross-organization account-disable guard added with locator/bootstrap | Table-driven service/policy, reactivation, direct request, and concurrency tests |
 | Product privilege escalation | Owner assumes implicit access; billing role reaches product data; a cross-product or cross-tenant custom role is attached; suspended membership or inactive role remains effective | Central ordered Access gate: authenticated user, active tenant/member, entitlement, active product membership, non-billing role, and permission from an active correctly scoped role; no owner/admin bypass; composite tenant/product FKs plus same-tenant custom-role trigger | Constraint/trigger, central truth-table, permission-union, policy, product-assignment direct-request, and two-tenant scope tests |
-| Numeric-limit race/bypass | Two concurrent report creates consume the final unit, or a client omits/changes feature or delta | Server-owned Analytics action registry; report command revalidates the common grant, counts only `Current.organization` reports, and locks the organization in the mutation transaction | Parameter-tamper, boundary, downgrade, and concurrency tests proving at most one final-slot commit |
+| Numeric-limit race/bypass | Two concurrent seat/report additions consume the final unit, a client omits/changes feature or delta, or an external downgrade deletes data | Immutable stable-key `Entitlements::Usage` registry/result; tenant-rooted active ProductMembership/AnalyticsReport counts; `LimitEnforcer` with server-owned delta one under the organization-row mutation lock; verified known plans project without destructive remediation | Parameter-tamper, exact/unlimited boundary, deterministic downgrade, no-deletion, and concurrency tests proving at most one final-slot commit |
 | Webhook forgery/tampering | Attacker posts active status or modifies one byte | HMAC-SHA256 exact raw body, constant-time compare, credential separation | Official-style fixture, mutation, bad/missing signature tests |
 | Webhook replay | Valid body is resent many times or an unsigned event header is changed | Signed-body event name is authoritative; fingerprint provider/configured-environment/exact-body only; unique index plus idempotent projection | Duplicate/resend/mutated-header tests and metric |
 | Webhook reordering/race | Old active event overwrites expired, or two jobs race | Current provider refetch rooted in verified event, row locks, monotonic provider timestamp, conflict quarantine | Reordered/concurrent/equal-conflict tests |
@@ -227,12 +227,28 @@ The normative decision flow is in
   `Organizations::Memberships::Remove`, and
   `Organizations::Memberships::Reactivate`; `Remove` soft-suspends and never
   deletes the membership row.
+- Keep numeric measurement in the immutable tenant-scoped
+  `Entitlements::Usage` registry/result and finite/unlimited comparison in
+  `Entitlements::LimitEnforcer`. The supported stable keys are each product's
+  `seat_limit`, measured from its active tenant product memberships, and
+  Analytics `report_limit`, measured from tenant reports. Do not resolve a class
+  from database text, trust a submitted count/delta, or cache usage across
+  requests.
 - Resolve permission/feature/consumption behavior from a server-owned action
   registry; never accept those security semantics as optional client input.
 - For Analytics, use only the reviewed `dashboard_read`, `report_read`,
   `report_create`, `report_manage`, and `export_run` registry entries. Report
   creation derives a delta of one, rechecks access inside the locked command,
   and measures usage through `Current.organization.analytics_reports`.
+- Product-membership add/reactivate derives the same delta of one and measures
+  active rows for the selected product through
+  `Current.organization.product_memberships`. Both it and report creation hold
+  the organization lock through measurement and mutation. Exact capacity is
+  allowed; unlimited skips only the numeric ceiling.
+- Treat usage above a projected limit as derived state. It blocks only new
+  consuming/increasing commands; it does not itself deny reads that pass the
+  remaining gates, and capacity-releasing operations remain available. UI
+  hiding or a preflight result is never the enforcement boundary.
 - Audit both successful sensitive changes and denied high-risk attempts without
   logging sensitive input.
 - Route catalog writes through the transactional audited persistence command;
@@ -316,6 +332,16 @@ verified webhook projector mutates subscription authority.
   projection event is marked with a redacted permanent failure and no tenant is
   guessed. `quarantined` is reserved for deterministic ingress-envelope
   rejection before projection.
+- Once a verified event resolves an exact known provider variant, always project
+  that plan even when authoritative usage exceeds its limits. Never retain the
+  old plan, reject the known projection, or delete/suspend product memberships or
+  reports as compatibility remediation. A matching plan-change command becomes
+  applied; the central usage layer derives the over-limit warning afterward.
+- Application-originated downgrade preflight may block an incompatible provider
+  command. Its tenant-scoped result includes only the minimum newest-first
+  remediation candidates (`created_at DESC, id DESC`), is visible only on the
+  authorized billing surface, and never mutates rows or writes candidate labels
+  to logs/audit payloads.
 - Portal/payment URLs are just-in-time, never persisted/logged.
 - Reconciliation detects drift but cannot independently grant/revoke; a verified
   webhook remains the root of every subscription mutation.
@@ -468,14 +494,18 @@ Deployment requirements:
 - Organization role and product decision truth tables.
 - Direct POST/Turbo request tests proving UI absence is irrelevant.
 - Database constraint and invalid composite-association tests.
-- Last-owner role-change/removal and numeric-limit concurrency tests; add
+- Last-owner role-change/removal and numeric-limit concurrency tests, including
+  product-seat add/reactivate and Analytics report creation; add
   account-disable races with the locator/bootstrap follow-up.
 - Analytics request/system tests for missing entitlement versus missing
   permission, direct create/show/export authorization, finite limit exhaustion,
   and two-tenant not-found behavior; exporter tests neutralize spreadsheet
   formula prefixes.
 - HMAC, replay, ordering, variant/environment mismatch, redirect-no-grant, and
-  status matrix billing tests.
+  status matrix billing tests. Known mapped downgrade tests prove projection,
+  matching plan-change confirmation, deterministic newest remediation
+  candidates, derived over-limit enforcement, preserved reads, and no data
+  deletion.
 - WebMock denies non-local network access; fixed-origin adapter tests stub every
   success/failure and prove redacted errors plus single-attempt POST behavior.
 - CSRF, open redirect, log redaction, body limit, and rate-limit tests.

@@ -127,16 +127,36 @@ class AnalyticsCustomerProductRequestTest < ActionDispatch::IntegrationTest
   test "report creation enforces the organization-wide finite limit in the command" do
     catalog = create_analytics_catalog(report_limit: 1)
     tenant = create_analytics_tenant(catalog: catalog, prefix: "analytics-limit")
-    tenant.organization.analytics_reports.create!(
+    existing_report = tenant.organization.analytics_reports.create!(
       name: "Existing report",
       description: "Consumes the only report unit."
     )
+    tenant.organization.analytics_reports.create!(
+      name: "Report retained after downgrade",
+      description: "Existing data remains readable while over limit."
+    )
     sign_in_as(tenant.user)
 
+    reports_path = organization_analytics_reports_path(
+      organization_slug: tenant.organization.slug
+    )
+    get reports_path
+
+    assert_response :success
+    assert_select "[data-entitlement-usage='report_limit']", text: /2 of 1 reports used/
+    assert_select "a", text: "New report", count: 0
+    assert_match(/creation is blocked by the current numeric plan limit/i, response.body)
+    assert_match(/Existing data remains available, but new usage is blocked/i, response.body)
+
+    get organization_analytics_report_path(
+      organization_slug: tenant.organization.slug,
+      public_id: existing_report.public_id
+    )
+    assert_response :success
+    assert_select "h1", existing_report.name
+
     assert_no_difference -> { tenant.organization.analytics_reports.count } do
-      post organization_analytics_reports_path(
-        organization_slug: tenant.organization.slug
-      ), params: {
+      post reports_path, params: {
         analytics_report: { name: "Over the limit", description: "Denied." }
       }
       assert_response :unprocessable_entity
@@ -175,5 +195,18 @@ class AnalyticsCustomerProductRequestTest < ActionDispatch::IntegrationTest
       format: :csv
     )
     assert_response :forbidden
+  end
+
+  test "unlimited report usage is rendered without a synthetic numeric maximum" do
+    catalog = create_analytics_catalog(report_limit: :unlimited)
+    tenant = create_analytics_tenant(catalog: catalog, prefix: "analytics-unlimited")
+    sign_in_as(tenant.user)
+
+    get organization_analytics_reports_path(organization_slug: tenant.organization.slug)
+
+    assert_response :success
+    assert_select "[data-entitlement-usage='report_limit']", text: /0 reports used · Unlimited/
+    assert_select "[data-entitlement-usage='report_limit'] meter", count: 0
+    assert_select "a", text: "New report"
   end
 end

@@ -5,5 +5,11 @@
   <h1 id="new-report-title" class="mt-2 text-3xl font-bold tracking-tight text-slate-950">New report</h1>
   <p class="mt-2 text-slate-600">Each report consumes one unit of the organization-wide report limit.</p>
 
+  <% if @report_usage %>
+    <div class="mt-6">
+      <%= render "shared/entitlement_usage", usage: @report_usage, label: "Analytics report limit" %>
+    </div>
+  <% end %>
+
   <%= render "form", report: @report %>
 </section>

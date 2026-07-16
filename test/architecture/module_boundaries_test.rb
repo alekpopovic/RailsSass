@@ -8,7 +8,7 @@ class ModuleBoundariesTest < ActiveSupport::TestCase
     "Billing" => %w[Tenancy Catalog],
     "Entitlements" => %w[Tenancy Catalog Billing],
     "Access" => %w[Tenancy Catalog Billing Entitlements],
-    "Products" => %w[Tenancy Access],
+    "Products" => %w[Tenancy Entitlements Access],
     "Platform" => %w[Accounts Tenancy Catalog Billing Entitlements Access Products]
   }.freeze
 

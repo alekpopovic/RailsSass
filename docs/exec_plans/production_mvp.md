@@ -77,13 +77,16 @@ Implementation PRs may not silently change these decisions:
   same transaction. Billing diagnostics are read-only; subscription children
   require one exact organization `public_id`, no global organization dropdown,
   `Current.organization` scope, and at most 100 rows per index page.
-- The common Access gate is pure entitlement+RBAC; product policies own record
-  rules and product commands own atomic capacity/mutation via server action
-  contracts.
+- The common Access gate is pure entitlement+RBAC; Entitlements owns the
+  immutable tenant-scoped usage registry/result and common finite/unlimited
+  enforcer, while Access/product commands own record mutations under the
+  organization lock.
 - The Analytics reference contract uses stable feature keys `dashboards`,
   `custom_reports`, `csv_export`, and `report_limit`, and the five exact action
   mappings documented in the authorization model. One report creation consumes
-  one organization-wide `report_limit` unit.
+  one organization-wide `report_limit` unit. A product with the reviewed stable
+  `seat_limit` measures active product memberships for that organization and
+  product; the local Core, Analytics, and CRM catalog declares it.
 
 A change to one of these requires an ADR/document update before or in the same
 PR as implementation.
@@ -126,8 +129,10 @@ Observed on 2026-07-16:
   organization settings, profile pages, and checkout/pending state. The
   Analytics reference slice adds
   tenant-owned reports, exact feature/permission action mappings, atomic
-  report-limit enforcement, and CSV export. Billing synchronization and portal
-  actions are implemented; production hardening remains unimplemented.
+  report-limit enforcement, and CSV export. The shared Entitlements usage layer
+  now also measures per-product active seats and supplies deterministic
+  newest-first downgrade remediation candidates. Billing synchronization and
+  portal actions are implemented; production hardening remains unimplemented.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
 
@@ -143,7 +148,7 @@ value in code.
 | --- | --- | --- |
 | Whether `RailsSass`/`rails_sass` naming is intentional or should be `SaaS`/product-specific | PR-00 | Preserve current identifiers until explicitly decided |
 | Initial production product, feature, permission, and role keys | PR-07 | Keep the reviewed Analytics/CRM seed synthetic and local-only until production inputs are approved |
-| Numeric feature units and authoritative usage queries | PR-15 | Analytics report creation consumes one unit and counts tenant-owned reports; other production units remain unapproved |
+| Numeric feature units and authoritative usage queries | PR-15/17 | Each product's `seat_limit` counts active tenant product memberships; Analytics `report_limit` counts tenant reports; any additional production unit remains unapproved |
 | Initial plan-product rows and feature entitlement values | PR-08 | Synthetic development/test fixtures until product approval |
 | Test/live Lemon variant mappings | PR-11/PR-16 | Test mappings only outside production |
 | Production host, registry, PostgreSQL, backup target, and alert destination | PR-20 | No deploy |
@@ -710,11 +715,16 @@ Scope:
 - Each customer mutation passes the actor to a transactional command that
   revalidates live owner/admin authority and product entitlement under the
   organization lock and writes bounded audit evidence.
+- Add and reactivate invoke the central Entitlements limit enforcer with delta
+  one for the selected product's `seat_limit` before making the assignment
+  active. Exact finite capacity is allowed; unlimited skips only the ceiling;
+  suspended assignments consume no seat.
 - Keep organization-specific custom-role creation/editing outside the MVP.
 
 Tests: organization-role policy table, actor/audit command checks, two-tenant
-IDOR requests, submitted-role allowlisting, and direct mutation denial for
-billing/member actors.
+IDOR requests, submitted-role allowlisting, direct mutation denial for
+billing/member actors, and finite/unlimited/idempotent/concurrent seat
+add/reactivate behavior.
 
 Acceptance: the server-authorized management surface and request coverage are
 implemented. Assignment management never grants product-data access; that uses
@@ -990,6 +1000,10 @@ Scope:
   `Access::PermissionChecker` are implemented with structured reason codes.
 - The gate composes the existing `Entitlements::Result`; it does not duplicate
   paid-status, free-fallback, catalog typing, or cache logic inside Access.
+- `Entitlements::Usage` owns the immutable stable-key registry/result and
+  tenant-rooted authoritative measurements; `Entitlements::LimitEnforcer` owns
+  finite/unlimited comparison. Usage is never cached across requests or copied
+  into a generic ledger.
 - `Products::Analytics::ActionRegistry` maps the five reviewed actions to exact
   Analytics permissions/features. `report_create` additionally requires the
   `report_limit` entitlement and derives a delta of one; clients cannot
@@ -1007,8 +1021,8 @@ Scope:
   prefixes.
 - `Products::Analytics::CreateReport` revalidates the common grant while holding
   the organization lock and atomically compares the authoritative tenant report
-  count plus its server-owned delta with finite/unlimited capacity; no generic
-  metering ledger is added.
+  count plus its server-owned delta through `Entitlements::LimitEnforcer` with
+  finite/unlimited capacity; no generic metering ledger is added.
 - `ApplicationPolicy` and `Scope` expose the same gate for UI predicates and
   request authorization; the concrete Analytics policy and controllers use it.
 
@@ -1025,6 +1039,9 @@ Tests:
 - boolean missing/false/true;
 - numeric zero/exact/over boundary and downgrade behavior;
 - concurrent final-unit consumption commits once;
+- per-product active/suspended seat measurement, add/reactivate delta one,
+  idempotent active add, exact/unlimited capacity, and concurrent final-seat
+  assignment;
 - client attempts to omit/change permission, feature, consuming flag, or delta
   cannot bypass the server action contract;
 - two-tenant guessed IDs and direct POST;
@@ -1120,6 +1137,14 @@ Scope:
   without storing/logging it.
 - Add pending command display for plan change/cancel/resume if exposed directly;
   provider response never updates local subscription.
+- Run `Products::PlanCompatibility` over the central Entitlements registry before
+  a plan-change PATCH. An incompatible application-originated target is blocked
+  and returns only the minimum deterministic newest candidates ordered by
+  `created_at DESC, id DESC`; preflight never mutates those rows.
+- A verified webhook for an exact known variant always projects the provider
+  plan and applies the matching command even when current usage becomes
+  over-limit. It never deletes/suspends product assignments or reports. Derived
+  over-limit state preserves reads and blocks only later consuming operations.
 - Show status, grace/time boundary, sync issue support code, and safe recovery
   messaging without leaking provider internals; keep it responsive and
   keyboard/screen-reader operable.
@@ -1128,11 +1153,16 @@ Migrations: none unless a non-authoritative command-attempt audit table is
 explicitly justified; do not overload `Billing::Subscription`.
 
 Tests: roles, tenant isolation, portal URL SSRF/open-redirect validation,
-no-persistence/logging, provider failure, command/portal no-grant, and
-keyboard/screen-reader-oriented billing status semantics.
+no-persistence/logging, provider failure, command/portal no-grant, exact and
+unlimited compatibility, deterministic seat/report remediation candidates,
+provider timeout/variant mismatch, webhook confirmation, known external
+downgrade projection with preserved rows/reads, and keyboard/screen-reader-
+oriented billing status semantics.
 
 Acceptance: cancel/resume/pause/plan-change UI reflects changes only after a
-verified `subscription_updated` webhook.
+verified `subscription_updated` webhook. Known provider downgrades project
+without destructive remediation; the billing UI reports derived over-limit
+state and every consuming command enforces it server-side.
 
 ### PR-18A: Complete audit coverage, redaction, and retention
 
@@ -1293,8 +1323,8 @@ Depends on: PR-20.
 Scope:
 
 - Run automated full suite and all quality/security/image checks.
-- Run two-tenant adversarial test, role matrix, full product gate, and numeric
-  concurrency scenario.
+- Run two-tenant adversarial test, role matrix, full product gate, and concurrent
+  final-seat/final-report scenarios.
 - Run Lemon Squeezy live-shaped test-mode checkout, redirect-before-webhook,
   duplicate/resend, reorder, cancel/resume/pause/expire, unknown mapping, and
   secret rotation drills.
@@ -1319,7 +1349,7 @@ manual evidence and an owner.
 | Request | Authentication, CSRF, tenant bootstrap, two-tenant IDOR, Turbo/direct POST parity, checkout/webhook codes |
 | Job | Current setup/reset, retries, duplicate/reordered event projection, sweeper recovery, quarantine |
 | Provider contract | Sanitized official-style payloads, exact HMAC, DTO mapping, fixed-origin HTTP, test/live separation |
-| Concurrency | Last owner, pending checkout uniqueness, subscription projection locks, final numeric unit |
+| Concurrency | Last owner, pending checkout uniqueness, subscription projection locks, final product seat, final Analytics report |
 | System | Organization switch, invitation, customer shell, product assignment, Analytics entitlement/permission/isolation, checkout pending-to-active, billing status |
 | Security/quality | RuboCop, Brakeman, dependency/import audits, redaction, CSP/headers/rate/body limits |
 | Operations | DB prepare/migrate/restore, eager load, image build/boot, worker recovery, deploy/rollback |
@@ -1366,11 +1396,11 @@ full-gate results separately whenever they are actually run.
 | A6 | Catalog keys are stable; plan-product, flag/finite/unlimited entitlements, free-plan uniqueness, and prices are database-constrained | PR-07–08 DB/service tests |
 | A7 | Cross-product roles/permissions/assignments are impossible | PR-09/10A DB plus PR-10B request tests |
 | A8 | Owner/admin have no product bypass; all entitlement+RBAC factors are required | PR-15 gate and Analytics request/system truth table |
-| A9 | Flag, finite/unlimited limits, and concurrent final-unit consumption are correct | PR-15 Analytics service/concurrency tests |
+| A9 | Flag, finite/unlimited per-product seat/report limits, exact boundaries, deterministic non-mutating downgrade candidates, and concurrent final-unit consumption are correct | PR-10B/15/17 service/concurrency tests |
 | A10 | Every paid billing status/time boundary and active-free fallback matches the one canonical matrix | PR-12/14B table tests |
 | A11 | Redirect/API/portal success never changes access | PR-16–17 request/integration tests |
 | A12 | Forged/mutated/replayed/reordered/mismatched webhooks cannot over-grant | PR-13–14B tests/drills |
-| A13 | Verified webhook activates/changes/cancels/recovers/expires local plan | PR-14B test-mode contract |
+| A13 | Verified webhook activates/changes/cancels/recovers/expires the local plan, including a known over-limit downgrade without deleting tenant data | PR-14B/17 test-mode contract |
 | A14 | Runtime access works with Lemon unavailable and performs zero provider calls | PR-14B/15 outage assertion |
 | A15 | Test/live keys, events, mappings, and data cannot cross | PR-11–14B tests + staging drill |
 | A16 | Logs/events contain no secrets, raw billing payload, PII, or signed URLs | PR-18A–18C capture tests/review |

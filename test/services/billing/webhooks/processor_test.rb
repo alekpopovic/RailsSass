@@ -1,8 +1,10 @@
 require "test_helper"
 require_relative "../../../support/billing_test_helper"
+require_relative "../../../support/product_rbac_test_helper"
 
 class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
   include BillingTestHelper
+  include ProductRbacTestHelper
 
   FakeClient = Struct.new(:snapshot, :environment, :store_id, :error, :calls, keyword_init: true) do
     def retrieve_subscription_snapshot(provider_subscription_id:)
@@ -449,6 +451,142 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     assert_predicate plan_change.reload, :status_superseded?
     assert_equal updated_at.to_i, plan_change.provider_updated_at.to_i
     assert plan_change.completed_at
+  end
+
+  test "a verified provider downgrade preserves over-limit product data and assignments" do
+    analytics = create_test_product(key: "analytics", name: "Analytics")
+    report_limit = create_test_product_feature(
+      product: analytics,
+      key: "report_limit",
+      name: "Report limit",
+      kind: :limit
+    )
+    seat_limit = create_test_product_feature(
+      product: analytics,
+      key: "seat_limit",
+      name: "Seat limit",
+      kind: :limit
+    )
+    source_plan_product = create_test_plan_product(plan: @plan, product: analytics)
+    create_test_entitlement(
+      plan_product: source_plan_product,
+      product_feature: report_limit,
+      limit_value: 10
+    )
+    create_test_entitlement(
+      plan_product: source_plan_product,
+      product_feature: seat_limit,
+      limit_value: 10
+    )
+
+    target_plan = create_test_plan(name: "Provider downgrade target")
+    target_plan_product = create_test_plan_product(plan: target_plan, product: analytics)
+    create_test_entitlement(
+      plan_product: target_plan_product,
+      product_feature: report_limit,
+      limit_value: 1
+    )
+    create_test_entitlement(
+      plan_product: target_plan_product,
+      product_feature: seat_limit,
+      limit_value: 0
+    )
+    target_price = create_test_plan_price(
+      plan: target_plan,
+      lemon_store_id: @mapping.provider_store_id,
+      lemon_product_id: @mapping.provider_product_id,
+      lemon_variant_id: unique_numeric_id
+    )
+    target_mapping = create_billing_provider_price_mapping(plan_price: target_price)
+
+    reports = 2.times.map do |index|
+      @organization.analytics_reports.create!(
+        name: "Retained report #{index}",
+        description: "Provider downgrades must not delete product data."
+      )
+    end
+    product_membership = create_test_product_membership(
+      organization_membership: @membership,
+      product: analytics
+    )
+    product_role = create_test_product_role(
+      product: analytics,
+      key: "viewer",
+      name: "Viewer"
+    )
+    role_assignment = create_test_product_membership_role(
+      product_membership: product_membership,
+      product_role: product_role
+    )
+    create_subscription_projection!
+    subscription = @organization.billing_subscriptions.find_by!(current: true)
+    updated_at = @initial_updated_at + 10.seconds
+    assert_empty @organization.billing_plan_changes
+
+    assert_no_difference -> { @organization.analytics_reports.count } do
+      assert_no_difference -> { @organization.product_memberships.count } do
+        assert_no_difference -> { @organization.product_membership_roles.count } do
+          result = process(
+            update_event,
+            client: fake_client(
+              snapshot: snapshot(
+                provider_variant_id: target_mapping.provider_variant_id,
+                updated_at: updated_at
+              )
+            ),
+            now: updated_at + 1.second
+          )
+
+          assert_predicate result, :processed?
+        end
+      end
+    end
+
+    assert_equal target_price, subscription.reload.plan_price
+    assert_empty @organization.billing_plan_changes
+    assert_equal reports.map(&:id).sort, @organization.analytics_reports.order(:id).pluck(:id)
+    assert_predicate product_membership.reload, :active?
+    assert_predicate product_role.reload, :active?
+    assert_equal role_assignment, @organization.product_membership_roles.find(role_assignment.id)
+
+    Current.organization = @organization
+    compatibility = Products::PlanCompatibility.call(
+      organization: @organization,
+      to_plan: @organization.effective_plan
+    )
+    issues_by_feature = compatibility.issues.index_by(&:feature_key)
+    report_issue = issues_by_feature.fetch("report_limit")
+    seat_issue = issues_by_feature.fetch("seat_limit")
+
+    assert_equal target_plan, @organization.effective_plan
+    assert_predicate @organization, :over_limit?
+    assert_predicate compatibility, :incompatible?
+    assert_predicate compatibility, :over_limit?
+    assert_predicate report_issue, :over_limit?
+    assert_equal 2, report_issue.usage
+    assert_equal 1, report_issue.capacity
+    assert_predicate seat_issue, :over_limit?
+    assert_equal 1, seat_issue.usage
+    assert_equal 0, seat_issue.capacity
+    assert_equal "seats", seat_issue.unit
+
+    additional_user = create_test_user(
+      email_address: "provider-downgrade-seat-#{SecureRandom.hex(5)}@example.test"
+    )
+    additional_membership = create_test_membership(
+      organization: @organization,
+      user: additional_user,
+      role: :member
+    )
+    seat_error = assert_no_difference -> { @organization.product_memberships.count } do
+      assert_raises(ActiveRecord::RecordInvalid) do
+        Access::ProductMemberships::Add.new(
+          organization_membership_id: additional_membership.id,
+          product_id: analytics.id
+        ).call
+      end
+    end
+    assert_instance_of Entitlements::OverLimit, seat_error.cause
   end
 
   test "stale and equal conflicting snapshots cannot confirm an open plan change" do

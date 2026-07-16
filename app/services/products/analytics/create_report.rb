@@ -32,12 +32,13 @@ module Products
         attr_reader :context, :attributes
 
         def enforce_capacity!(report, decision)
-          capacity = decision.capacity
-          return if capacity == Access::Decision::UNLIMITED
-
-          usage = Current.organization.analytics_reports.count
-          return if usage + decision.capacity_delta <= capacity
-
+          Entitlements::LimitEnforcer.new(
+            organization: Current.organization,
+            product_key: ActionRegistry::PRODUCT_KEY,
+            feature_key: decision.action.capacity_feature_key,
+            capacity: decision.capacity
+          ).enforce!(delta: decision.capacity_delta)
+        rescue Entitlements::LimitExceeded
           report.errors.add(:base, LIMIT_REACHED_MESSAGE)
           raise ActiveRecord::RecordInvalid, report
         end

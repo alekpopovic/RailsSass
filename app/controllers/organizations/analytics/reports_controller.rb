@@ -17,6 +17,7 @@ class Organizations::Analytics::ReportsController < Organizations::BaseControlle
     @report = Current.organization.analytics_reports.new
     authorize_report(@report, :create?)
     @create_decision = analytics_decision(:report_create)
+    set_report_usage
   end
 
   def create
@@ -34,6 +35,7 @@ class Organizations::Analytics::ReportsController < Organizations::BaseControlle
   rescue ActiveRecord::RecordInvalid => error
     @report = error.record
     @create_decision = analytics_decision(:report_create)
+    set_report_usage
     render :new, status: :unprocessable_entity
   end
 
@@ -77,5 +79,14 @@ class Organizations::Analytics::ReportsController < Organizations::BaseControlle
     def set_action_decisions
       @create_decision = analytics_decision(:report_create)
       @export_decision = analytics_decision(:export_run)
+      set_report_usage
+    end
+
+    def set_report_usage
+      @report_usage = Entitlements::LimitEnforcer.new(
+        organization: Current.organization,
+        product_key: Products::Analytics::ActionRegistry::PRODUCT_KEY,
+        feature_key: "report_limit"
+      ).status
     end
 end

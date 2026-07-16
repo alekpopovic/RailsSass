@@ -63,6 +63,16 @@ class Access::ProductMemberships::Base
       organization.product_memberships.find(product_membership.id)
     end
 
+    def enforce_seat_limit!(organization, product, product_membership)
+      Entitlements::LimitEnforcer.new(
+        organization: organization,
+        product_key: product.key,
+        feature_key: Entitlements::Usage::SEAT_FEATURE_KEY
+      ).enforce!(delta: 1)
+    rescue Entitlements::LimitExceeded => error
+      invalid_record!(product_membership, error.safe_message)
+    end
+
     def record_audit_event!(action:, subject:, metadata: {})
       return unless @actor
 

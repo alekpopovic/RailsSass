@@ -258,6 +258,55 @@ class ProductMembershipsRequestTest < ActionDispatch::IntegrationTest
     assert_predicate product_membership.reload, :suspended?
   end
 
+  test "seat usage is visible and server-side add and reactivate stay blocked at capacity" do
+    seat_feature = create_test_product_feature(
+      product: @product,
+      key: Entitlements::Usage::SEAT_FEATURE_KEY,
+      name: "Product seats",
+      kind: :limit
+    )
+    create_test_entitlement(
+      plan_product: PlanProduct.find_by!(plan: @plan, product: @product),
+      product_feature: seat_feature,
+      limit_value: 1
+    )
+    owner_product_membership = create_test_product_membership(
+      organization_membership: @owner_membership,
+      product: @product
+    )
+
+    get members_path
+
+    assert_response :success
+    assert_select "[data-entitlement-usage='seat_limit']", text: /1 of 1 seats used/
+    assert_select "form[action=?]", members_path, count: 0
+
+    assert_no_difference -> { @organization.product_memberships.count } do
+      post members_path, params: {
+        product_membership: { organization_membership_id: @organization_membership.id }
+      }
+    end
+    assert_response :unprocessable_content
+    assert_select "[role='alert']", text: /plan limit has been reached/i
+
+    patch suspend_path(owner_product_membership)
+    assert_response :see_other
+    assert_predicate owner_product_membership.reload, :suspended?
+
+    post members_path, params: {
+      product_membership: { organization_membership_id: @organization_membership.id }
+    }
+    assert_response :see_other
+    assert_predicate @organization.product_memberships.find_by!(
+      organization_membership: @organization_membership,
+      product: @product
+    ), :active?
+
+    patch reactivate_path(owner_product_membership)
+    assert_response :see_other
+    assert_predicate owner_product_membership.reload, :suspended?
+  end
+
   private
     def create_locator_for(membership)
       OrganizationAccessLocator.create!(

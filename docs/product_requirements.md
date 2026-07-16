@@ -36,9 +36,10 @@ internal `/admin` surface now provides audited catalog maintenance and bounded,
 read-only billing diagnostics for `platform_admin` users. The customer shell,
 audited product-assignment UI, and a tenant-owned Analytics report vertical
 slice now exercise the central action registry, product policies, CSV export,
-and atomic `report_limit` capacity command. Checkout success and outbound
-subscription-update responses change only command state and never grant access.
-Deployment hardening remains a separate execution-plan milestone.
+and central Entitlements usage/limit contract for per-product seats and
+`report_limit`. Checkout success and outbound subscription-update responses
+change only command state and never grant access. Deployment hardening remains a
+separate execution-plan milestone.
 
 Each milestone must inspect and test existing behavior rather than assume an
 earlier prompt was implemented perfectly.
@@ -202,14 +203,24 @@ explicit deny permission.
   Its presence, activation, or selection never assigns a plan, changes a local
   subscription, or grants product access.
 - Numeric limits apply per organization. Each consuming product action defines
-  its unit and authoritative organization-scoped usage query.
+  a stable registry key and uses the immutable tenant-scoped
+  `Entitlements::Usage` result plus `Entitlements::LimitEnforcer`. The registry
+  defines the unit and authoritative organization-scoped query; client input
+  never chooses a model, count, or delta.
 - Reaching a numeric limit blocks only consuming/increasing operations; reads
-  and non-consuming operations remain available.
+  and non-consuming or capacity-releasing operations remain available. Derived
+  over-limit state is not a subscription status and is not persisted.
 
 ### 6.3 Product access management
 
 - Owner/admin can add an active organization member to a currently entitled
   product and assign one or more system product roles.
+- A product can declare the reviewed stable `seat_limit` feature. Its
+  authoritative usage is the count of active ProductMembership rows for that
+  organization and product; suspended assignments consume no seat. The local
+  Core, Analytics, and CRM seed declares it. Add and reactivate enforce a
+  server-owned delta of one under the organization row lock in the same
+  transaction as activation whenever that limit is registered.
 - Product-level suspension preserves assigned roles but grants no access until
   an explicit reactivation; removal deletes the product assignment and joins.
 - Assignments may remain dormant after a downgrade or subscription loss; they
@@ -235,8 +246,9 @@ explicit deny permission.
 - Analytics report creation consumes one organization-wide report slot. It
   revalidates the `custom_reports` flag, typed `report_limit`, product
   membership, and `analytics.report.create` permission while holding the
-  organization lock, then counts and creates through
-  `Current.organization.analytics_reports` in the same transaction.
+  organization lock, then invokes `Entitlements::LimitEnforcer` with delta one
+  against `Current.organization.analytics_reports` and creates in the same
+  transaction.
 
 ### 6.4 Billing
 
@@ -280,6 +292,18 @@ explicit deny permission.
   provider commands, but return navigation, portal visits, and provider API
   success never mutate a subscription, effective plan, or entitlement. Only a
   matching verified webhook projection confirms the change.
+- Application-originated plan changes run a tenant-scoped compatibility
+  preflight over registered per-product `seat_limit` and Analytics
+  `report_limit`. An
+  incompatible target is not sent to the provider and returns the minimum
+  deterministic newest candidates (`created_at DESC, id DESC`) needed to reach
+  capacity; the preflight never changes or deletes them.
+- A verified webhook for a known mapped provider plan always projects that plan,
+  including a provider-portal downgrade below current usage. It confirms a
+  matching pending plan change without deleting tenant data. The resulting
+  derived over-limit warning does not itself deny otherwise-entitled reads and
+  blocks only later consuming operations until usage is reduced or capacity
+  increases.
 
 ### 6.5 Internal platform administration
 
@@ -406,8 +430,9 @@ explicit deny permission.
 2. The common gate verifies subscription, plan product, feature, product
    membership, and permission.
 3. The product command revalidates the common grant, locks or atomically checks
-   its authoritative usage, and applies its server-calculated delta only when it
-   remains within the local limit.
+   `Current.organization`, measures authoritative usage through
+   `Entitlements::LimitEnforcer`, and applies its server-calculated delta only
+   when it remains within the local limit.
 4. Concurrent requests cannot both consume the same final unit.
 
 ### 7.5 Maintain the platform catalog
@@ -486,13 +511,17 @@ The MVP is acceptable when all of the following are demonstrated:
    denied product access, including owner/admin.
 5. A product member with permission but no plan entitlement is denied.
 6. Flag, finite-limit, and unlimited feature decisions behave as documented,
-   including an atomic finite numeric boundary under concurrency.
+   including exact finite boundaries, per-product seat add/reactivate and report
+   creation under the organization lock, and one successful final-unit mutation
+   under concurrency.
 7. All paid subscription status/time boundaries and active-free fallback cases
    match the canonical billing matrix.
 8. A checkout redirect, outbound API success, duplicate webhook, stale webhook,
    unknown variant, and unknown status cannot over-grant access.
 9. A valid webhook can activate, change, cancel, recover, and expire a local
-   subscription without a runtime provider dependency.
+   subscription without a runtime provider dependency. A known mapped downgrade
+   is projected even when it creates derived over-limit state, preserves reads,
+   and deletes no product membership or report.
 10. CI runs Minitest, style, security, eager-load, and PostgreSQL preparation;
     the production image builds and boots.
 11. Production runs behind TLS with secrets outside the repository, durable
@@ -510,6 +539,9 @@ The MVP is acceptable when all of the following are demonstrated:
     contract, creates reports within an atomic finite/unlimited organization
     limit, scopes show/export by `Current.organization`, and neutralizes
     spreadsheet-formula prefixes in exported user-controlled cells.
+16. Plan-change preflight reports deterministic newest remediation candidates
+    without mutation, and exact/unlimited capacity behavior is identical for
+    product seats and reports.
 
 ## 11. Required product inputs before launch
 
@@ -521,7 +553,9 @@ dependent implementation PR:
 - Initial production product, feature, role, and permission keys. The local
   Analytics/CRM role and permission seed is synthetic development/test data,
   not a production catalog decision.
-- Unit and authoritative usage query for every limit feature.
+- Code-reviewed stable registry key, unit, and authoritative tenant-rooted usage
+  query for every limit feature; MVP includes per-product `seat_limit` and
+  Analytics `report_limit`.
 - Initial plans, plan-product rows, feature entitlement values, local price
   display data, and the Lemon Squeezy test/live variant map.
 - Production domain, hosting topology, PostgreSQL service, email delivery

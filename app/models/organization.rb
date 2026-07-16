@@ -72,4 +72,10 @@ class Organization < ApplicationRecord
   def effective_plan(now: Time.current)
     Entitlements::Resolver.new(organization: self, now: now).effective_plan
   end
+
+  def over_limit?(now: Time.current)
+    Entitlements::LimitEnforcer
+      .current_usages(organization: self, now: now)
+      .any?(&:over_limit?)
+  end
 end

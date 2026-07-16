@@ -11,10 +11,11 @@ class Access::ProductMemberships::Reactivate < Access::ProductMemberships::Base
         organization,
         product_membership.organization_membership_id
       )
-      locked_active_product!(product_membership.product_id)
+      product = locked_active_product!(product_membership.product_id)
       authorize_actor_for_product!(organization, product_membership.product_id)
       next product_membership if product_membership.active?
 
+      enforce_seat_limit!(organization, product, product_membership)
       reactivated_membership = transition!(organization, product_membership, status: "active")
       record_audit_event!(
         action: "product.membership.reactivated",

@@ -92,8 +92,8 @@ module AnalyticsCustomerTestHelper
       report_limit: create_test_entitlement(
         plan_product: plan_product,
         product_feature: features.fetch(:report_limit),
-        limit_value: report_limit,
-        unlimited: false
+        limit_value: report_limit == :unlimited ? nil : report_limit,
+        unlimited: report_limit == :unlimited
       )
     }
     price = create_test_plan_price(plan: plan)

@@ -1,0 +1,52 @@
+<% label = local_assigns.fetch(:label) %>
+<% usage = local_assigns.fetch(:usage) %>
+<% wrapper_role = usage.over_limit? ? "alert" : "status" %>
+
+<section
+  class="rounded-xl border <%= usage.over_limit? ? "border-red-200 bg-red-50" : "border-slate-200 bg-white" %> p-4"
+  role="<%= wrapper_role %>"
+  aria-label="<%= label %> usage"
+  data-entitlement-usage="<%= usage.feature_key %>">
+  <div class="flex flex-wrap items-baseline justify-between gap-2">
+    <h2 class="font-semibold text-slate-950"><%= label %></h2>
+    <p class="text-sm font-semibold <%= usage.over_limit? ? "text-red-800" : "text-slate-700" %>">
+      <% if usage.unlimited? %>
+        <%= usage.used %> <%= usage.unit %> used · Unlimited
+      <% else %>
+        <%= usage.used %> of <%= usage.limit %> <%= usage.unit %> used
+      <% end %>
+    </p>
+  </div>
+
+  <% if usage.finite? %>
+    <% meter_max = [usage.limit, 1].max %>
+    <% meter_value = [usage.used, meter_max].min %>
+    <meter
+      class="mt-3 h-2 w-full"
+      min="0"
+      max="<%= meter_max %>"
+      value="<%= meter_value %>">
+      <%= usage.used %> of <%= usage.limit %>
+    </meter>
+    <p class="mt-2 text-xs <%= usage.over_limit? ? "text-red-800" : "text-slate-500" %>">
+      <% if usage.over_limit? %>
+        Usage is <%= usage.overage %> over the current limit. Existing data remains available, but new usage is blocked.
+      <% elsif usage.exhausted? %>
+        No capacity remains. Existing data remains available, but new usage is blocked.
+      <% else %>
+        <%= usage.remaining %> <%= usage.unit %> remaining.
+      <% end %>
+    </p>
+  <% end %>
+
+  <% if usage.remediation_items.any? %>
+    <div class="mt-3 border-t border-red-200 pt-3 text-sm text-red-950">
+      <p class="font-semibold">Remove or suspend at least <%= usage.required_reduction %>:</p>
+      <ul class="mt-2 list-disc space-y-1 pl-5">
+        <% usage.remediation_items.each do |item| %>
+          <li><%= item.label %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+</section>

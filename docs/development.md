@@ -267,9 +267,11 @@ automated tests create the exact catalog and access graph they require.
 The task converges products `core`, `analytics`, and `crm` plus plans `starter`
 and `professional` by stable key. Analytics also receives the flag features
 `dashboards`, `custom_reports`, and `csv_export` plus the numeric
-`report_limit`. For both Analytics and CRM the task converges the active system
-roles `viewer`, `contributor`, and `product_admin` with this synthetic
-permission map:
+`report_limit`. Core, Analytics, and CRM each receive the reviewed numeric
+`seat_limit`; the seed intentionally does not choose plan-specific finite or
+unlimited entitlement values. For both Analytics and CRM the task converges the
+active system roles `viewer`, `contributor`, and `product_admin` with this
+synthetic permission map:
 
 | Product | Viewer | Contributor | Product Admin |
 | --- | --- | --- | --- |

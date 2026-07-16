@@ -23,11 +23,13 @@ class Access::ProductMemberships::Add < Access::ProductMemberships::Base
         next product_membership
       end
 
-      product_membership = organization.product_memberships.create!(
+      product_membership = organization.product_memberships.new(
         organization_membership: organization_membership,
         product: product,
         status: :active
       )
+      enforce_seat_limit!(organization, product, product_membership)
+      product_membership.save!
       record_audit_event!(
         action: "product.membership.created",
         subject: product_membership,

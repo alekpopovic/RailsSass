@@ -134,12 +134,13 @@ the URL is never persisted or logged.
 
 `POST /o/:organization_slug/billing/plan_changes` accepts only a local active
 paid `PlanPrice`, resolves an exact active provider mapping, and invokes the
-product-owned compatibility registry. It creates at most one open command per
-subscription before sending one non-retried PATCH. A repeated request for the
-same target returns the existing command; a different concurrent target is
-rejected. Definitive provider rejection becomes `failed`; timeout, connection,
-rate-limit, server, or malformed-success ambiguity becomes `creation_unknown`
-and retains the unique open slot. Neither outcome changes the subscription.
+`Products::PlanCompatibility` query, which consumes the central immutable
+Entitlements usage registry. It creates at most one open command per subscription
+before sending one non-retried PATCH. A repeated request for the same target
+returns the existing command; a different concurrent target is rejected.
+Definitive provider rejection becomes `failed`; timeout, connection, rate-limit,
+server, or malformed-success ambiguity becomes `creation_unknown` and retains
+the unique open slot. Neither outcome changes the subscription.
 
 `GET /o/:organization_slug/pricing` is a catalog comparison for any active
 organization member. It shows active local plans and prices plus the locally
@@ -521,6 +522,14 @@ The asynchronous processor:
    verified current price/status transition, and marks the event processed.
 10. Clears `Current` in `ensure`.
 
+Once correlation and an exact configured provider mapping are valid, tenant
+usage is not a projection veto. The mapped provider plan is persisted even when
+its finite limits are below current usage, and a matching open plan change is
+marked applied in that projection transaction. The processor never deletes or
+suspends product memberships, reports, or other tenant data to force
+compatibility. Runtime derives any `over_limit` condition from the newly
+effective plan and authoritative tenant rows.
+
 The first subscription event cannot resolve by email/name. A missing or
 mismatched token digest becomes a permanent redacted failure; an already
 consumed locator is accepted only when it is bound to the same provider
@@ -644,12 +653,23 @@ and no arbitrary subscription is changed.
   verified event.
 - Signed customer portal/payment URLs are fetched just in time after
   authorization, returned to the browser, and not persisted or logged.
-- Product-owned compatibility preflight currently registers Analytics
-  `report_limit` usage through `Current.organization.analytics_reports`. Exact
-  finite capacity and unlimited are allowed; a missing/disabled target limit is
-  zero capacity; an enabled unregistered limit fails closed. An external
-  provider downgrade is still projected and appears as an over-limit warning,
-  while an application-originated incompatible change is blocked before PATCH.
+- `Products::PlanCompatibility` consumes the central
+  `Entitlements::Usage`/`LimitEnforcer` contract. Registered MVP usage is each
+  product's `seat_limit`, measured from that product's active
+  `Current.organization.product_memberships`, and Analytics `report_limit`,
+  measured from `Current.organization.analytics_reports`. Exact finite capacity
+  and unlimited are allowed; a missing/disabled target limit is zero capacity;
+  an enabled unregistered limit fails closed.
+- An application-originated incompatible target is blocked before PATCH. Each
+  overage reports only the minimum newest candidates required to reach the
+  target, ordered by `created_at DESC, id DESC`, so the billing UI can explain a
+  deterministic remediation path. Preflight never deletes or changes those
+  records.
+- A verified external/provider-portal downgrade to a known mapped variant is
+  always projected and any matching command is applied; it is not rejected to
+  preserve the old plan. Derived over-limit warnings then block only new
+  consuming/increasing operations. Existing product rows, reads, non-consuming
+  operations, and actions that release capacity remain available.
 
 Payment success/failure/recovery events are accepted only as signals to refetch
 and project the associated current subscription resource. Invoice status never

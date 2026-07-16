@@ -41,9 +41,10 @@ change paid local state.
 9. A permission without a product membership grants nothing.
 10. A suspended product membership or inactive product role grants nothing;
     product suspension retains role assignments for explicit reactivation.
-11. Missing or disabled entitlement rows and exhausted finite capacity deny the
-    applicable action. Unknown/blocked billing state can never grant a paid
-    plan; only the explicit active free fallback remains available.
+11. Missing or disabled entitlement rows deny the applicable action; exhausted
+    finite capacity denies an applicable consuming action but does not itself
+    deny reads. Unknown/blocked billing state can never grant a paid plan; only
+    the explicit active free fallback remains available.
 12. UI hiding is never a security boundary.
 13. Authorization makes no provider network call and uses no checkout redirect
     parameter.
@@ -222,8 +223,9 @@ Entitlements layer returns an immutable `Entitlements::Result` containing
 `allowed?`, a stable internal reason code, paid/free plan source, and
 finite/unlimited capacity when applicable. `Access::Gate` preserves that result
 metadata and composes it with live tenant/product RBAC through
-`Access::PermissionChecker`. Neither layer measures usage or mutates product
-data.
+`Access::PermissionChecker`. Neither `Entitlements::Resolver` nor
+`Access::Gate` measures usage or mutates product data. Consuming commands use the
+separate `Entitlements::Usage`/`LimitEnforcer` contract after the common gate.
 
 The persistence layer enforces the same tenant/product shape beneath the
 runtime gate: composite foreign keys reject cross-product joins, and a
@@ -240,12 +242,14 @@ Final server authorization composes three owned layers:
 2. The product Pundit policy loads the record through `Current.organization`,
    requires the common grant, and applies product-owned record rules.
 3. For a consuming action, the product command repeats/revalidates the common
-   grant inside its transaction and atomically enforces authoritative usage plus
-   the server-calculated delta against the returned limit before mutation.
+   grant inside its transaction, holds the organization row lock, and invokes
+   `Entitlements::LimitEnforcer` to compare authoritative tenant usage plus the
+   server-calculated delta against the returned limit before mutation.
 
-All three applicable layers must pass. This direction keeps Billing/Catalog/RBAC
-inside Access while record rules and capacity remain owned by the product module,
-without a module dependency cycle.
+All three applicable layers must pass. Billing/Catalog/RBAC remain inside the
+common Access decision, Entitlements owns the shared usage/limit contract, and
+the Access Control or product command that owns the record owns the transaction
+and mutation.
 
 ### 5.3 Base product actions
 
@@ -277,18 +281,40 @@ selection metadata rather than authorization kill switches.
 - `0` permits no consuming delta but does not inherently block read operations.
 - For finite limits, an exact boundary where `usage + delta == limit` is allowed
   and `usage + delta > limit` is denied.
-- Downgrade below current usage preserves reads and non-consuming mutations but
-  blocks further consumption until usage is reduced or entitlement increases.
-- Check and mutation occur under a product-owned lock, conditional update, or
-  equivalent database-atomic operation. A preflight UI check is not the final
-  authorization.
-- Each limit feature has a code-reviewed registry entry defining unit,
-  authoritative query/counter, lock strategy, and which actions consume or
-  release capacity.
-- Billing plan-change preflight consumes that product-owned registry instead of
-  querying product records. It blocks an application-originated target below
-  current usage and fails closed for an enabled limit without a registry entry;
-  this preflight is compatibility feedback, not runtime authorization.
+- Downgrade below current usage does not itself deny reads that still pass every
+  non-usage gate and preserves non-consuming mutations, but blocks further
+  consuming/increasing operations until usage is reduced or entitlement
+  increases. Operations that release capacity remain available.
+- `Entitlements::Usage` is an immutable tenant-scoped result backed by a
+  code-reviewed registry. Each stable `(product_key, feature_key)` entry defines
+  its unit and authoritative `Current.organization` query. It does not derive a
+  model from database text, persist a usage ledger, or cache a tenant count.
+- A product that declares the reviewed stable `seat_limit` uses the count of
+  active ProductMembership rows for that organization and product. Suspended
+  assignments do not consume seats. The seeded Core, Analytics, and CRM catalog
+  entries declare this limit; an unrelated product without that feature has no
+  numeric seat entitlement. Analytics `report_limit` usage is the count of that
+  organization's AnalyticsReport rows.
+- `Access::ProductMemberships::Add`,
+  `Access::ProductMemberships::Reactivate`, and
+  `Products::Analytics::CreateReport` each lock the organization row, remeasure
+  usage through `Entitlements::LimitEnforcer`, and enforce a server-owned delta
+  of one in the same transaction as mutation. An idempotent add of an already
+  active assignment has no delta; reactivation does.
+- A preflight UI check is not the final authorization. Exact finite capacity is
+  allowed, a larger result is denied, and explicit unlimited skips only the
+  ceiling.
+- `Products::PlanCompatibility` consumes the central Entitlements registry for
+  billing plan-change preflight. It blocks an application-originated target
+  below current usage and fails closed for an enabled limit without a registry
+  entry. For each finite overage it returns only the required number of
+  newest-first candidates (`created_at DESC, id DESC`) so an authorized UI can
+  explain remediation; it never mutates them.
+- A verified webhook with a known provider plan is projected even when usage is
+  incompatible. The resulting `over_limit` condition is derived from the new
+  effective plan, does not revoke read access, and blocks only later consuming
+  operations. It is not a provider subscription status or a reason to delete
+  tenant data.
 
 Time-window metering is not part of the MVP.
 
@@ -333,12 +359,13 @@ The implemented Analytics reference slice registers these exact actions:
 application actions to product, feature, permission, and consumption
 semantics. `Products::Analytics::CreateReport` requires
 `Current.organization`, locks it, repeats the `report_create` decision inside
-the transaction, counts that organization's reports through
-`Current.organization.analytics_reports`, and permits the exact finite boundary
+the transaction, and invokes `Entitlements::LimitEnforcer` with delta one. The
+registered measurement counts only
+`Current.organization.analytics_reports`; it permits the exact finite boundary
 while denying the next row. Unlimited capacity skips only the numeric ceiling;
-all other gate factors still apply. The command derives the unit and delta
-server-side and accepts only report attributes, so client-supplied organization,
-permission, feature, or usage values have no authority.
+all other gate factors still apply. The command accepts only report attributes,
+so client-supplied organization, permission, feature, or usage values have no
+authority.
 
 `Products::Analytics::ReportPolicy::Scope` starts from
 `Current.organization.analytics_reports`. Show and CSV export load by
@@ -367,8 +394,11 @@ billing/member deny. The customer product-membership controller applies that
 policy, re-resolves submitted memberships and active system roles through
 `Current.organization` and the selected product, and passes the actor into the
 transactional command. The command revalidates live owner/admin authority and
-product entitlement under the organization lock and audits successful changes;
-the UI control is never the authorization boundary.
+product entitlement under the organization lock and audits successful changes.
+Add/reactivate additionally enforces the selected product's registered
+`seat_limit` with delta one before making the assignment active; suspend/remove
+remain available to release capacity while over-limit. The UI control and usage
+display are never authorization boundaries.
 
 Controller requirements:
 
@@ -558,8 +588,11 @@ Every variation must deny. Additional positive/negative cases cover multiple
 role permission union, identical keys in another product, owner/admin no-bypass,
 billing-role product-data denial,
 disabled flag/limit, finite limit zero, explicit unlimited, exact boundary,
-over-limit downgrade, and concurrent final-unit consumption. Action-registry tests prove a client cannot omit or
-change the required permission, feature, consumption flag, or delta calculator.
+over-limit downgrade, and concurrent final-unit consumption. Per-product seat
+tests cover active versus suspended usage, add/reactivate delta one, idempotent
+active add, exact/unlimited capacity, and concurrent final-seat assignment.
+Action-registry tests prove a client cannot omit or change the required
+permission, feature, consumption flag, or delta calculator.
 
 Separate unit tests cover the pure common gate, product policy record rules, and
 the product command's atomic capacity+mutation transaction; request tests prove
@@ -614,6 +647,10 @@ cannot affect an access decision.
 - Every product action requires entitlement and permission, and owner/admin have
   no bypass.
 - Numeric consumption is database-atomic under concurrency.
+- Limit usage is tenant-scoped and freshly measured; downgrade remediation
+  candidates are deterministic and non-mutating, while a known verified provider
+  plan is projected without deleting data and derived over-limit state preserves
+  reads.
 - Direct requests remain denied regardless of UI state.
 - All `/admin` routes require the live `platform_admin` role; organization owner
   is not a substitute, catalog identities remain immutable, and every catalog

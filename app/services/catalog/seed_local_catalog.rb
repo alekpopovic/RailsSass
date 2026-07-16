@@ -42,6 +42,15 @@ class Catalog::SeedLocalCatalog
   ].freeze
 
   PRODUCT_FEATURES = {
+    "core" => [
+      {
+        key: "seat_limit",
+        name: "Product member seat limit",
+        description: "Maximum number of active Core product members for an organization.",
+        kind: "limit",
+        active: true
+      }
+    ],
     "analytics" => [
       {
         key: "dashboards",
@@ -68,6 +77,22 @@ class Catalog::SeedLocalCatalog
         key: "report_limit",
         name: "Report limit",
         description: "Maximum number of Analytics reports for an organization.",
+        kind: "limit",
+        active: true
+      },
+      {
+        key: "seat_limit",
+        name: "Product member seat limit",
+        description: "Maximum number of active Analytics product members for an organization.",
+        kind: "limit",
+        active: true
+      }
+    ],
+    "crm" => [
+      {
+        key: "seat_limit",
+        name: "Product member seat limit",
+        description: "Maximum number of active CRM product members for an organization.",
         kind: "limit",
         active: true
       }

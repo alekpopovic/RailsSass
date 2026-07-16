@@ -147,7 +147,8 @@ class BillingManagementRequestTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_select "[role='alert']", text: /Current usage is over a plan limit/
-    assert_match "2 reports used, 1 allowed", response.body
+    assert_match "2 of 1 reports used", response.body
+    assert_match "Billing usage report 1", response.body
   end
 
   test "test-mode labeling is suppressed when rendering as production" do
@@ -215,6 +216,8 @@ class BillingManagementRequestTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "article", text: /#{Regexp.escape(@downgrade_plan.name)}.*not currently compatible/m
     assert_select "form[action=?] input[value=?]", plan_changes_path, @downgrade_price.id.to_s, count: 0
+    assert_match(/Remove or suspend before changing plan/i, response.body)
+    assert_match "Billing usage report 2", response.body
 
     assert_no_difference -> { @organization.billing_plan_changes.count } do
       post plan_changes_path, params: { plan_price_id: @downgrade_price.id }

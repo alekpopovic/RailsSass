@@ -326,13 +326,14 @@ Constraints and indexes:
 - unique `(id, product_id, kind)` to support a composite entitlement
   foreign key.
 
-A feature key is not a permission key. Product code maintains an explicit
-registry from each limit feature key to its unit, authoritative usage query, and
-atomic consuming operation. Arbitrary constant lookup from database text is
-prohibited. `product_id`, `key`, and `kind` are readonly identities. Setting
-`active` false blocks new catalog selection but does not rewrite existing rows.
-The internal catalog UI uses that lifecycle transition and never hard-deletes a
-feature.
+A feature key is not a permission key. Entitlements maintains an explicit,
+code-reviewed registry from each supported `(product_key, feature_key)` pair to
+its unit, tenant-rooted authoritative usage query, and deterministic remediation
+ordering. The registry is not database-driven constant lookup and it never
+creates a generic usage ledger. `product_id`, `key`, and `kind` are readonly
+identities. Setting `active` false blocks new catalog selection but does not
+rewrite existing rows. The internal catalog UI uses that lifecycle transition
+and never hard-deletes a feature.
 
 ### 6.3 `Plan` / `plans`
 
@@ -537,6 +538,14 @@ product assignments. Product-level suspension preserves role joins but grants
 nothing until explicit reactivation. A product membership can exist while its
 plan entitlement is absent; it is then dormant and grants nothing.
 
+Every product that supports assignment has a stable `seat_limit` limit feature,
+unique within that product like every other feature key. The authoritative
+organization-wide usage for that product is the count of its `active`
+`ProductMembership` rows loaded through
+`Current.organization.product_memberships`; suspended rows are retained but do
+not consume seats. No global cross-product seat limit or duplicated seat counter
+exists.
+
 ### 7.5 `ProductMembershipRole` / `product_membership_roles`
 
 - `organization_id`, `product_id`, `product_membership_id`, `product_role_id`:
@@ -568,12 +577,13 @@ Admin). The reviewed synthetic mappings are:
 | `analytics` | `analytics.dashboard.read`, `analytics.report.read`, `analytics.report.create`, `analytics.report.manage`, `analytics.export.run` | dashboard + report read | Viewer + report create + export | all five permissions |
 | `crm` | `contacts.view`, `contacts.manage`, `settings.manage` | `contacts.view` | Viewer + `contacts.manage` | Contributor + `settings.manage` |
 
-The local catalog seed also converges Analytics flag features `dashboards`,
-`custom_reports`, and `csv_export`, plus the limit feature `report_limit`, while
-refusing to change a persisted feature kind. The seeds do not create Core
-roles, organization-specific roles, product memberships, plan-product rows,
-feature entitlement values, prices, subscriptions, or tenant access grants,
-and they are a no-op outside development/test.
+The local catalog seed also converges the `seat_limit` limit feature for every
+seeded assignable product, plus Analytics flag features `dashboards`,
+`custom_reports`, and `csv_export` and its `report_limit` limit feature, while
+refusing to change a persisted feature kind. The seeds do not create Core roles,
+organization-specific roles, product memberships, plan-product rows, feature
+entitlement values, prices, subscriptions, or tenant access grants, and they are
+a no-op outside development/test.
 
 ### 7.7 Product-assignment commands
 
@@ -595,6 +605,14 @@ internal callers may omit the actor only where a separately authorized system
 workflow owns the boundary. Billing/member actors deny, and the full
 product-data `Access::Gate` remains separate from assignment management.
 
+`Add` and `Reactivate` additionally invoke `Entitlements::LimitEnforcer` with a
+server-owned delta of one for the selected product's `seat_limit` while the same
+organization row remains locked. An already-active idempotent `Add` consumes no
+additional unit; reactivating a suspended assignment does. Exact finite capacity
+is valid, the next seat is rejected, and explicit unlimited has no numeric
+ceiling. Authorization, entitlement, active-parent, and role rules still apply
+when capacity is unlimited.
+
 ### 7.8 `AnalyticsReport` / `analytics_reports`
 
 - `organization_id`: not-null tenant foreign key with `ON DELETE RESTRICT`;
@@ -611,7 +629,9 @@ count, create, show, and export begins at
 therefore behaves as not found. Organization deletion is restricted while a
 report exists. Reports are the authoritative organization-wide usage set for
 the finite/unlimited `report_limit`; no duplicate counter or generic usage
-ledger is introduced.
+ledger is introduced. `Products::Analytics::CreateReport` holds the organization
+row lock and invokes `Entitlements::LimitEnforcer` with delta one before inserting
+the report in the same transaction.
 
 ## 8. Billing
 
@@ -798,9 +818,10 @@ refetch trigger; invoice status is not local subscription status authority.
 
 The source and target prices must differ. Creation-time model guards require a
 current subscription and its then-current source price; the implemented command
-repeats those checks, authorization, target mapping, and product-owned limit
-compatibility while locking rows transactionally. A partial unique index permits
-at most one `pending`, `submitted`, or
+repeats those checks, authorization, target mapping, and limit compatibility
+through the central Entitlements usage contract while locking rows
+transactionally. A partial unique index permits at most one `pending`,
+`submitted`, or
 `creation_unknown` command per subscription, while a non-partial history index
 supports all subscription commands. Checks tie terminal statuses to
 completion/failure metadata. This table records intent and provider-command
@@ -920,6 +941,13 @@ validates synchronization and exact environment-qualified provider mapping. A
 verified plan change updates only the current `plan_price_id` and matching
 provider identifiers; origin fields stay unchanged.
 
+A verified webhook whose variant maps to a known configured `PlanPrice` always
+projects that price even when current tenant usage is above its limits. The
+projector never deletes, suspends, or rewrites product memberships or product
+records to make the target compatible. Over-limit is calculated after projection
+from authoritative tenant rows and the effective plan; it is not a persisted
+provider status or an alternative plan assignment.
+
 Only `expired` is terminal for starting a replacement subscription in the MVP.
 When a verified new subscription is correlated after an expired current row,
 the locked transaction sets the old row to `current = false` with an
@@ -1035,7 +1063,7 @@ exposes creation only, and a PostgreSQL trigger rejects update or deletion.
 `Platform::PersistCatalog` writes the catalog record and its matching audit
 event in the same transaction; a failed audit insert rolls back the mutation.
 
-## 10. Product-owned tenant data and numeric usage
+## 10. Tenant-owned authoritative data and numeric usage
 
 Every product-domain table must:
 
@@ -1043,13 +1071,39 @@ Every product-domain table must:
 - be loaded from a `Current.organization` association;
 - include composite ownership foreign keys when it references another
   tenant/product row;
-- define the authoritative usage query for each numeric feature it consumes.
+- expose the authoritative tenant association used by each registered numeric
+  feature it consumes.
 
-The MVP does not introduce a generic usage ledger. Finite current-capacity features use
-the product's authoritative records or a product-owned counter maintained in the
-same transaction. If a future feature needs time-window metering, it requires a
-separate ADR and data model. Unlimited is represented only by the explicit
-entitlement boolean; `-1` and null are never implicit unlimited sentinels.
+`Entitlements::Usage` owns the immutable tenant-scoped measurement result and
+the code-reviewed registry of stable `(product_key, feature_key)` definitions.
+`Entitlements::LimitEnforcer` owns finite/unlimited comparison. The current
+authoritative sets are:
+
+| Stable feature | Authoritative usage |
+| --- | --- |
+| a product's registered `seat_limit` | active `Current.organization.product_memberships` for that product |
+| Analytics `report_limit` | `Current.organization.analytics_reports` |
+
+Neither result nor derived `over_limit` state is persisted or cached across
+requests. For a finite target below current usage, the result includes only the
+minimum number of remediation candidates needed to reach capacity, ordered
+deterministically newest first by `created_at DESC, id DESC`. This list is
+advisory and non-mutating: an application-originated downgrade may be blocked,
+but no compatibility check or webhook deletes tenant data.
+
+The MVP does not introduce a generic usage ledger. Finite current-capacity
+features use the authoritative rows above. Add/reactivate product assignment and
+Analytics report creation each hold the organization row lock, remeasure usage,
+and apply their server-calculated delta of one in the same transaction as the
+mutation. `usage + 1 == limit` is allowed and `usage + 1 > limit` is denied.
+Unlimited is represented only by the explicit entitlement boolean; `-1` and
+null are never implicit unlimited sentinels. If a future feature needs a
+different or time-window measurement, it requires a reviewed registry entry and,
+where necessary, a separate ADR/data model.
+
+A known verified provider downgrade is still projected. If it puts usage above
+capacity, derived over-limit state blocks only later consuming/increasing
+commands; existing rows, reads, and non-consuming operations remain available.
 
 ## 11. Lifecycle, deletion, and foreign-key policy
 
@@ -1058,7 +1112,8 @@ entitlement boolean; `-1` and null are never implicit unlimited sentinels.
 | User | Disable; hard deletion requires a separate privacy workflow |
 | Organization | Retain; organization archive and hard deletion are outside the MVP |
 | Membership | Soft-suspend; service deletes product memberships/role joins and the global access locator atomically once those records exist |
-| Analytics report | Retain as tenant-owned product data; no customer delete action is exposed in the reference slice |
+| Product membership | Suspend/remove only through its authorized command; a plan downgrade never deletes or suspends it automatically |
+| Analytics report | Retain as tenant-owned product data; no plan change or customer delete action removes it in the reference slice |
 | Invitation | Revoke/expire; retain minimal audit metadata for a bounded period |
 | Platform audit event | Append-only global catalog evidence; no ordinary application update/delete path |
 | Product/feature/role/permission | Platform admins deactivate products/features through audited commands; roles follow their reviewed lifecycle; stable identities are never renamed and no internal UI hard-deletes them |
@@ -1128,5 +1183,11 @@ columns as non-null from the start.
   prevents disabling the last access-eligible owner across organizations.
 - Organization-membership suspension/reactivation never restores prior product
   assignments; product-membership suspension/reactivation preserves role joins.
+- Per-product active seat and Analytics report usage are tenant-rooted; exact
+  finite boundaries succeed, concurrent next-unit attempts serialize, and
+  explicit unlimited capacity remains unbounded.
+- Downgrade preflight returns deterministic newest-first remediation candidates
+  without mutation, and a verified known provider plan is projected without
+  deleting tenant data even when the organization becomes over-limit.
 - Global access/provider locators can select only a candidate tenant; stale or
   mismatched locators fail the tenant reload and authorize nothing.

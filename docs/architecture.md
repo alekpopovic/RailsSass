@@ -85,16 +85,19 @@ network boundary.
 | Tenancy | `Organization`, memberships, `Organizations::*` commands, invitations, global access locators, `Current`, tenant loader | Accounts | Product permission logic, provider calls |
 | Catalog | Products, features, stable-keyed plans, plan-product/feature entitlements, and local plan-price records | None of the tenant modules | Organization state, usage, subscription lifecycle |
 | Billing | Customers, checkout attempts, subscriptions/history, plan-change commands, webhook ledger, environment-specific price mappings, checkout-token provider locators, checkout command, and Lemon adapter | Tenancy, Catalog | Product RBAC or product resource data |
-| Entitlements | Paid-status policy, effective-plan selection, typed product/feature result, versioned catalog snapshot | Tenancy, Catalog, Billing | Product RBAC, provider HTTP, usage mutation |
-| Access Control | Product memberships, roles, permissions, Pundit base integration, central common gate | Tenancy, Catalog, Billing, Entitlements | Provider HTTP, product-specific record/usage mutations |
-| Product modules | Tenant product records, Pundit record rules, authoritative numeric usage/commands | Tenancy, Access Control | Subscription projection or global role definitions |
+| Entitlements | Paid-status policy, effective-plan selection, typed product/feature result, immutable tenant-scoped usage registry/result, `LimitEnforcer`, and versioned catalog snapshot | Tenancy, Catalog, Billing, and explicit tenant-rooted authoritative usage associations | Product RBAC, provider HTTP, tenant-record mutation, or a generic usage ledger |
+| Access Control | Product memberships, roles, permissions, Pundit base integration, central common gate, and product-assignment mutation commands | Tenancy, Catalog, Billing, Entitlements | Provider HTTP or product-specific record mutations |
+| Product modules | Tenant product records, Pundit record rules, and product mutation commands | Tenancy, Access Control, Entitlements | Subscription projection, global role definitions, or generic usage infrastructure |
 | Platform | Internal admin delivery/policies, `Platform::PersistCatalog`, platform and tenant audit/logging, jobs, mail, health, deployment and observability | Accounts, Catalog, bounded Billing reads, and other explicit module APIs | Business decisions hidden in callbacks |
 
 Organization role checks belong to Tenancy. Billing owns persisted provider
 state. Entitlements composes the local paid-status policy with Catalog to return
-an effective paid/free plan and typed entitlement result, without RBAC. Access
-Control composes that answer with product RBAC. Product modules add record and
-capacity rules.
+an effective paid/free plan and typed entitlement result, without RBAC. It also
+owns the code-reviewed stable-key usage contract and limit calculation while the
+underlying tenant rows remain owned by Access Control or a product module.
+Access Control composes entitlement results with product RBAC. Access Control
+and product commands own mutations and invoke the common limit enforcer while
+holding the tenant lock.
 
 ### 4.1 Dependency direction
 
@@ -139,19 +142,29 @@ separately authorized system boundary. System roles are global reviewed
 definitions; the nullable organization scope is schema support for future
 custom roles, not an MVP custom-role builder.
 
-The `Products::Analytics` namespace is the reference product boundary. Its
-action registry fixes permission, typed-feature, and capacity semantics in
-server code; its Pundit policies add tenant-record rules, and `CreateReport`
-owns the organization lock, authoritative report count, and mutation
-transaction. It depends on Access rather than reading Billing projection state
-directly.
+`Entitlements::Usage` is an immutable result backed by a code-reviewed registry
+of stable `(product_key, feature_key)` pairs. A registry entry defines its unit,
+tenant-rooted authoritative count, and deterministic remediation ordering; it
+does not derive a class name from database text, persist a second counter, cache
+usage across requests, or mutate a tenant record. `Entitlements::LimitEnforcer`
+combines that measurement with finite or explicit-unlimited capacity.
 
-For customer plan changes, the web delivery layer injects the product-owned
-`Products::PlanCompatibility` contract into the Billing command. Billing calls
-that neutral callable under its organization lock and consumes only the
-structured result; it never names or queries product resource models. This
-preserves the dependency direction while keeping compatibility preflight in the
-same locked command that records provider intent.
+The `Products::Analytics` namespace is the reference product boundary. Its
+action registry fixes permission, typed-feature, and consumption semantics in
+server code; its Pundit policies add tenant-record rules, and `CreateReport`
+owns the organization lock and report mutation transaction. The registered
+`analytics/report_limit` measurement counts the authoritative tenant report
+rows. The command depends on Access and Entitlements rather than reading Billing
+projection state directly.
+
+For customer plan changes, the web delivery layer injects
+`Products::PlanCompatibility` into the Billing command. The compatibility query
+consumes only `Entitlements::Usage` measurements and returns a structured,
+immutable result, including deterministic newest-first remediation candidates
+when target capacity is too small. Billing calls that neutral callable under
+its organization lock; it never names, deletes, or mutates product resource
+models. Compatibility preflight therefore remains in the same locked command
+that records provider intent without becoming a second subscription authority.
 
 The internal platform-admin web layer orchestrates Accounts authentication,
 Catalog mutation commands, and bounded Billing reads. It does not move catalog
@@ -400,22 +413,35 @@ Record objects, RBAC result, or cancellation/grace decision is cached. Versioned
 keys invalidate catalog changes and old key generations expire naturally.
 
 `ApplicationPolicy` and its base scope expose protected helpers that invoke this
-same gate; product policies then apply tenant record rules. A consuming product
-command revalidates the common grant and atomically enforces product-owned usage
-plus its server-calculated delta against returned finite capacity in the same
-transaction as mutation; explicit unlimited capacity still follows the command
-and permission path but has no numeric ceiling. Action-to-permission, feature,
-and consumption mappings are server-owned, so a client cannot omit a capacity
-check.
+same gate; product policies then apply tenant record rules. A consuming command
+revalidates the common grant, locks `Current.organization`, and invokes
+`Entitlements::LimitEnforcer` with its server-calculated delta in the same
+transaction as mutation. The enforcer measures the registry's authoritative
+tenant rows at that point. Exact finite capacity is allowed, exceeding it is
+denied, and explicit unlimited capacity still follows the command and permission
+path but has no numeric ceiling. Action-to-permission, feature, and consumption
+mappings are server-owned, so a client cannot omit a capacity check.
 
 For Analytics, `ActionRegistry` evaluates `dashboard_read`, `report_read`,
 `report_create`, `report_manage`, and `export_run` through the common gate.
 `AnalyticsReport` show/export loaders begin at
 `Current.organization.analytics_reports` and use an immutable public UUID.
 `CreateReport` repeats the `report_create` decision while holding the tenant
-root lock, treats one new report as a server-calculated delta of one, compares
-the tenant-scoped count to finite or explicit unlimited `report_limit`, and
-persists only if the same transaction still has capacity.
+root lock, treats one new report as a server-calculated delta of one, invokes the
+registered tenant report measurement for finite or explicit unlimited
+`report_limit`, and persists only if the same transaction still has capacity.
+`Access::ProductMemberships::Add` and `Reactivate` use the identical locked
+pattern with delta one when the selected product declares the reviewed stable
+`seat_limit`; the authoritative usage is that organization's active product
+memberships for that product. Suspended assignments consume no seat.
+
+Usage above a newly projected finite limit is derived state, not a subscription
+status or read-access decision. It preserves rows and does not itself deny reads
+that still pass the product, feature, membership, and permission gates; it blocks
+only later consuming operations until usage falls within capacity or the plan
+increases. A verified webhook with a known provider mapping always projects its
+plan even when this derived state becomes over-limit; it never deletes or
+suspends product records as remediation.
 
 Organization administration and billing actions use the explicit organization
 role matrix and do not require a product subscription. Product actions always
@@ -461,8 +487,9 @@ controls but never replace request authorization.
   membership-management transition.
 - A webhook projection, subscription update, and event completion marker commit
   atomically under row locks.
-- Numeric consuming operations lock or conditionally update authoritative usage
-  in the same transaction as the product mutation.
+- Product-seat add/reactivate and Analytics report creation lock the organization
+  row and enforce their server-owned delta of one against freshly measured
+  authoritative usage in the same transaction as the mutation.
 
 The exact schema contract is in [Data Model](data_model.md).
 

@@ -96,6 +96,7 @@ class Organizations::ProductMembershipsController < Organizations::BaseControlle
 
   private
     def set_product
+      @tenant_organization = Current.organization
       product_key = Product.normalize_value_for(:key, params[:product_key])
       @product = Product.find_by!(key: product_key)
     end
@@ -121,6 +122,11 @@ class Organizations::ProductMembershipsController < Organizations::BaseControlle
         .joins(:user)
         .order("users.name", "organization_memberships.id")
       @system_roles = active_system_roles.order(:name, :id)
+      @seat_usage = Entitlements::LimitEnforcer.new(
+        organization: Current.organization,
+        product_key: @product.key,
+        feature_key: Entitlements::Usage::SEAT_FEATURE_KEY
+      ).status
     end
 
     def active_system_roles
@@ -141,14 +147,14 @@ class Organizations::ProductMembershipsController < Organizations::BaseControlle
 
     def redirect_to_members(notice:)
       redirect_to organization_product_members_path(
-        organization_slug: Current.organization.slug,
+        organization_slug: @tenant_organization.slug,
         product_key: @product.key
       ), status: :see_other, notice: notice
     end
 
     def redirect_invalid_product_membership(error)
       redirect_to organization_product_members_path(
-        organization_slug: Current.organization.slug,
+        organization_slug: @tenant_organization.slug,
         product_key: @product.key
       ), status: :see_other, alert: error.record.errors.full_messages.to_sentence
     end

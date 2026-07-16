@@ -8,14 +8,24 @@
       <p class="mt-2 text-slate-600">Tenant-owned Analytics reports for <%= Current.organization.name %>.</p>
     </div>
 
-    <% if @create_decision.allowed? %>
+    <% if @create_decision.allowed? && @report_usage&.allows?(1) %>
       <%= link_to "New report",
         new_organization_analytics_report_path(organization_slug: Current.organization.slug),
         class: "inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
     <% end %>
   </div>
 
-  <% unless @create_decision.allowed? %>
+  <% if @report_usage %>
+    <div class="mt-6">
+      <%= render "shared/entitlement_usage", usage: @report_usage, label: "Analytics report limit" %>
+    </div>
+  <% end %>
+
+  <% if @create_decision.allowed? && @report_usage && !@report_usage.allows?(1) %>
+    <div class="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+      Report creation is blocked by the current numeric plan limit. Existing reports remain available.
+    </div>
+  <% elsif !@create_decision.allowed? %>
     <div class="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
       <% if @create_decision.reason_code == :permission_not_granted %>
         Your product role allows report reading but not report creation.

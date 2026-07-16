@@ -3,7 +3,7 @@ require "test_helper"
 class Catalog::SeedLocalCatalogTest < ActiveSupport::TestCase
   PRODUCT_KEYS = %w[analytics core crm].freeze
   PLAN_KEYS = %w[professional starter].freeze
-  ANALYTICS_FEATURE_KEYS = %w[csv_export custom_reports dashboards report_limit].freeze
+  ANALYTICS_FEATURE_KEYS = %w[csv_export custom_reports dashboards report_limit seat_limit].freeze
 
   test "the database seed loads the exact local catalog identities" do
     Rails.application.load_seed
@@ -29,8 +29,22 @@ class Catalog::SeedLocalCatalogTest < ActiveSupport::TestCase
         "Maximum number of Analytics reports for an organization.",
         "limit",
         true
+      ],
+      [
+        "seat_limit",
+        "Product member seat limit",
+        "Maximum number of active Analytics product members for an organization.",
+        "limit",
+        true
       ]
     ], analytics_features.order(:key).pluck(:key, :name, :description, :kind, :active)
+    assert_equal [
+      [ "core", "seat_limit", "limit", true ],
+      [ "crm", "seat_limit", "limit", true ]
+    ], ProductFeature.joins(:product).where(
+      products: { key: %w[core crm] },
+      product_features: { key: "seat_limit" }
+    ).order("products.key").pluck("products.key", "product_features.key", :kind, :active)
     assert_empty PlanProduct.joins(:product).where(products: { key: PRODUCT_KEYS })
     assert_empty PlanFeatureEntitlement.joins(:product).where(products: { key: PRODUCT_KEYS })
     assert_empty PlanPrice.joins(:plan).where(plans: { key: PLAN_KEYS })

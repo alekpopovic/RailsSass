@@ -152,6 +152,59 @@ class Products::PlanCompatibilityTest < ActiveSupport::TestCase
     end
   end
 
+  test "checks active product seats and returns deterministic members to remove" do
+    seat_limit = create_test_product_feature(
+      product: @analytics,
+      key: "seat_limit",
+      name: "Seat limit",
+      kind: :limit
+    )
+    active_user = create_test_user(email_address: "compatibility-seat-active@example.test")
+    active_membership = create_test_membership(
+      organization: @organization,
+      user: active_user,
+      role: :member
+    )
+    suspended_user = create_test_user(email_address: "compatibility-seat-suspended@example.test")
+    suspended_membership = create_test_membership(
+      organization: @organization,
+      user: suspended_user,
+      role: :member
+    )
+    @organization.product_memberships.create!(
+      organization_membership: active_membership,
+      product: @analytics,
+      status: :active
+    )
+    @organization.product_memberships.create!(
+      organization_membership: suspended_membership,
+      product: @analytics,
+      status: :suspended
+    )
+    target = create_test_plan(name: "No Analytics seats")
+    add_entitlement(
+      plan: target,
+      product: @analytics,
+      feature: seat_limit,
+      limit_value: 0
+    )
+
+    result = evaluate(to_plan: target)
+    issue = result.issues.sole
+
+    assert_predicate result, :incompatible?
+    assert_limit_issue(
+      issue,
+      product_key: "analytics",
+      feature_key: "seat_limit",
+      usage: 1,
+      capacity: 0,
+      unit: "seats"
+    )
+    assert_equal [ active_user.name ],
+      issue.usage_details.remediation_items.map(&:label)
+  end
+
   test "classifies changes by stable capabilities instead of names or display position" do
     dashboards = create_test_product_feature(
       product: @analytics,
@@ -277,13 +330,20 @@ class Products::PlanCompatibilityTest < ActiveSupport::TestCase
       )
     end
 
-    def assert_limit_issue(issue, usage:, capacity:)
+    def assert_limit_issue(
+      issue,
+      usage:,
+      capacity:,
+      product_key: "analytics",
+      feature_key: "report_limit",
+      unit: "reports"
+    )
       assert_equal :limit_exceeded, issue.reason_code
-      assert_equal "analytics", issue.product_key
-      assert_equal "report_limit", issue.feature_key
+      assert_equal product_key, issue.product_key
+      assert_equal feature_key, issue.feature_key
       assert_equal usage, issue.usage
       assert_equal capacity, issue.capacity
-      assert_equal "reports", issue.unit
+      assert_equal unit, issue.unit
       assert_predicate issue, :over_limit?
     end
 end
