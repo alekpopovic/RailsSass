@@ -41,9 +41,10 @@ not a control.
 | Authorization catalog | Stable-keyed plans, entitlements, roles, permissions, local plan prices | Reviewed deployment-controlled changes, database constraints, audit trail; display names and `free`/`active` metadata never grant access |
 | Operational metadata | Event fingerprint, status reason code, timestamps, request/job IDs | Retain for diagnosis without raw payloads or secrets |
 
-The webhook ledger stores an allowlisted normalized envelope and digest, not raw
-provider payloads. Passwords, API credentials, signatures, and plaintext tokens
-are never stored.
+The webhook ledger stores an allowlisted normalized envelope, mandatory content
+fingerprint, and an optional unique provider event ID when supplied; it never
+stores raw provider payloads. Passwords, API credentials, signatures, and
+plaintext tokens are never stored.
 
 ## 4. Trust boundaries
 
@@ -190,6 +191,11 @@ The normative decision flow is in
 The complete flow is in [Billing Model](billing_model.md). Required security
 properties are:
 
+The implemented persistence/client foundation is intentionally inert: it has no
+checkout or webhook controller, no provider locator or projection writer, and no
+runtime access decision. Existing billing rows cannot be treated as verified
+payment state until the later signed-webhook pipeline is complete.
+
 - Store API keys and webhook secrets only in environment/credential stores.
 - Use separate live/test keys, webhook endpoints/configuration, and mappings.
 - Verify HMAC against exact raw bytes before parsing; compare constant-time.
@@ -200,8 +206,14 @@ properties are:
   global provider locator by subscription ID/token digest; persist no plaintext
   token, then reload through `Current.organization`.
 - Never use email/name/slug or a browser callback to attach a subscription.
-- Construct outbound URLs from a fixed API base; use connect/read/total timeouts,
-  bounded retry with jitter, and response size limits.
+- Construct outbound URLs from a fixed API base; use connect/read timeouts and
+  response size limits. The low-level client performs no automatic retry;
+  bounded retry with jitter belongs to a later operation-aware job and must
+  never blindly repeat a non-idempotent request.
+- Persist only bounded, screened diagnostic snapshots. Despite the compatibility
+  name `raw_payload` on subscriptions, it may not contain the raw webhook body,
+  full provider response, authentication/signature/token material, personal
+  data, custom data, or signed URLs.
 - Unknown/mismatched provider input becomes fail-closed local state only when
   tenant/subscription correlation is safely resolved; otherwise the global
   event alone is quarantined and no tenant is guessed.
@@ -357,6 +369,8 @@ Deployment requirements:
   account-disable races with the locator/bootstrap follow-up.
 - HMAC, replay, ordering, variant/environment mismatch, redirect-no-grant, and
   status matrix billing tests.
+- WebMock denies non-local network access; fixed-origin adapter tests stub every
+  success/failure and prove redacted errors plus single-attempt POST behavior.
 - CSRF, open redirect, log redaction, body limit, and rate-limit tests.
 - Registration/verification gating, reset/verification expiry and reuse,
   session rotation/revocation/expiry, and generic-response enumeration tests.

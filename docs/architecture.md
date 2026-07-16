@@ -12,9 +12,11 @@ codebase and one application release, with separate web and worker processes.
 The repository contains the Rails application foundation, PostgreSQL-backed CI,
 email/password authentication, organization onboarding, locator-backed path
 tenancy, audited organization invitations/member administration, and the
-constrained local product/plan catalog. This document describes both those
-established boundaries and the remaining target architecture; product access,
-billing, and deployment hardening remain incremental milestones.
+constrained local product/plan catalog. It also contains a non-authoritative
+Billing persistence foundation and a fixed-origin Lemon API client. This
+document describes both those established boundaries and the remaining target
+architecture; checkout, signed webhook ingress/projection, product access, and
+deployment hardening remain incremental milestones.
 
 Related contracts:
 
@@ -74,7 +76,7 @@ network boundary.
 | Accounts | `User`, sessions, password reset | Rails security primitives | Organizations, plans, billing |
 | Tenancy | `Organization`, memberships, `Organizations::*` commands, invitations, global access locators, `Current`, tenant loader | Accounts | Product permission logic, provider calls |
 | Catalog | Products, features, stable-keyed plans, plan-product/feature entitlements, and local plan-price records | None of the tenant modules | Organization state, usage, subscription lifecycle |
-| Billing | Checkout attempts, subscriptions, environment-specific provider mapping, global provider locators, webhook ledger, Lemon adapter | Tenancy, Catalog | Product RBAC or product resource data |
+| Billing | Customers, checkout attempts, subscriptions/history, plan-change commands, webhook ledger, future environment-specific mapping/provider locators, and Lemon adapter | Tenancy, Catalog | Product RBAC or product resource data |
 | Access Control | Product memberships, roles, permissions, Pundit base integration, central common gate | Tenancy, Catalog, Billing | Provider HTTP, product-specific record/usage mutations |
 | Product modules | Tenant product records, Pundit record rules, authoritative numeric usage/commands | Tenancy, Access Control | Subscription projection or global role definitions |
 | Platform | Jobs, mail, audit/logging, health, deployment and observability | Explicit module APIs | Business decisions hidden in callbacks |
@@ -111,7 +113,8 @@ Keep conventional top-level Active Record aggregate names where they improve
 Rails clarity (`User`, `Organization`, `Plan`, `ProductMembership`). Namespace
 orchestration and provider-specific code by owning module.
 
-Proposed layout:
+Implemented and planned layout (provider mapping, locator, webhook delivery,
+jobs, Access, and product RBAC remain planned):
 
 ```text
 app/
@@ -142,9 +145,11 @@ app/
     product_permission.rb
     product_role_permission.rb
     audit_event.rb
+    billing/customer.rb
     billing/provider_price_mapping.rb
     billing/checkout_attempt.rb
     billing/subscription.rb
+    billing/plan_change.rb
     billing/provider_locator.rb
     billing/webhook_event.rb
   policies/
@@ -157,6 +162,8 @@ app/
     catalog/...
     access/decision.rb
     billing/...
+      lemon_squeezy/client.rb
+      lemon_squeezy/errors.rb
   views/
 test/
   fixtures/
@@ -335,12 +342,20 @@ Job rules:
 `Billing::LemonSqueezy::Client` is the only outbound API adapter. It owns fixed
 base URLs, authentication headers, timeouts, response validation, rate-limit
 handling, and redacted errors. Callers pass local identifiers, not arbitrary
-URLs or provider request fragments.
+URLs or provider request fragments. The initial adapter performs one request
+per call and does not install generic retry middleware. A later command/job may
+retry an idempotent read according to its state machine; non-idempotent `POST`
+operations are never blindly retried.
+
+The persistence/client foundation does not call this adapter from a controller,
+job, callback, or subscription writer. Its existence cannot mutate local
+subscription state or grant access. WebMock disables non-local network access in
+the test environment, and adapter examples stub every provider response.
 
 `Billing::LemonSqueezy::WebhookVerifier` consumes exact raw request bytes and a
 versioned credential, verifies HMAC-SHA256 in constant time, and returns a
-validated envelope. Parsing and tenant resolution happen only after
-verification.
+validated envelope. It is a planned component: parsing and tenant resolution
+will happen only after verification when signed ingress is implemented.
 
 Provider DTOs are mapped into local models. JSON:API payload structure does not
 leak into product modules or Pundit policies.

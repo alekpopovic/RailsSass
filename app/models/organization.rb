@@ -13,6 +13,26 @@ class Organization < ApplicationRecord
   has_many :audit_events,
     dependent: :restrict_with_exception,
     inverse_of: :organization
+  has_many :billing_customers,
+    class_name: "Billing::Customer",
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
+  has_many :billing_checkout_attempts,
+    class_name: "Billing::CheckoutAttempt",
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
+  has_many :billing_subscriptions,
+    class_name: "Billing::Subscription",
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
+  has_many :billing_plan_changes,
+    class_name: "Billing::PlanChange",
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
+  has_many :billing_webhook_events,
+    class_name: "Billing::WebhookEvent",
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
   has_many :users, through: :organization_memberships
 
   enum :status, { active: "active", suspended: "suspended" },

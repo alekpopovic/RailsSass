@@ -49,6 +49,8 @@ services:
       APP_PORT: "${PORT:-3000}"
       BINDING: 0.0.0.0
       FOREMAN_ENV: /dev/null
+      LEMON_SQUEEZY_API_KEY: "${LEMON_SQUEEZY_API_KEY:-}"
+      LEMON_SQUEEZY_STORE_ID: "${LEMON_SQUEEZY_STORE_ID:-}"
       PGHOST: postgres
       PGPORT: 5432
       PGUSER: rails_sass

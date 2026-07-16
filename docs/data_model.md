@@ -8,8 +8,10 @@ Last updated: 2026-07-16
 This document is the canonical relational model for the production MVP. It
 defines ownership, names, relationships, indexes, foreign keys, and database
 constraints. Account/session, organization, invitation/audit, and local catalog
-migrations exist; later access-control, product-domain, and billing tables below
-remain planned in the documented execution order.
+migrations exist. A constrained Billing persistence foundation also exists, but
+its provider mapping, locator, verified projection, access predicate, later
+access-control, and product-domain work remain planned in the documented
+execution order.
 
 Behavioral interpretation is defined in
 [Authorization Model](authorization_model.md) and
@@ -45,7 +47,7 @@ Behavioral interpretation is defined in
 | Ownership | Tables | Query rule |
 | --- | --- | --- |
 | Global account | `users`, `sessions` | Through authenticated account/session |
-| Tenant-owned | organizations' memberships, invitations, product assignments, checkout attempts, subscriptions, product-domain records | Through `Current.organization` after bootstrap |
+| Tenant-owned | organizations' memberships, invitations, product assignments, billing customers, checkout attempts, subscriptions, plan changes, product-domain records | Through `Current.organization` after bootstrap |
 | Global system catalog | products, features, plans, plan products, feature entitlements, plan prices, product roles/permissions | Read through explicit catalog services; writes are deployment-controlled |
 | Global locator infrastructure | `organization_access_locators`, `billing_provider_locators` | Discovery only; never sufficient authorization; immediately reload tenant records through `Current.organization` |
 | Provider ingress ledger | `billing_webhook_events` | No ordinary user query; verified system resolver, then tenant reload when associated |
@@ -75,8 +77,12 @@ erDiagram
   PLAN_PRODUCT ||--o{ PLAN_FEATURE_ENTITLEMENT : contains
   PRODUCT_FEATURE ||--o{ PLAN_FEATURE_ENTITLEMENT : valued
   PLAN ||--o{ PLAN_PRICE : sold_as
+  ORGANIZATION ||--o{ BILLING_CUSTOMER : owns
+  BILLING_CUSTOMER ||--o{ BILLING_SUBSCRIPTION : identifies
   ORGANIZATION ||--o{ BILLING_SUBSCRIPTION : owns
   PLAN_PRICE ||--o{ BILLING_SUBSCRIPTION : maps
+  ORGANIZATION ||--o{ BILLING_CHECKOUT_ATTEMPT : owns
+  BILLING_SUBSCRIPTION ||--o{ BILLING_PLAN_CHANGE : receives
   ORGANIZATION ||--o{ BILLING_PROVIDER_LOCATOR : discovered_by
 ```
 
@@ -474,16 +480,150 @@ The implemented local price record is `PlanPrice`, documented in section 6.6.
 It is a Catalog input and does not grant access, confirm payment, or provide a
 complete production provider mapping.
 
-The later Billing milestone must define the persisted environment-qualified
-mapping used by checkout and verified webhook projection. That mapping must bind
+The later Billing projection milestone must define the persisted
+environment-qualified mapping used by checkout and verified webhook projection.
+That mapping must bind
 an exact test/live environment, configured store, Lemon product/variant, and
 local `PlanPrice`/`Plan` without trusting browser fields or display names. The
-remaining checkout/subscription schema in this section is therefore proposed;
-its price-mapping foreign-key shape must be finalized with that Billing
-milestone rather than treating `PlanPrice.lemon_variant_id` alone as production
-authorization evidence.
+implemented foundation in section 8.2 deliberately has no such mapping. The
+projection-ready target in sections 8.3–8.6 is therefore proposed and will be
+reached through additive migrations; `PlanPrice.lemon_variant_id` alone is
+never production authorization evidence.
 
-### 8.2 `Billing::CheckoutAttempt` / `billing_checkout_attempts`
+### 8.2 Implemented Billing persistence foundation
+
+The current tables provide constrained storage and history before any external
+billing endpoint exists. They do not implement checkout, webhook receipt,
+provider lookup, subscription projection, or the runtime status predicate. No
+row described in this subsection is payment proof or an access grant. Tenant
+reads must use the corresponding `Current.organization` association.
+
+#### 8.2.1 `Billing::Customer` / `billing_customers`
+
+- `organization_id`: not-null tenant foreign key.
+- `provider`: currently only `lemon_squeezy`.
+- `environment`: `test` or `live`.
+- `provider_customer_id`: normalized non-blank provider identity.
+- `test_mode`: not-null boolean that must match the environment.
+- nullable `provider_updated_at` and ordinary timestamps.
+
+The provider customer identity is unique by `(provider, environment,
+provider_customer_id)`. A supporting unique tuple including the row ID,
+organization, provider, environment, test mode, and provider customer ID lets a
+subscription prove in PostgreSQL that it references the same tenant and
+provider identity. Customers contain no provider email, name, address, payment
+payload, or other unnecessary personal data. Historical provider customer rows
+are retained and deletion is restricted while referenced.
+
+#### 8.2.2 `Billing::CheckoutAttempt` / `billing_checkout_attempts`
+
+- `organization_id`, `initiated_by_membership_id`, and `plan_price_id`: not-null
+  restricted foreign keys; the membership reference is a composite tenant key.
+- `provider`, `environment`, and matching non-null `test_mode`.
+- `token_digest`: not-null lowercase SHA-256 digest of a transient correlation
+  token; no plaintext token or checkout URL is stored.
+- `status`: `creating`, `ready`, `creation_unknown`, `completed`, `expired`,
+  `superseded`, or `failed`.
+- nullable `provider_checkout_id`, `token_consumed_at`, `completed_at`, and
+  redacted `failure_code`; non-null `expires_at` and ordinary timestamps.
+
+The token digest is globally unique. A provider checkout ID, when present, is
+unique by provider and environment. A partial unique index allows at most one
+`creating`, `ready`, or `creation_unknown` attempt per organization. Checks
+enforce provider/environment/test-mode shape and status/timestamp consistency.
+The table is not currently connected to an HTTP action or Lemon checkout API.
+
+#### 8.2.3 `Billing::Subscription` / `billing_subscriptions`
+
+- `organization_id`, `billing_customer_id`, and `plan_price_id`: not-null
+  restricted foreign keys.
+- `provider`, `environment`, `provider_subscription_id`, duplicated
+  `provider_customer_id`, and matching non-null `test_mode`.
+- provider `status`: `on_trial`, `active`, `paused`, `past_due`, `unpaid`,
+  `cancelled`, `expired`, or fail-closed `unknown`.
+- `current`: non-null boolean; nullable `archived_at` preserves replaced rows.
+- nullable `trial_ends_at`, `renews_at`, `ends_at`, `card_brand`, and
+  `card_last_four`; non-null `provider_updated_at`.
+- non-null JSON objects `pause` and `raw_payload`, optimistic `lock_version`, and
+  ordinary timestamps.
+
+The provider subscription identity is unique by `(provider, environment,
+provider_subscription_id)`. A partial unique index permits at most one `current`
+row per organization, and a check makes `current` exactly equivalent to
+`archived_at IS NULL`. Archiving changes that pair but does not delete history.
+An application guard and database trigger reject deletion, reactivation of an
+archived row, or changing its archival timestamp; bounded provider fields may
+still be updated later by verified projection for historical diagnostics.
+Composite customer and supporting subscription keys prevent cross-tenant or
+provider/environment/test-mode mismatches. Further checks cover normalized
+identifiers, allowed statuses, trial/cancellation timestamps, paired bounded
+card display fields, and JSON object/size limits.
+
+Despite its name, `raw_payload` is only a bounded, recursively screened,
+minimal diagnostic snapshot. The model accepts only explicit normalized field
+keys, rejects sensitive key families (including snake/camel-case variants), and
+the database limits it to a JSON object of at most 64 KiB. It must never store a
+raw webhook body, complete provider response, authorization/signature/token,
+email/name, custom data, or signed checkout/portal URL. `pause` has its own
+minimal key allowlist plus the same object/size bound. Neither `current` nor any
+provider status authorizes access until the future mapping, verified projection,
+and access predicate exist.
+
+#### 8.2.4 `Billing::WebhookEvent` / `billing_webhook_events`
+
+This provider-wide ledger is not an ordinary tenant resource. It currently
+stores only the shape needed for future verified receipt work:
+
+- optional `organization_id`; non-null provider/environment and 64-character
+  SHA-256 `fingerprint`;
+- optional normalized `provider_event_id`, unique by provider/environment when
+  present. Lemon currently documents no delivery ID, so the body fingerprint
+  remains mandatory and is the effective delivery idempotency key;
+- optional bounded `event_name` and `provider_resource_id`;
+- `status`: `received`, `processing`, `processed`, `ignored`, `quarantined`, or
+  `failed`;
+- non-null `received_at` and `verified_at`; nullable `processed_at` and
+  `provider_updated_at`; non-negative `attempt_count`; optional redacted
+  `error_code` and `test_mode`;
+- non-null screened JSON-object `snapshot` plus ordinary timestamps.
+
+The fingerprint is globally unique. Indexes support status/receipt sweeping,
+environment-qualified provider-event identity when supplied, provider-resource
+lookup, and optional resolved organization lookup. When test mode is known it
+must match the configured environment. Snapshot storage uses an explicit
+normalized-field allowlist and is limited to 64 KiB under the same
+no-body/no-secret/no-PII rule as subscriptions. No webhook route or verifier
+writes this table yet; a synthetic row cannot represent verified production
+authority merely because `verified_at` is populated.
+
+#### 8.2.5 `Billing::PlanChange` / `billing_plan_changes`
+
+- `organization_id`, `billing_subscription_id`,
+  `requested_by_membership_id`, `from_plan_price_id`, and `to_plan_price_id`:
+  not-null restricted foreign keys with composite tenant/provider checks.
+- provider/environment and matching non-null test mode copied from the
+  subscription.
+- `status`: `pending`, `submitted`, `creation_unknown`, `applied`, `failed`, or
+  `superseded`.
+- non-null `requested_at`; nullable `provider_updated_at`, `completed_at`, and
+  redacted `failure_code`; ordinary timestamps.
+
+The source and target prices must differ. Creation-time model guards require a
+current subscription and its then-current source price; the future command must
+repeat those checks while locking rows transactionally before exposing a
+writer. A partial unique index permits at most one `pending`, `submitted`, or
+`creation_unknown` command per subscription, while a non-partial history index
+supports all subscription commands. Checks tie terminal statuses to
+completion/failure metadata. This table records intent and provider-command
+history only: creating or submitting a plan change never updates the
+subscription plan or access. Only a later verified-webhook projection may mark
+a command applied while updating authoritative local state.
+
+### 8.3 Future projection-ready `Billing::CheckoutAttempt`
+
+This target extends the implemented table with an exact provider-price mapping,
+origin correlation, and the lifecycle rules required before checkout is
+exposed. It is not the current schema.
 
 - `organization_id`: not-null tenant foreign key.
 - `initiated_by_membership_id`: not null, composite tenant foreign key.
@@ -494,10 +634,9 @@ authorization evidence.
   independently because `PlanPrice` has no environment column.
 - `token_digest`: SHA-256 digest of a transient high-entropy correlation token,
   not null; plaintext is never persisted.
-- `state`: `creating`, `ready`, `creation_unknown`, `completed`, `expired`,
+- `status`: `creating`, `ready`, `creation_unknown`, `completed`, `expired`,
   `superseded`, or `failed`.
 - `provider_checkout_id`: nullable provider identifier.
-- optional encrypted `provider_checkout_url`, cleared after completion/expiry.
 - non-null `expires_at`; nullable `token_consumed_at`, `completed_at`, and
   redacted `failure_code`.
 
@@ -519,7 +658,7 @@ Constraints and indexes:
   provider locator;
 - partial unique index allowing one `creating`, `ready`, or `creation_unknown`
   row per organization;
-- state/timestamp consistency checks.
+- status/timestamp consistency checks.
 
 `failed` is reserved for a definitive local/provider rejection proving that no
 usable remote checkout was created. `expired` means only that the URL/correlation
@@ -538,7 +677,12 @@ skew allowance). Processing time may be later. Creation after that provider-time
 boundary, a consumed token, or a mismatched locator is quarantined. Plaintext
 token is transient correlation data, not proof of access.
 
-### 8.3 `Billing::Subscription` / `billing_subscriptions`
+### 8.4 Future authoritative `Billing::Subscription` projection
+
+This target is an additive expansion of the implemented subscription history
+table. The origin mapping, synchronization state, monotonic provider timestamps,
+and exact environment-qualified price foreign key below are not implemented by
+the foundation and are prerequisites for runtime access.
 
 - `organization_id`: not-null tenant foreign key.
 - `plan_price_id`: not-null current local plan-price foreign key.
@@ -547,28 +691,29 @@ token is transient correlation data, not proof of access.
 - `provider`: `lemon_squeezy`.
 - `environment`: `test` or `live`.
 - `test_mode`: non-null boolean matching environment.
-- `external_subscription_id`: non-blank text.
+- `provider_subscription_id`: non-blank text.
 - `provider_store_id`, `provider_product_id`, `provider_variant_id`: non-blank
   text copied from the verified provider snapshot.
 - optional external customer/order identifiers needed for diagnostics, never
   used to resolve a tenant by email/name.
-- `provider_status`: raw bounded status text.
 - `status`: normalized `on_trial`, `active`, `paused`, `past_due`, `unpaid`,
   `cancelled`, `expired`, or `unknown`.
 - `sync_state`: `synced`, `pending`, `mapping_error`, or `invalid`.
 - `trial_ends_at`, `renews_at`, `ends_at`, `past_due_started_at`.
 - `provider_created_at`, `provider_updated_at`, `status_changed_at`,
   `last_seen_provider_updated_at`, `last_verified_webhook_at`.
-- `superseded_at` and optimistic `lock_version`.
+- existing `current`, `archived_at`, and optimistic `lock_version` history
+  fields.
 
 Constraints and indexes:
 
-- unique `(provider, environment, external_subscription_id)`;
+- unique `(provider, environment, provider_subscription_id)`;
 - unique non-null `origin_checkout_attempt_id`;
 - supporting unique
-  `(id, organization_id, provider, environment, external_subscription_id)` for
+  `(id, organization_id, provider, environment, provider_subscription_id)` for
   the global provider locator;
-- partial unique index on `organization_id WHERE superseded_at IS NULL`;
+- partial unique index on `organization_id WHERE current` and the existing
+  `current = (archived_at IS NULL)` check;
 - foreign key to organization;
 - ordinary restricted foreign key from `plan_price_id` to `plan_prices`, plus
   the environment-qualified provider-mapping constraint finalized by the
@@ -610,12 +755,13 @@ provider mapping are required. A verified plan change updates only the current
 
 Only `expired` is terminal for starting a replacement subscription in the MVP.
 When a verified new subscription is correlated after an expired current row,
-the locked transaction sets the old row's `superseded_at` before inserting the
-new current row. Any second subscription while the current row is not expired is
-quarantined. Later events for a superseded external ID update that historical
-row for audit but never make it current or access-granting.
+the locked transaction sets the old row to `current = false` with an
+`archived_at` timestamp before inserting the new current row. Any second
+subscription while the current row is not expired is quarantined. Later events
+for an archived provider subscription ID may update bounded historical fields
+for audit but never make it current or access-granting.
 
-### 8.4 `Billing::ProviderLocator` / `billing_provider_locators`
+### 8.5 Future `Billing::ProviderLocator` / `billing_provider_locators`
 
 A global, non-authoritative integration index used only after webhook signature
 verification.
@@ -623,7 +769,7 @@ verification.
 - `provider`, `environment`, `organization_id`, and `kind` (`checkout` or
   `subscription`): not null.
 - checkout shape: `checkout_attempt_id` and `checkout_token_digest`.
-- subscription shape: `external_subscription_id` and optional
+- subscription shape: `provider_subscription_id` and optional
   `billing_subscription_id` until a valid first projection can be created.
 - nullable `resolved_at` and `resolution` (`consumed` or
   `definitive_creation_failure`) for checkout correlation; both are null or both
@@ -636,7 +782,7 @@ Constraints and indexes:
 - checkout resolution timestamp/reason consistency; subscription locators have
   neither checkout resolution field;
 - unique `(provider, environment, checkout_token_digest)` when present;
-- unique `(provider, environment, external_subscription_id)` when present;
+- unique `(provider, environment, provider_subscription_id)` when present;
 - unique non-null checkout-attempt and billing-subscription references;
 - organization foreign key, delete restricted;
 - composite checkout foreign key
@@ -645,7 +791,7 @@ Constraints and indexes:
   `billing_checkout_attempts`;
 - when a subscription row exists, composite foreign key
   `(billing_subscription_id, organization_id, provider, environment,
-  external_subscription_id)` to the matching tuple on
+  provider_subscription_id)` to the matching tuple on
   `billing_subscriptions`.
 
 Checkout attempt creation inserts its locator atomically. Once a verified first
@@ -665,9 +811,11 @@ For correlation and operational status, a checkout locator is unresolved while
 `billing_subscription_id IS NULL`. Locator rows are retained after resolution
 for idempotency and history.
 
-### 8.5 `Billing::WebhookEvent` / `billing_webhook_events`
+### 8.6 Future verified-event ledger expansion
 
-A provider-wide durable receipt ledger. It is not an ordinary tenant resource.
+The implemented provider-wide ledger remains an inert storage primitive until
+the following signed-ingress fields, constraints, and processing semantics are
+added. It is not an ordinary tenant resource.
 
 - `provider`, configured `environment`, and nullable bounded `event_name` from
   signed `meta.event_name`; it is null only when a verified raw body cannot be
@@ -683,7 +831,7 @@ A provider-wide durable receipt ledger. It is not an ordinary tenant resource.
   never persisted.
 - `provider_updated_at` when present.
 - nullable `organization_id`, set only after trusted resolution.
-- `state`: `received`, `processing`, `processed`, `ignored`, `quarantined`, or
+- `status`: `received`, `processing`, `processed`, `ignored`, `quarantined`, or
   `failed`.
 - `verified_at`, `verification_key_version`, `received_at`, `processed_at`,
   `attempt_count`, and redacted `error_code`.
@@ -695,7 +843,7 @@ Constraints and indexes:
 - checks for fixed fingerprint shape, enums, non-negative attempts, timestamp
   consistency, environment/test-mode agreement when present, and complete
   non-null supported envelope fields for processable states;
-- index `(state, received_at)` for sweepers;
+- index `(status, received_at)` for sweepers;
 - index `(provider, environment, external_resource_id)`;
 - nullable foreign key/index on `organization_id`.
 
@@ -763,7 +911,7 @@ entitlement boolean; `-1` and null are never implicit unlimited sentinels.
 | Invitation | Revoke/expire; retain minimal audit metadata for a bounded period |
 | Product/feature/role/permission | Deactivate; restrict deletion when referenced |
 | Plan/product/feature entitlement/price | Deactivate or update through deployment-controlled catalog changes; restrict deletion when referenced |
-| Checkout attempt/subscription/webhook | Retain per billing/security retention policy; never cascade from ordinary UI operations |
+| Billing customer/checkout attempt/subscription/plan change/webhook | Retain per billing/security retention policy; archive subscription history and never cascade from ordinary UI operations |
 
 Default foreign-key deletion is `RESTRICT`/`NO ACTION`. Intentional database
 cascades are limited to:

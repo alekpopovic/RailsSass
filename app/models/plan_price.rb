@@ -4,6 +4,24 @@ class PlanPrice < ApplicationRecord
   PROVIDER_ID_MAX_LENGTH = 64
 
   belongs_to :plan, inverse_of: :plan_prices
+  has_many :billing_checkout_attempts,
+    class_name: "Billing::CheckoutAttempt",
+    dependent: :restrict_with_exception,
+    inverse_of: :plan_price
+  has_many :billing_subscriptions,
+    class_name: "Billing::Subscription",
+    dependent: :restrict_with_exception,
+    inverse_of: :plan_price
+  has_many :billing_plan_changes_from,
+    class_name: "Billing::PlanChange",
+    foreign_key: :from_plan_price_id,
+    dependent: :restrict_with_exception,
+    inverse_of: :from_plan_price
+  has_many :billing_plan_changes_to,
+    class_name: "Billing::PlanChange",
+    foreign_key: :to_plan_price_id,
+    dependent: :restrict_with_exception,
+    inverse_of: :to_plan_price
 
   enum :billing_interval,
     { monthly: "monthly", yearly: "yearly" },

@@ -1,7 +1,7 @@
 # Authorization Model
 
 Status: Proposed
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 ## 1. Purpose
 
@@ -12,6 +12,13 @@ record rules, and numeric capacity. All checks fail closed.
 The relational structures are in [Data Model](data_model.md). The canonical
 subscription predicate is in
 [Billing Model](billing_model.md#8-subscription-access-matrix).
+
+The current Billing persistence foundation does not implement that predicate or
+the verified subscription projection it consumes. A foundational
+`Billing::Subscription` row, including one marked `current`, is not sufficient
+authorization. Product access remains unavailable until the exact provider
+mapping, verified-webhook writer, synchronization state, and central
+`Access::Decision` milestone are implemented together.
 
 ## 2. Security invariants
 

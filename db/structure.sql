@@ -82,6 +82,36 @@ END;
 $$;
 
 
+--
+-- Name: protect_billing_subscription_history(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.protect_billing_subscription_history() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'billing subscription history must be archived, not deleted'
+      USING ERRCODE = '55000',
+        TABLE = 'billing_subscriptions';
+  END IF;
+
+  IF OLD.current = FALSE AND (
+    NEW.current <> FALSE
+    OR NEW.archived_at IS DISTINCT FROM OLD.archived_at
+  ) THEN
+    RAISE EXCEPTION 'archived billing subscription state is immutable'
+      USING ERRCODE = '23514',
+        CONSTRAINT = 'billing_subscriptions_archive_is_one_way',
+        TABLE = 'billing_subscriptions';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -142,6 +172,275 @@ ALTER SEQUENCE public.audit_events_id_seq OWNED BY public.audit_events.id;
 
 
 --
+-- Name: billing_checkout_attempts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.billing_checkout_attempts (
+    id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    initiated_by_membership_id bigint NOT NULL,
+    plan_price_id bigint NOT NULL,
+    provider character varying(32) DEFAULT 'lemon_squeezy'::character varying NOT NULL,
+    environment character varying(8) NOT NULL,
+    test_mode boolean NOT NULL,
+    token_digest character varying(64) NOT NULL,
+    status character varying(32) DEFAULT 'creating'::character varying NOT NULL,
+    provider_checkout_id character varying(128),
+    expires_at timestamp(6) without time zone NOT NULL,
+    token_consumed_at timestamp(6) without time zone,
+    completed_at timestamp(6) without time zone,
+    failure_code character varying(64),
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT billing_checkout_attempts_completed_after_creation CHECK (((completed_at IS NULL) OR (completed_at >= created_at))),
+    CONSTRAINT billing_checkout_attempts_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_checkout_attempts_environment_test_mode_consistent CHECK (((((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
+    CONSTRAINT billing_checkout_attempts_expiry_after_creation CHECK ((expires_at > created_at)),
+    CONSTRAINT billing_checkout_attempts_failure_code_normalized CHECK (((failure_code IS NULL) OR (((failure_code)::text = btrim((failure_code)::text)) AND ((failure_code)::text ~ '^[a-z][a-z0-9_]*$'::text) AND ((char_length((failure_code)::text) >= 1) AND (char_length((failure_code)::text) <= 64))))),
+    CONSTRAINT billing_checkout_attempts_lifecycle CHECK (((((status)::text = ANY ((ARRAY['creating'::character varying, 'creation_unknown'::character varying])::text[])) AND (completed_at IS NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'ready'::text) AND (provider_checkout_id IS NOT NULL) AND (completed_at IS NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'completed'::text) AND (provider_checkout_id IS NOT NULL) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NOT NULL) AND (failure_code IS NULL)) OR (((status)::text = ANY ((ARRAY['expired'::character varying, 'superseded'::character varying])::text[])) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'failed'::text) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NOT NULL)))),
+    CONSTRAINT billing_checkout_attempts_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
+    CONSTRAINT billing_checkout_attempts_provider_id_normalized CHECK (((provider_checkout_id IS NULL) OR (((provider_checkout_id)::text = btrim((provider_checkout_id)::text)) AND ((provider_checkout_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_checkout_id)::text) >= 1) AND (char_length((provider_checkout_id)::text) <= 128))))),
+    CONSTRAINT billing_checkout_attempts_status_allowed CHECK (((status)::text = ANY ((ARRAY['creating'::character varying, 'ready'::character varying, 'creation_unknown'::character varying, 'completed'::character varying, 'expired'::character varying, 'superseded'::character varying, 'failed'::character varying])::text[]))),
+    CONSTRAINT billing_checkout_attempts_token_consumed_at_valid CHECK (((token_consumed_at IS NULL) OR ((token_consumed_at >= created_at) AND (token_consumed_at <= completed_at)))),
+    CONSTRAINT billing_checkout_attempts_token_digest_format CHECK (((token_digest)::text ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: billing_checkout_attempts_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.billing_checkout_attempts_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: billing_checkout_attempts_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.billing_checkout_attempts_id_seq OWNED BY public.billing_checkout_attempts.id;
+
+
+--
+-- Name: billing_customers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.billing_customers (
+    id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    provider character varying(32) DEFAULT 'lemon_squeezy'::character varying NOT NULL,
+    environment character varying(8) NOT NULL,
+    provider_customer_id character varying(128) NOT NULL,
+    test_mode boolean NOT NULL,
+    provider_updated_at timestamp(6) without time zone,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT billing_customers_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_customers_environment_test_mode_consistent CHECK (((((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
+    CONSTRAINT billing_customers_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
+    CONSTRAINT billing_customers_provider_customer_id_normalized CHECK ((((provider_customer_id)::text = btrim((provider_customer_id)::text)) AND ((provider_customer_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_customer_id)::text) >= 1) AND (char_length((provider_customer_id)::text) <= 128))))
+);
+
+
+--
+-- Name: billing_customers_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.billing_customers_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: billing_customers_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.billing_customers_id_seq OWNED BY public.billing_customers.id;
+
+
+--
+-- Name: billing_plan_changes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.billing_plan_changes (
+    id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    billing_subscription_id bigint NOT NULL,
+    requested_by_membership_id bigint NOT NULL,
+    from_plan_price_id bigint NOT NULL,
+    to_plan_price_id bigint NOT NULL,
+    provider character varying(32) DEFAULT 'lemon_squeezy'::character varying NOT NULL,
+    environment character varying(8) NOT NULL,
+    test_mode boolean NOT NULL,
+    status character varying(32) DEFAULT 'pending'::character varying NOT NULL,
+    requested_at timestamp(6) without time zone NOT NULL,
+    provider_updated_at timestamp(6) without time zone,
+    completed_at timestamp(6) without time zone,
+    failure_code character varying(64),
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT billing_plan_changes_completed_after_requested CHECK (((completed_at IS NULL) OR (completed_at >= requested_at))),
+    CONSTRAINT billing_plan_changes_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_plan_changes_environment_test_mode_consistent CHECK (((((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
+    CONSTRAINT billing_plan_changes_failure_code_normalized CHECK (((failure_code IS NULL) OR (((failure_code)::text = btrim((failure_code)::text)) AND ((failure_code)::text ~ '^[a-z][a-z0-9_]*$'::text) AND ((char_length((failure_code)::text) >= 1) AND (char_length((failure_code)::text) <= 64))))),
+    CONSTRAINT billing_plan_changes_lifecycle CHECK (((((status)::text = ANY ((ARRAY['pending'::character varying, 'submitted'::character varying, 'creation_unknown'::character varying])::text[])) AND (completed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = ANY ((ARRAY['applied'::character varying, 'superseded'::character varying])::text[])) AND (completed_at IS NOT NULL) AND (failure_code IS NULL)) OR (((status)::text = 'failed'::text) AND (completed_at IS NOT NULL) AND (failure_code IS NOT NULL)))),
+    CONSTRAINT billing_plan_changes_prices_differ CHECK ((from_plan_price_id <> to_plan_price_id)),
+    CONSTRAINT billing_plan_changes_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
+    CONSTRAINT billing_plan_changes_status_allowed CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'submitted'::character varying, 'creation_unknown'::character varying, 'applied'::character varying, 'failed'::character varying, 'superseded'::character varying])::text[])))
+);
+
+
+--
+-- Name: billing_plan_changes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.billing_plan_changes_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: billing_plan_changes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.billing_plan_changes_id_seq OWNED BY public.billing_plan_changes.id;
+
+
+--
+-- Name: billing_subscriptions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.billing_subscriptions (
+    id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    billing_customer_id bigint NOT NULL,
+    plan_price_id bigint NOT NULL,
+    provider character varying(32) DEFAULT 'lemon_squeezy'::character varying NOT NULL,
+    environment character varying(8) NOT NULL,
+    provider_subscription_id character varying(128) NOT NULL,
+    provider_customer_id character varying(128) NOT NULL,
+    status character varying(32) NOT NULL,
+    current boolean DEFAULT true NOT NULL,
+    trial_ends_at timestamp(6) without time zone,
+    renews_at timestamp(6) without time zone,
+    ends_at timestamp(6) without time zone,
+    provider_updated_at timestamp(6) without time zone NOT NULL,
+    pause jsonb DEFAULT '{}'::jsonb NOT NULL,
+    card_brand character varying(32),
+    card_last_four character varying(4),
+    test_mode boolean NOT NULL,
+    raw_payload jsonb DEFAULT '{}'::jsonb NOT NULL,
+    archived_at timestamp(6) without time zone,
+    lock_version bigint DEFAULT 0 NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT billing_subscriptions_archive_after_creation CHECK (((archived_at IS NULL) OR (archived_at >= created_at))),
+    CONSTRAINT billing_subscriptions_cancelled_end_required CHECK ((((status)::text <> 'cancelled'::text) OR (ends_at IS NOT NULL))),
+    CONSTRAINT billing_subscriptions_card_display_consistent CHECK ((((card_brand IS NULL) AND (card_last_four IS NULL)) OR ((card_brand IS NOT NULL) AND ((card_brand)::text = btrim((card_brand)::text)) AND ((char_length((card_brand)::text) >= 1) AND (char_length((card_brand)::text) <= 32)) AND (card_last_four IS NOT NULL) AND ((card_last_four)::text ~ '^[0-9]{4}$'::text)))),
+    CONSTRAINT billing_subscriptions_current_archive_consistent CHECK (((current AND (archived_at IS NULL)) OR ((NOT current) AND (archived_at IS NOT NULL)))),
+    CONSTRAINT billing_subscriptions_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_subscriptions_environment_test_mode_consistent CHECK (((((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
+    CONSTRAINT billing_subscriptions_lock_version_non_negative CHECK ((lock_version >= 0)),
+    CONSTRAINT billing_subscriptions_pause_object_bounded CHECK (((jsonb_typeof(pause) = 'object'::text) AND (pg_column_size(pause) <= 65536))),
+    CONSTRAINT billing_subscriptions_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
+    CONSTRAINT billing_subscriptions_provider_customer_id_normalized CHECK ((((provider_customer_id)::text = btrim((provider_customer_id)::text)) AND ((provider_customer_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_customer_id)::text) >= 1) AND (char_length((provider_customer_id)::text) <= 128)))),
+    CONSTRAINT billing_subscriptions_provider_subscription_id_normalized CHECK ((((provider_subscription_id)::text = btrim((provider_subscription_id)::text)) AND ((provider_subscription_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_subscription_id)::text) >= 1) AND (char_length((provider_subscription_id)::text) <= 128)))),
+    CONSTRAINT billing_subscriptions_raw_payload_object_bounded CHECK (((jsonb_typeof(raw_payload) = 'object'::text) AND (pg_column_size(raw_payload) <= 65536))),
+    CONSTRAINT billing_subscriptions_status_allowed CHECK (((status)::text = ANY ((ARRAY['on_trial'::character varying, 'active'::character varying, 'paused'::character varying, 'past_due'::character varying, 'unpaid'::character varying, 'cancelled'::character varying, 'expired'::character varying, 'unknown'::character varying])::text[]))),
+    CONSTRAINT billing_subscriptions_trial_end_required CHECK ((((status)::text <> 'on_trial'::text) OR (trial_ends_at IS NOT NULL)))
+);
+
+
+--
+-- Name: billing_subscriptions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.billing_subscriptions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: billing_subscriptions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.billing_subscriptions_id_seq OWNED BY public.billing_subscriptions.id;
+
+
+--
+-- Name: billing_webhook_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.billing_webhook_events (
+    id bigint NOT NULL,
+    organization_id bigint,
+    provider character varying(32) DEFAULT 'lemon_squeezy'::character varying NOT NULL,
+    environment character varying(8) NOT NULL,
+    fingerprint character varying(64) NOT NULL,
+    provider_event_id character varying(128),
+    event_name character varying(100),
+    provider_resource_id character varying(128),
+    status character varying(32) DEFAULT 'received'::character varying NOT NULL,
+    test_mode boolean,
+    received_at timestamp(6) without time zone NOT NULL,
+    verified_at timestamp(6) without time zone NOT NULL,
+    processed_at timestamp(6) without time zone,
+    provider_updated_at timestamp(6) without time zone,
+    attempt_count integer DEFAULT 0 NOT NULL,
+    error_code character varying(64),
+    snapshot jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT billing_webhook_events_attempt_count_non_negative CHECK ((attempt_count >= 0)),
+    CONSTRAINT billing_webhook_events_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_webhook_events_environment_test_mode_consistent CHECK (((test_mode IS NULL) OR (((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
+    CONSTRAINT billing_webhook_events_error_code_normalized CHECK (((error_code IS NULL) OR (((error_code)::text = btrim((error_code)::text)) AND ((error_code)::text ~ '^[a-z][a-z0-9_]*$'::text) AND ((char_length((error_code)::text) >= 1) AND (char_length((error_code)::text) <= 64))))),
+    CONSTRAINT billing_webhook_events_event_name_normalized CHECK (((event_name IS NULL) OR (((event_name)::text = btrim((event_name)::text)) AND ((char_length((event_name)::text) >= 1) AND (char_length((event_name)::text) <= 100))))),
+    CONSTRAINT billing_webhook_events_fingerprint_format CHECK (((fingerprint)::text ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT billing_webhook_events_lifecycle CHECK (((((status)::text = ANY ((ARRAY['received'::character varying, 'processing'::character varying])::text[])) AND (processed_at IS NULL) AND (error_code IS NULL)) OR (((status)::text = ANY ((ARRAY['processed'::character varying, 'ignored'::character varying])::text[])) AND (processed_at IS NOT NULL) AND (error_code IS NULL)) OR (((status)::text = ANY ((ARRAY['quarantined'::character varying, 'failed'::character varying])::text[])) AND (processed_at IS NOT NULL) AND (error_code IS NOT NULL)))),
+    CONSTRAINT billing_webhook_events_processed_after_verified CHECK (((processed_at IS NULL) OR (processed_at >= verified_at))),
+    CONSTRAINT billing_webhook_events_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
+    CONSTRAINT billing_webhook_events_provider_event_id_normalized CHECK (((provider_event_id IS NULL) OR (((provider_event_id)::text = btrim((provider_event_id)::text)) AND ((provider_event_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_event_id)::text) >= 1) AND (char_length((provider_event_id)::text) <= 128))))),
+    CONSTRAINT billing_webhook_events_resource_id_normalized CHECK (((provider_resource_id IS NULL) OR (((provider_resource_id)::text = btrim((provider_resource_id)::text)) AND ((provider_resource_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_resource_id)::text) >= 1) AND (char_length((provider_resource_id)::text) <= 128))))),
+    CONSTRAINT billing_webhook_events_snapshot_object_bounded CHECK (((jsonb_typeof(snapshot) = 'object'::text) AND (pg_column_size(snapshot) <= 65536))),
+    CONSTRAINT billing_webhook_events_status_allowed CHECK (((status)::text = ANY ((ARRAY['received'::character varying, 'processing'::character varying, 'processed'::character varying, 'ignored'::character varying, 'quarantined'::character varying, 'failed'::character varying])::text[]))),
+    CONSTRAINT billing_webhook_events_verified_after_received CHECK ((verified_at >= received_at))
+);
+
+
+--
+-- Name: billing_webhook_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.billing_webhook_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: billing_webhook_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.billing_webhook_events_id_seq OWNED BY public.billing_webhook_events.id;
+
+
+--
 -- Name: organization_access_locators; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -195,9 +494,9 @@ CREATE TABLE public.organization_invitations (
     CONSTRAINT organization_invitations_email_normalized CHECK ((((email_address)::text = lower(btrim((email_address)::text))) AND ((char_length((email_address)::text) >= 3) AND (char_length((email_address)::text) <= 254)))),
     CONSTRAINT organization_invitations_expiry_after_creation CHECK ((expires_at > created_at)),
     CONSTRAINT organization_invitations_revoked_at_valid CHECK (((revoked_at IS NULL) OR (revoked_at >= created_at))),
-    CONSTRAINT organization_invitations_role_allowed CHECK (((organization_role)::text = ANY ((ARRAY['owner'::character varying, 'admin'::character varying, 'billing'::character varying, 'member'::character varying])::text[]))),
-    CONSTRAINT organization_invitations_status_allowed CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'accepted'::character varying, 'revoked'::character varying, 'expired'::character varying])::text[]))),
-    CONSTRAINT organization_invitations_status_timestamps CHECK (((((status)::text = ANY ((ARRAY['pending'::character varying, 'expired'::character varying])::text[])) AND (accepted_at IS NULL) AND (revoked_at IS NULL)) OR (((status)::text = 'accepted'::text) AND (accepted_at IS NOT NULL) AND (revoked_at IS NULL)) OR (((status)::text = 'revoked'::text) AND (accepted_at IS NULL) AND (revoked_at IS NOT NULL)))),
+    CONSTRAINT organization_invitations_role_allowed CHECK (((organization_role)::text = ANY (ARRAY[('owner'::character varying)::text, ('admin'::character varying)::text, ('billing'::character varying)::text, ('member'::character varying)::text]))),
+    CONSTRAINT organization_invitations_status_allowed CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('accepted'::character varying)::text, ('revoked'::character varying)::text, ('expired'::character varying)::text]))),
+    CONSTRAINT organization_invitations_status_timestamps CHECK (((((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('expired'::character varying)::text])) AND (accepted_at IS NULL) AND (revoked_at IS NULL)) OR (((status)::text = 'accepted'::text) AND (accepted_at IS NOT NULL) AND (revoked_at IS NULL)) OR (((status)::text = 'revoked'::text) AND (accepted_at IS NULL) AND (revoked_at IS NOT NULL)))),
     CONSTRAINT organization_invitations_token_digest_format CHECK (((token_digest)::text ~ '^[0-9a-f]{64}$'::text))
 );
 
@@ -234,8 +533,8 @@ CREATE TABLE public.organization_memberships (
     joined_at timestamp(6) without time zone NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT organization_memberships_role_allowed CHECK (((role)::text = ANY ((ARRAY['owner'::character varying, 'admin'::character varying, 'billing'::character varying, 'member'::character varying])::text[]))),
-    CONSTRAINT organization_memberships_status_allowed CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying])::text[])))
+    CONSTRAINT organization_memberships_role_allowed CHECK (((role)::text = ANY (ARRAY[('owner'::character varying)::text, ('admin'::character varying)::text, ('billing'::character varying)::text, ('member'::character varying)::text]))),
+    CONSTRAINT organization_memberships_status_allowed CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('suspended'::character varying)::text])))
 );
 
 
@@ -272,7 +571,7 @@ CREATE TABLE public.organizations (
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT organizations_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100)))),
     CONSTRAINT organizations_slug_format CHECK ((((slug)::text ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text) AND ((char_length((slug)::text) >= 1) AND (char_length((slug)::text) <= 63)))),
-    CONSTRAINT organizations_status_allowed CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying])::text[])))
+    CONSTRAINT organizations_status_allowed CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('suspended'::character varying)::text])))
 );
 
 
@@ -311,7 +610,7 @@ CREATE TABLE public.plan_feature_entitlements (
     settings jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT plan_feature_entitlements_kind_allowed CHECK (((feature_kind)::text = ANY ((ARRAY['flag'::character varying, 'limit'::character varying])::text[]))),
+    CONSTRAINT plan_feature_entitlements_kind_allowed CHECK (((feature_kind)::text = ANY (ARRAY[('flag'::character varying)::text, ('limit'::character varying)::text]))),
     CONSTRAINT plan_feature_entitlements_settings_object CHECK ((jsonb_typeof(settings) = 'object'::text)),
     CONSTRAINT plan_feature_entitlements_typed_value CHECK (((((feature_kind)::text = 'flag'::text) AND (limit_value IS NULL) AND (unlimited = false)) OR (((feature_kind)::text = 'limit'::text) AND (((unlimited = true) AND (limit_value IS NULL)) OR ((unlimited = false) AND (limit_value IS NOT NULL) AND (limit_value >= 0))))))
 );
@@ -353,7 +652,7 @@ CREATE TABLE public.plan_prices (
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT plan_prices_amount_non_negative CHECK ((amount_cents >= 0)),
-    CONSTRAINT plan_prices_billing_interval_allowed CHECK (((billing_interval)::text = ANY ((ARRAY['monthly'::character varying, 'yearly'::character varying])::text[]))),
+    CONSTRAINT plan_prices_billing_interval_allowed CHECK (((billing_interval)::text = ANY (ARRAY[('monthly'::character varying)::text, ('yearly'::character varying)::text]))),
     CONSTRAINT plan_prices_currency_format CHECK (((currency)::text ~ '^[A-Z]{3}$'::text)),
     CONSTRAINT plan_prices_lemon_mapping_complete CHECK ((((lemon_store_id IS NULL) AND (lemon_product_id IS NULL) AND (lemon_variant_id IS NULL)) OR ((lemon_store_id IS NOT NULL) AND ((lemon_store_id)::text = btrim((lemon_store_id)::text)) AND ((lemon_store_id)::text !~ '[[:space:]]'::text) AND ((char_length((lemon_store_id)::text) >= 1) AND (char_length((lemon_store_id)::text) <= 64)) AND (lemon_product_id IS NOT NULL) AND ((lemon_product_id)::text = btrim((lemon_product_id)::text)) AND ((lemon_product_id)::text !~ '[[:space:]]'::text) AND ((char_length((lemon_product_id)::text) >= 1) AND (char_length((lemon_product_id)::text) <= 64)) AND (lemon_variant_id IS NOT NULL) AND ((lemon_variant_id)::text = btrim((lemon_variant_id)::text)) AND ((lemon_variant_id)::text !~ '[[:space:]]'::text) AND ((char_length((lemon_variant_id)::text) >= 1) AND (char_length((lemon_variant_id)::text) <= 64)))))
 );
@@ -466,7 +765,7 @@ CREATE TABLE public.product_features (
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT product_features_description_normalized CHECK (((description = btrim(description)) AND (char_length(description) <= 2000))),
     CONSTRAINT product_features_key_format CHECK ((((key)::text ~ '^[a-z][a-z0-9]*(_[a-z0-9]+)*$'::text) AND ((char_length((key)::text) >= 1) AND (char_length((key)::text) <= 63)))),
-    CONSTRAINT product_features_kind_allowed CHECK (((kind)::text = ANY ((ARRAY['flag'::character varying, 'limit'::character varying])::text[]))),
+    CONSTRAINT product_features_kind_allowed CHECK (((kind)::text = ANY (ARRAY[('flag'::character varying)::text, ('limit'::character varying)::text]))),
     CONSTRAINT product_features_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100))))
 );
 
@@ -591,7 +890,7 @@ CREATE TABLE public.users (
     CONSTRAINT users_email_address_normalized CHECK ((((email_address)::text = lower(btrim((email_address)::text))) AND ((char_length((email_address)::text) >= 3) AND (char_length((email_address)::text) <= 254)))),
     CONSTRAINT users_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100)))),
     CONSTRAINT users_password_digest_present CHECK (((char_length((password_digest)::text) >= 1) AND (char_length((password_digest)::text) <= 255))),
-    CONSTRAINT users_system_role_allowed CHECK (((system_role)::text = ANY ((ARRAY['user'::character varying, 'platform_admin'::character varying])::text[])))
+    CONSTRAINT users_system_role_allowed CHECK (((system_role)::text = ANY (ARRAY[('user'::character varying)::text, ('platform_admin'::character varying)::text])))
 );
 
 
@@ -619,6 +918,41 @@ ALTER SEQUENCE public.users_id_seq OWNED BY public.users.id;
 --
 
 ALTER TABLE ONLY public.audit_events ALTER COLUMN id SET DEFAULT nextval('public.audit_events_id_seq'::regclass);
+
+
+--
+-- Name: billing_checkout_attempts id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_checkout_attempts ALTER COLUMN id SET DEFAULT nextval('public.billing_checkout_attempts_id_seq'::regclass);
+
+
+--
+-- Name: billing_customers id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_customers ALTER COLUMN id SET DEFAULT nextval('public.billing_customers_id_seq'::regclass);
+
+
+--
+-- Name: billing_plan_changes id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_plan_changes ALTER COLUMN id SET DEFAULT nextval('public.billing_plan_changes_id_seq'::regclass);
+
+
+--
+-- Name: billing_subscriptions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_subscriptions ALTER COLUMN id SET DEFAULT nextval('public.billing_subscriptions_id_seq'::regclass);
+
+
+--
+-- Name: billing_webhook_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_webhook_events ALTER COLUMN id SET DEFAULT nextval('public.billing_webhook_events_id_seq'::regclass);
 
 
 --
@@ -719,6 +1053,46 @@ ALTER TABLE ONLY public.ar_internal_metadata
 
 ALTER TABLE ONLY public.audit_events
     ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billing_checkout_attempts billing_checkout_attempts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_checkout_attempts
+    ADD CONSTRAINT billing_checkout_attempts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billing_customers billing_customers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_customers
+    ADD CONSTRAINT billing_customers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billing_plan_changes billing_plan_changes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_plan_changes
+    ADD CONSTRAINT billing_plan_changes_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billing_subscriptions billing_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_subscriptions
+    ADD CONSTRAINT billing_subscriptions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: billing_webhook_events billing_webhook_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_webhook_events
+    ADD CONSTRAINT billing_webhook_events_pkey PRIMARY KEY (id);
 
 
 --
@@ -872,6 +1246,258 @@ CREATE INDEX index_audit_events_on_organization_id ON public.audit_events USING 
 --
 
 CREATE INDEX index_audit_events_on_organization_id_and_occurred_at ON public.audit_events USING btree (organization_id, occurred_at);
+
+
+--
+-- Name: index_billing_checkout_attempts_on_locator_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_checkout_attempts_on_locator_identity ON public.billing_checkout_attempts USING btree (id, organization_id, provider, environment, token_digest);
+
+
+--
+-- Name: index_billing_checkout_attempts_on_membership; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_checkout_attempts_on_membership ON public.billing_checkout_attempts USING btree (initiated_by_membership_id);
+
+
+--
+-- Name: index_billing_checkout_attempts_on_one_pending_per_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_checkout_attempts_on_one_pending_per_org ON public.billing_checkout_attempts USING btree (organization_id) WHERE ((status)::text = ANY ((ARRAY['creating'::character varying, 'ready'::character varying, 'creation_unknown'::character varying])::text[]));
+
+
+--
+-- Name: index_billing_checkout_attempts_on_org_status_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_checkout_attempts_on_org_status_expiry ON public.billing_checkout_attempts USING btree (organization_id, status, expires_at);
+
+
+--
+-- Name: index_billing_checkout_attempts_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_checkout_attempts_on_organization_id ON public.billing_checkout_attempts USING btree (organization_id);
+
+
+--
+-- Name: index_billing_checkout_attempts_on_origin_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_checkout_attempts_on_origin_identity ON public.billing_checkout_attempts USING btree (id, organization_id, plan_price_id, provider, environment);
+
+
+--
+-- Name: index_billing_checkout_attempts_on_plan_price_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_checkout_attempts_on_plan_price_id ON public.billing_checkout_attempts USING btree (plan_price_id);
+
+
+--
+-- Name: index_billing_checkout_attempts_on_provider_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_checkout_attempts_on_provider_identity ON public.billing_checkout_attempts USING btree (provider, environment, provider_checkout_id) WHERE (provider_checkout_id IS NOT NULL);
+
+
+--
+-- Name: index_billing_checkout_attempts_on_token_digest; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_checkout_attempts_on_token_digest ON public.billing_checkout_attempts USING btree (token_digest);
+
+
+--
+-- Name: index_billing_customers_on_org_provider_environment; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_customers_on_org_provider_environment ON public.billing_customers USING btree (organization_id, provider, environment);
+
+
+--
+-- Name: index_billing_customers_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_customers_on_organization_id ON public.billing_customers USING btree (organization_id);
+
+
+--
+-- Name: index_billing_customers_on_provider_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_customers_on_provider_identity ON public.billing_customers USING btree (provider, environment, provider_customer_id);
+
+
+--
+-- Name: index_billing_customers_on_subscription_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_customers_on_subscription_identity ON public.billing_customers USING btree (id, organization_id, provider, environment, test_mode, provider_customer_id);
+
+
+--
+-- Name: index_billing_plan_changes_on_from_plan_price_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_plan_changes_on_from_plan_price_id ON public.billing_plan_changes USING btree (from_plan_price_id);
+
+
+--
+-- Name: index_billing_plan_changes_on_membership; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_plan_changes_on_membership ON public.billing_plan_changes USING btree (requested_by_membership_id);
+
+
+--
+-- Name: index_billing_plan_changes_on_one_pending_per_subscription; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_plan_changes_on_one_pending_per_subscription ON public.billing_plan_changes USING btree (billing_subscription_id) WHERE ((status)::text = ANY ((ARRAY['pending'::character varying, 'submitted'::character varying, 'creation_unknown'::character varying])::text[]));
+
+
+--
+-- Name: index_billing_plan_changes_on_org_status_requested; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_plan_changes_on_org_status_requested ON public.billing_plan_changes USING btree (organization_id, status, requested_at);
+
+
+--
+-- Name: index_billing_plan_changes_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_plan_changes_on_organization_id ON public.billing_plan_changes USING btree (organization_id);
+
+
+--
+-- Name: index_billing_plan_changes_on_subscription_history; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_plan_changes_on_subscription_history ON public.billing_plan_changes USING btree (billing_subscription_id, requested_at);
+
+
+--
+-- Name: index_billing_plan_changes_on_to_plan_price_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_plan_changes_on_to_plan_price_id ON public.billing_plan_changes USING btree (to_plan_price_id);
+
+
+--
+-- Name: index_billing_subscriptions_on_billing_customer_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_subscriptions_on_billing_customer_id ON public.billing_subscriptions USING btree (billing_customer_id);
+
+
+--
+-- Name: index_billing_subscriptions_on_locator_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_subscriptions_on_locator_identity ON public.billing_subscriptions USING btree (id, organization_id, provider, environment, provider_subscription_id);
+
+
+--
+-- Name: index_billing_subscriptions_on_one_current_per_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_subscriptions_on_one_current_per_org ON public.billing_subscriptions USING btree (organization_id) WHERE current;
+
+
+--
+-- Name: index_billing_subscriptions_on_org_and_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_subscriptions_on_org_and_status ON public.billing_subscriptions USING btree (organization_id, status);
+
+
+--
+-- Name: index_billing_subscriptions_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_subscriptions_on_organization_id ON public.billing_subscriptions USING btree (organization_id);
+
+
+--
+-- Name: index_billing_subscriptions_on_plan_change_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_subscriptions_on_plan_change_identity ON public.billing_subscriptions USING btree (id, organization_id, provider, environment, test_mode);
+
+
+--
+-- Name: index_billing_subscriptions_on_plan_price_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_subscriptions_on_plan_price_id ON public.billing_subscriptions USING btree (plan_price_id);
+
+
+--
+-- Name: index_billing_subscriptions_on_provider_customer; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_subscriptions_on_provider_customer ON public.billing_subscriptions USING btree (provider, environment, provider_customer_id);
+
+
+--
+-- Name: index_billing_subscriptions_on_provider_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_subscriptions_on_provider_identity ON public.billing_subscriptions USING btree (provider, environment, provider_subscription_id);
+
+
+--
+-- Name: index_billing_subscriptions_on_provider_updated_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_subscriptions_on_provider_updated_at ON public.billing_subscriptions USING btree (provider, environment, provider_updated_at);
+
+
+--
+-- Name: index_billing_subscriptions_on_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_subscriptions_on_status ON public.billing_subscriptions USING btree (status);
+
+
+--
+-- Name: index_billing_webhook_events_on_fingerprint; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_webhook_events_on_fingerprint ON public.billing_webhook_events USING btree (fingerprint);
+
+
+--
+-- Name: index_billing_webhook_events_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_webhook_events_on_organization_id ON public.billing_webhook_events USING btree (organization_id);
+
+
+--
+-- Name: index_billing_webhook_events_on_provider_event_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_webhook_events_on_provider_event_identity ON public.billing_webhook_events USING btree (provider, environment, provider_event_id) WHERE (provider_event_id IS NOT NULL);
+
+
+--
+-- Name: index_billing_webhook_events_on_provider_resource; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_webhook_events_on_provider_resource ON public.billing_webhook_events USING btree (provider, environment, provider_resource_id);
+
+
+--
+-- Name: index_billing_webhook_events_on_status_and_received; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_webhook_events_on_status_and_received ON public.billing_webhook_events USING btree (status, received_at);
 
 
 --
@@ -1183,6 +1809,13 @@ CREATE TRIGGER audit_events_are_append_only BEFORE DELETE OR UPDATE ON public.au
 
 
 --
+-- Name: billing_subscriptions billing_subscription_history_is_preserved; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER billing_subscription_history_is_preserved BEFORE DELETE OR UPDATE ON public.billing_subscriptions FOR EACH ROW EXECUTE FUNCTION public.protect_billing_subscription_history();
+
+
+--
 -- Name: organization_memberships organization_must_have_active_owner; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1202,6 +1835,54 @@ CREATE CONSTRAINT TRIGGER organization_must_have_active_owner AFTER INSERT ON pu
 
 ALTER TABLE ONLY public.audit_events
     ADD CONSTRAINT fk_audit_events_actor_membership FOREIGN KEY (organization_id, actor_user_id) REFERENCES public.organization_memberships(organization_id, user_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_checkout_attempts fk_billing_checkout_attempts_membership_tenant; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_checkout_attempts
+    ADD CONSTRAINT fk_billing_checkout_attempts_membership_tenant FOREIGN KEY (initiated_by_membership_id, organization_id) REFERENCES public.organization_memberships(id, organization_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_plan_changes fk_billing_plan_changes_from_plan_price; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_plan_changes
+    ADD CONSTRAINT fk_billing_plan_changes_from_plan_price FOREIGN KEY (from_plan_price_id) REFERENCES public.plan_prices(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_plan_changes fk_billing_plan_changes_membership_tenant; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_plan_changes
+    ADD CONSTRAINT fk_billing_plan_changes_membership_tenant FOREIGN KEY (requested_by_membership_id, organization_id) REFERENCES public.organization_memberships(id, organization_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_plan_changes fk_billing_plan_changes_subscription_tenant; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_plan_changes
+    ADD CONSTRAINT fk_billing_plan_changes_subscription_tenant FOREIGN KEY (billing_subscription_id, organization_id, provider, environment, test_mode) REFERENCES public.billing_subscriptions(id, organization_id, provider, environment, test_mode) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_plan_changes fk_billing_plan_changes_to_plan_price; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_plan_changes
+    ADD CONSTRAINT fk_billing_plan_changes_to_plan_price FOREIGN KEY (to_plan_price_id) REFERENCES public.plan_prices(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_subscriptions fk_billing_subscriptions_customer_identity; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_subscriptions
+    ADD CONSTRAINT fk_billing_subscriptions_customer_identity FOREIGN KEY (billing_customer_id, organization_id, provider, environment, test_mode, provider_customer_id) REFERENCES public.billing_customers(id, organization_id, provider, environment, test_mode, provider_customer_id) ON DELETE RESTRICT;
 
 
 --
@@ -1277,6 +1958,14 @@ ALTER TABLE ONLY public.organization_invitations
 
 
 --
+-- Name: billing_plan_changes fk_rails_39ea69e58b; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_plan_changes
+    ADD CONSTRAINT fk_rails_39ea69e58b FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: plan_prices fk_rails_3e32e08315; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1290,6 +1979,14 @@ ALTER TABLE ONLY public.plan_prices
 
 ALTER TABLE ONLY public.plan_feature_entitlements
     ADD CONSTRAINT fk_rails_4245058809 FOREIGN KEY (plan_product_id) REFERENCES public.plan_products(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_checkout_attempts fk_rails_52f07620e4; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_checkout_attempts
+    ADD CONSTRAINT fk_rails_52f07620e4 FOREIGN KEY (plan_price_id) REFERENCES public.plan_prices(id) ON DELETE RESTRICT;
 
 
 --
@@ -1309,6 +2006,14 @@ ALTER TABLE ONLY public.plan_products
 
 
 --
+-- Name: billing_customers fk_rails_6d4927c1b8; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_customers
+    ADD CONSTRAINT fk_rails_6d4927c1b8 FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: organization_memberships fk_rails_715ab7f4fe; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1322,6 +2027,14 @@ ALTER TABLE ONLY public.organization_memberships
 
 ALTER TABLE ONLY public.sessions
     ADD CONSTRAINT fk_rails_758836b4f0 FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: billing_webhook_events fk_rails_79fcf94956; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_webhook_events
+    ADD CONSTRAINT fk_rails_79fcf94956 FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
 
 
 --
@@ -1357,11 +2070,43 @@ ALTER TABLE ONLY public.audit_events
 
 
 --
+-- Name: billing_subscriptions fk_rails_c4450e56ec; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_subscriptions
+    ADD CONSTRAINT fk_rails_c4450e56ec FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_checkout_attempts fk_rails_ce0ba24f13; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_checkout_attempts
+    ADD CONSTRAINT fk_rails_ce0ba24f13 FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: plan_feature_entitlements fk_rails_dcabbaef40; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.plan_feature_entitlements
     ADD CONSTRAINT fk_rails_dcabbaef40 FOREIGN KEY (product_feature_id) REFERENCES public.product_features(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_subscriptions fk_rails_e25cba9faa; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_subscriptions
+    ADD CONSTRAINT fk_rails_e25cba9faa FOREIGN KEY (plan_price_id) REFERENCES public.plan_prices(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_subscriptions fk_rails_e3ce32be2a; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_subscriptions
+    ADD CONSTRAINT fk_rails_e3ce32be2a FOREIGN KEY (billing_customer_id) REFERENCES public.billing_customers(id) ON DELETE RESTRICT;
 
 
 --
@@ -1371,11 +2116,11 @@ ALTER TABLE ONLY public.plan_feature_entitlements
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20260716020000'),
 ('20260716010600'),
 ('20260716001730'),
 ('20260715170300'),
 ('20260715170200'),
 ('20260715170100'),
-('20260715170000'),
-('0');
+('20260715170000');
 

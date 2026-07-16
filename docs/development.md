@@ -83,6 +83,28 @@ On a host with different IDs, rebuild with explicit values:
 LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose build app
 ```
 
+## Lemon Squeezy adapter
+
+Ordinary setup, boot, and tests do not require provider credentials. The tracked
+`.env.example` exposes empty `LEMON_SQUEEZY_API_KEY` and
+`LEMON_SQUEEZY_STORE_ID` placeholders only; keep real values in the ignored
+`.env` for local manual work or in Rails credentials/deployment secret storage.
+The client resolves explicit constructor values first, then non-blank environment
+variables, then the matching `lemon_squeezy` Rails credential entries. Missing
+configuration raises a redacted configuration error before any request.
+
+```yaml
+lemon_squeezy:
+  api_key: replace-in-your-encrypted-credentials
+  store_id: replace-in-your-encrypted-credentials
+```
+
+The adapter uses a fixed Lemon HTTPS origin, explicit connect/read timeouts, and
+one network attempt per call. It does not implement checkout, webhook delivery,
+or subscription projection. The test helper enables WebMock globally and blocks
+all non-local network traffic while allowing localhost for Rails/system tests;
+provider tests must stub every request with synthetic data.
+
 ## Quality gate
 
 `bin/ci` forces `RAILS_ENV=test`, uses a single worker by default, and stops at

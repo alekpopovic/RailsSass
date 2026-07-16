@@ -16,6 +16,16 @@ class OrganizationMembership < ApplicationRecord
     foreign_key: [ :organization_id, :actor_user_id ],
     primary_key: [ :organization_id, :user_id ],
     dependent: :restrict_with_exception
+  has_many :initiated_billing_checkout_attempts,
+    class_name: "Billing::CheckoutAttempt",
+    foreign_key: :initiated_by_membership_id,
+    dependent: :restrict_with_exception,
+    inverse_of: :initiated_by_membership
+  has_many :requested_billing_plan_changes,
+    class_name: "Billing::PlanChange",
+    foreign_key: :requested_by_membership_id,
+    dependent: :restrict_with_exception,
+    inverse_of: :requested_by_membership
 
   enum :role, {
     owner: "owner",

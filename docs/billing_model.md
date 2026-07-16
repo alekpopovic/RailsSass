@@ -1,7 +1,7 @@
 # Billing Model: Lemon Squeezy
 
 Status: Proposed
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 ## 1. Purpose and authority
 
@@ -21,6 +21,45 @@ Related documents:
 - [Authorization Model](authorization_model.md)
 - [Security Model](security_model.md)
 - [ADR 0002: Local Entitlements](adr/0002-local-entitlements.md)
+
+### 1.1 Current implementation boundary
+
+The repository currently contains only the local Billing persistence foundation
+and the outbound `Billing::LemonSqueezy::Client`. The persistence layer includes
+tenant-owned customers, checkout attempts, subscriptions, and plan-change
+commands plus the provider-wide webhook-event ledger. It deliberately exposes
+no checkout route, webhook controller, webhook processor, provider locator,
+environment-qualified price mapping, subscription projection service, portal,
+or runtime access predicate yet.
+
+These rows are therefore storage primitives, not evidence that a payment or
+entitlement was verified. In particular, neither a `current` subscription row,
+a completed checkout attempt, a plan-change command, nor a successful Lemon API
+response can grant or change product access. The future projection milestone
+must add the exact environment/store/variant mapping and provider locator, then
+make verified-webhook-rooted processing the only writer of authoritative local
+subscription state before the access matrix in section 8 is enabled.
+
+`Billing::Subscription#raw_payload` is a compatibility-oriented column name for
+a bounded, recursively screened, explicitly allowlisted diagnostic snapshot. It
+must never contain a raw webhook body, complete API response, authorization data,
+signature, token, email/name, custom data, or signed checkout/portal URL. The
+same minimal snapshot rule applies to `Billing::WebhookEvent`. Exact raw webhook
+bytes exist only transiently for future signature verification and are never
+persisted.
+The ledger always has a unique content fingerprint and also accepts an optional
+environment-qualified provider event ID with a unique index. Lemon currently
+documents no delivery ID, so the fingerprint remains the required idempotency
+identity rather than inventing provider authority.
+
+The client reads its API key and store ID from explicit configuration,
+environment variables, or Rails credentials, uses a fixed HTTPS origin and
+explicit connect/read timeouts, and maps provider, transport, and JSON failures
+to provider-specific errors whose messages contain no response body or secret.
+It performs one request per call and has no automatic retry middleware; a later
+operation-specific command/job will own bounded retries only where the operation
+is proven safe. Tests disable non-local network access with WebMock so the suite
+cannot contact Lemon Squeezy.
 
 ## 2. Billing invariants
 
@@ -111,8 +150,9 @@ Rules:
 - API keys and webhook secrets are credentials and remain outside the
   repository.
 - A provider tuple already referenced by billing history is never silently
-  repointed; the Billing milestone must enforce the required transition and
-  history policy before provider-backed rows exist.
+  repointed. The future mapping/projection milestone must enforce the required
+  transition policy before any foundational provider-backed row can become an
+  authoritative subscription projection.
 - An incoming variant with no exact active/historical mapping is quarantined and
   fail-closed. It does not inherit a nearby plan by product name or price.
 - `Plan.free` is catalog metadata only. It does not create a subscription or a
@@ -353,7 +393,8 @@ If the organization has a current expired subscription, a valid new correlated
 subscription atomically supersedes the expired row and becomes current. A
 second external subscription while the current row is non-terminal is
 quarantined. Later verified events for a superseded subscription may update its
-historical provider fields but cannot clear `superseded_at` or affect access.
+historical provider fields but cannot change `archived_at`, restore `current`,
+or affect access.
 
 ## 7. Idempotency and event ordering
 
@@ -363,7 +404,7 @@ There are two independent guards:
    retries and manual resends with the same body. Signatures and request headers
    are excluded so secret rotation or a mutated unsigned event header cannot
    create a new identity.
-2. **Projection idempotency:** the unique external subscription ID, row lock,
+2. **Projection idempotency:** the unique provider subscription ID, row lock,
    accepted `provider_updated_at`, and monotonic
    `last_seen_provider_updated_at` prevent repeated/invalid/older snapshots from
    regressing or re-enabling state.
@@ -397,7 +438,7 @@ reference it rather than define alternatives.
 
 Every `ALLOW` also requires all preconditions:
 
-- one current, non-superseded local subscription;
+- one current, non-archived local subscription;
 - `sync_state = synced`;
 - correct application environment and test/live mapping;
 - exact known `PlanPrice`, plan, and environment-qualified provider mapping;
@@ -436,6 +477,16 @@ only the event is quarantined and no arbitrary subscription is changed.
 
 ## 9. Plan changes, cancellation, and portal
 
+- `Billing::PlanChange` is a tenant-owned command-history record. It captures
+  a targeted subscription, requested source/target `PlanPrice`, requesting
+  membership, provider environment, state, timestamps, and a redacted failure
+  code. Creation currently validates that the target is current and the source
+  price matches; a future command must repeat this under a lock. It is not an
+  entitlement projection.
+- Creating or marking a plan-change command submitted never edits the
+  subscription's `plan_price_id`, status, or access decision. Only later
+  verified-webhook projection may mark it applied and update the authoritative
+  subscription in the same controlled workflow.
 - Portal/API actions require owner/billing authorization and tenant scope.
 - The application constructs requests with fixed provider origin and local
   subscription mapping.
@@ -569,7 +620,7 @@ this accepted operational risk without creating a second mutation authority.
   current subscriptions.
 - A new subscription atomically supersedes only an expired current row; a
   second non-terminal subscription quarantines, and later events cannot
-  reactivate a superseded row.
+  reactivate an archived row.
 - Plan changes take effect only from verified-webhook processing.
 
 ### 11.4 Matrix and runtime
@@ -580,7 +631,21 @@ Recovery to active and later new past-due cycles reset time correctly.
 
 Authorization tests assert zero provider HTTP requests.
 
-### 11.5 Provider contract verification
+### 11.5 Outbound adapter
+
+- WebMock disables all non-local network access for the entire test process;
+  every Lemon response is explicit synthetic JSON.
+- Tests cover the fixed HTTPS origin, authorization/JSON:API headers, explicit
+  connect/read timeouts, configuration precedence, successful JSON/empty
+  response handling, and bounded response size.
+- Separate cases cover 4xx, authentication, not-found, rate-limit, 5xx,
+  timeout, connection failure, redirect, and invalid JSON mapping without
+  exposing API keys or provider bodies.
+- A non-idempotent request test asserts exactly one network attempt; retry policy
+  remains operation-specific and outside the low-level client.
+- Adapter tests assert zero `Billing::Subscription` mutations.
+
+### 11.6 Provider contract verification
 
 In a non-production test environment, manually exercise Lemon Squeezy test-mode
 checkout, redirect-before-webhook, webhook simulation/resend, duplicate,

@@ -20,6 +20,12 @@ webhooks. They are not trustworthy subscription lifecycle signals.
 Use PostgreSQL as the only runtime source for subscription eligibility and plan
 entitlements.
 
+Implementation note (2026-07-16): the repository has added constrained Billing
+persistence/history tables and the Lemon API adapter, but not the
+environment-qualified mapping, provider locator, verified-webhook projection,
+or access predicate required by this decision. Foundational rows are inert and
+must not be consulted as access grants until those later milestones land.
+
 - `Billing::Subscription` is a local projection of the provider subscription
   and references an exact `PlanPrice` and `Plan` through an exact
   environment-qualified provider mapping.

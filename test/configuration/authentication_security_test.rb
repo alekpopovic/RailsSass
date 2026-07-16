@@ -10,10 +10,27 @@ class AuthenticationSecurityTest < ActiveSupport::TestCase
     token_digest: "digest-value"
   }.freeze
 
+  BILLING_SENSITIVE_VALUES = {
+    authorization: "Bearer provider-key",
+    api_key: "provider-key",
+    signature: "webhook-signature",
+    raw_payload: { "customer_email" => "person@example.test" },
+    checkout_url: "https://provider.example/signed-checkout",
+    portal_url: "https://provider.example/signed-portal"
+  }.freeze
+
   test "authentication secrets are filtered from structured parameters" do
     filtered = ActiveSupport::ParameterFilter
       .new(Rails.application.config.filter_parameters)
       .filter(SENSITIVE_VALUES)
+
+    assert_equal [ "[FILTERED]" ], filtered.values.uniq
+  end
+
+  test "billing credentials and sensitive payload fields are filtered" do
+    filtered = ActiveSupport::ParameterFilter
+      .new(Rails.application.config.filter_parameters)
+      .filter(BILLING_SENSITIVE_VALUES)
 
     assert_equal [ "[FILTERED]" ], filtered.values.uniq
   end

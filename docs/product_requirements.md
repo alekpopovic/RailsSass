@@ -22,8 +22,11 @@ Pundit, Solid Queue/Cache/Cable, Docker/Kamal scaffolding, Minitest, and a
 PostgreSQL-backed CI quality gate. Email/password authentication, organization
 onboarding, and locator-backed tenant path bootstrap exist. Invitations,
 audited membership administration, and the constrained local product/plan
-catalog also exist. Product access, Lemon Squeezy billing, and deployment
-hardening remain separate execution-plan milestones.
+catalog also exist. Billing now has constrained local persistence/history
+primitives and an offline-tested Lemon API adapter, but no checkout/webhook
+endpoint, provider mapping/locator, verified projection, or access predicate.
+Those billing workflows, product access, and deployment hardening remain
+separate execution-plan milestones.
 
 Each milestone must inspect and test existing behavior rather than assume an
 earlier prompt was implemented perfectly.
@@ -185,11 +188,21 @@ has no explicit deny permission and no tenant-defined custom roles.
 
 ### 6.4 Billing
 
+- Persist tenant-owned provider customers, checkout attempts, subscriptions and
+  plan-change command history, plus a global minimal webhook-event ledger. These
+  foundation records alone are not payment proof and do not grant access.
+- Keep subscription history by archiving prior rows rather than deleting them,
+  with at most one row marked current per organization. Archived state is
+  one-way and subscription rows cannot be deleted through ordinary or direct
+  table mutation.
+- Access Lemon Squeezy through one fixed-origin, timeout-bounded adapter with
+  redacted provider-specific failures and no blind retry of non-idempotent
+  requests. Automated tests prohibit real external network access.
 - Server-side checkout creation for an allowlisted local `PlanPrice` only after
   Billing adds exact environment/store mapping.
 - Only owner/billing may initiate checkout or open provider subscription
   management.
-- At most one current non-superseded subscription and one pending checkout per
+- At most one current subscription and one pending checkout per
   organization.
 - Only verified `expired` is terminal for replacement checkout; a new verified
   subscription atomically supersedes the expired historical row.

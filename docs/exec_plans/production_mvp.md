@@ -85,8 +85,14 @@ Observed on 2026-07-16:
 - Organization invitations, audited member role/suspension/reactivation
   commands, digest-only invitation tokens, and pre-membership acceptance exist.
 - The constrained local catalog, development/test seed command, typed
-  entitlements, and local plan prices exist. Product RBAC/access, billing
-  synchronization, and production hardening remain unimplemented milestones.
+  entitlements, and local plan prices exist.
+- A Billing persistence/client foundation exists: tenant customers, checkout
+  attempts, subscriptions with archival history, plan-change commands, a
+  provider-wide minimal webhook-event ledger, and a fixed-origin Lemon client.
+  It has no checkout/webhook controller, mapping/locator, verified projection,
+  or access predicate, so none of these rows grants access.
+- Product RBAC/access, billing synchronization, and production hardening remain
+  unimplemented milestones.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
 
@@ -591,6 +597,25 @@ Tests:
 Acceptance: RBAC assignment data is safe but does not yet imply runtime product
 access.
 
+#### Implemented Billing foundation checkpoint
+
+The repository added constrained `Billing::Customer`, `CheckoutAttempt`,
+`Subscription`, `WebhookEvent`, and `PlanChange` records plus the basic
+`Billing::LemonSqueezy::Client` before PR-11. This is an inert persistence and
+adapter slice, not an authorization projection: there is no provider mapping,
+provider locator, controller, webhook verifier/processor, access predicate, or
+external side effect. `raw_payload` is restricted to a bounded screened
+diagnostic snapshot and never means a raw request or complete provider payload.
+Subscription history is one-way and deletion-protected. The event ledger keeps
+a mandatory content fingerprint plus a unique optional provider event identity;
+Lemon's lack of a documented delivery ID leaves the fingerprint authoritative
+for delivery idempotency.
+
+The remaining PRs extend these tables through backward-compatible migrations
+rather than recreating them. Checkout/API responses remain unable to edit local
+subscription state; only PR-14B's later verified-webhook-rooted service may do
+so. WebMock blocks non-local network access throughout tests.
+
 ### PR-11: Add environment-qualified price mapping and checkout persistence
 
 Depends on: PR-05, PR-07–08; initial Lemon test mappings available.
@@ -601,7 +626,8 @@ without an external endpoint.
 Scope:
 
 - Add a Billing-owned environment-qualified provider mapping from an exact
-  `PlanPrice` to Lemon and add `Billing::CheckoutAttempt`.
+  `PlanPrice` to Lemon and extend the existing `Billing::CheckoutAttempt` with
+  that exact mapping boundary.
 - Add test/live mapping loader with no credentials or real customer data.
 - Permit new mapping/checkout selection only when both plan and price are
   active; deactivation blocks selection while preserving historical resolution.
@@ -629,7 +655,7 @@ Tests:
 Acceptance: constrained synthetic mappings/attempts exist, but no public path or
 subscription grant exists.
 
-### PR-12: Add subscription, provider locator, and verified-event ledger
+### PR-12: Complete subscription, provider locator, and verified-event ledger
 
 Depends on: PR-11.
 
@@ -638,8 +664,9 @@ infrastructure before accepting provider traffic.
 
 Scope:
 
-- Add `Billing::Subscription`, global non-authoritative
-  `Billing::ProviderLocator`, and `Billing::WebhookEvent`.
+- Extend the existing `Billing::Subscription` and `Billing::WebhookEvent` from
+  inert storage primitives into projection-ready constrained records, and add
+  the global non-authoritative `Billing::ProviderLocator`.
 - Bind subscriptions to their original attempt/provider mapping while allowing
   verified current mapping changes; derive the exact plan only through the
   current environment-qualified mapping and `PlanPrice`.
@@ -721,7 +748,8 @@ state.
 
 Scope:
 
-- Add fixed-origin, timeout-bounded Lemon API client and response DTO mapping.
+- Extend the existing fixed-origin, timeout-bounded Lemon API client with the
+  subscription response DTO mapping needed by projection.
 - Enforce a small bounded response-body limit before parsing provider JSON.
 - Build only fixed `/v1/subscriptions/:id` requests; never follow payload URLs.
 - Validate response type/ID/store/environment/test mode and map an allowlisted
