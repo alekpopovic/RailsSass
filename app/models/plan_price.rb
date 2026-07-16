@@ -16,6 +16,11 @@ class PlanPrice < ApplicationRecord
     class_name: "Billing::Subscription",
     dependent: :restrict_with_exception,
     inverse_of: :plan_price
+  has_many :origin_billing_subscriptions,
+    class_name: "Billing::Subscription",
+    foreign_key: :origin_plan_price_id,
+    dependent: :restrict_with_exception,
+    inverse_of: :origin_plan_price
   has_many :billing_plan_changes_from,
     class_name: "Billing::PlanChange",
     foreign_key: :from_plan_price_id,

@@ -256,10 +256,11 @@ mapping, an immutable checkout-token locator, a strict one-attempt Lemon
 checkout client operation, and owner/billing-only checkout and pending-return
 controllers. It now also includes an isolated exact-body webhook controller,
 constant-time HMAC verifier, durable idempotent global receipt, and Solid Queue
-handoff/recovery sweeper. It still has no subscription locator or projection
-writer. The read-only Entitlements policy consumes current local subscription
-rows, but neither checkout nor receipt can create or mutate them. A future
-verified-event projection remains the only permitted writer.
+processor/recovery sweeper. The processor uses the subscription locator, exact
+provider refetch, tenant re-establishment, and locked projection transaction.
+The read-only Entitlements policy consumes only synchronized current local
+subscription rows; neither checkout nor receipt alone can create or mutate
+them. Verified-event projection is the only permitted writer.
 
 The customer billing overview is also read-only: it loads the current
 subscription through `Current.organization.billing_subscriptions`, displays
@@ -283,9 +284,14 @@ There is no portal, plan-change execution, or subscription mutation control.
   organization public ID, local price ID, initiating user ID, a high-entropy
   nonce, and expiry. Persist only `SHA256(nonce)` in the tenant attempt and
   global locator; send the raw signed token only in the provider custom field.
-  Future verified ingress must verify the signed token before digest lookup,
-  use the global locator only for discovery, then reload through
-  `Current.organization`.
+  Verified ingress checks the signed token before digest lookup and may retain
+  only the digest plus its bounded non-secret organization/price/user/expiry
+  claims in the screened event envelope. It uses the global locator only for
+  discovery, then reloads through `Current.organization`; the nonce and raw token
+  are never stored.
+- Treat subscription-invoice payment webhooks only as fixed subscription-refetch
+  triggers. Never translate an invoice `paid` or `pending` value directly into a
+  local subscription status or entitlement decision.
 - Never use email/name/slug or a browser callback to attach a subscription.
 - Construct outbound URLs from a fixed API base; use connect/read timeouts and
   response size limits. The low-level client performs no automatic retry;
@@ -305,7 +311,9 @@ There is no portal, plan-change execution, or subscription mutation control.
   data, custom data, or signed URLs.
 - Unknown/mismatched provider input becomes fail-closed local state only when
   tenant/subscription correlation is safely resolved; otherwise the global
-  event alone is quarantined and no tenant is guessed.
+  projection event is marked with a redacted permanent failure and no tenant is
+  guessed. `quarantined` is reserved for deterministic ingress-envelope
+  rejection before projection.
 - Portal/payment URLs are just-in-time, never persisted/logged.
 - Reconciliation detects drift but cannot independently grant/revoke; a verified
   webhook remains the root of every subscription mutation.
@@ -409,7 +417,9 @@ authorized and tested.
   local state and time bounds.
 - The webhook endpoint durably accepts quickly; workers absorb downstream
   provider latency.
-- Unknown/failing events quarantine rather than retry forever.
+- Deterministic ingress mismatches quarantine; permanent projection failures
+  are recorded as failed, and transient processing is capped at eight claims
+  before `retry_exhausted`.
 - Liveness does not depend on Lemon Squeezy. Readiness checks require database
   connectivity and remain non-public or minimally revealing.
 - Capacity and incident thresholds are defined before launch, including oldest

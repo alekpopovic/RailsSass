@@ -337,7 +337,7 @@ CREATE TABLE public.billing_checkout_attempts (
     CONSTRAINT billing_checkout_attempts_environment_test_mode_consistent CHECK (((((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
     CONSTRAINT billing_checkout_attempts_expiry_after_creation CHECK ((expires_at > created_at)),
     CONSTRAINT billing_checkout_attempts_failure_code_normalized CHECK (((failure_code IS NULL) OR (((failure_code)::text = btrim((failure_code)::text)) AND ((failure_code)::text ~ '^[a-z][a-z0-9_]*$'::text) AND ((char_length((failure_code)::text) >= 1) AND (char_length((failure_code)::text) <= 64))))),
-    CONSTRAINT billing_checkout_attempts_lifecycle CHECK (((((status)::text = ANY (ARRAY[('creating'::character varying)::text, ('creation_unknown'::character varying)::text])) AND (completed_at IS NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'ready'::text) AND (provider_checkout_id IS NOT NULL) AND (completed_at IS NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'completed'::text) AND (provider_checkout_id IS NOT NULL) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NOT NULL) AND (failure_code IS NULL)) OR (((status)::text = ANY (ARRAY[('expired'::character varying)::text, ('superseded'::character varying)::text])) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'failed'::text) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NOT NULL)))),
+    CONSTRAINT billing_checkout_attempts_lifecycle CHECK (((((status)::text = ANY ((ARRAY['creating'::character varying, 'creation_unknown'::character varying])::text[])) AND (completed_at IS NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'ready'::text) AND (provider_checkout_id IS NOT NULL) AND (completed_at IS NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'completed'::text) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NOT NULL) AND (failure_code IS NULL)) OR (((status)::text = ANY ((ARRAY['expired'::character varying, 'superseded'::character varying])::text[])) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'failed'::text) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NOT NULL)))),
     CONSTRAINT billing_checkout_attempts_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
     CONSTRAINT billing_checkout_attempts_provider_id_normalized CHECK (((provider_checkout_id IS NULL) OR (((provider_checkout_id)::text = btrim((provider_checkout_id)::text)) AND ((provider_checkout_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_checkout_id)::text) >= 1) AND (char_length((provider_checkout_id)::text) <= 128))))),
     CONSTRAINT billing_checkout_attempts_status_allowed CHECK (((status)::text = ANY (ARRAY[('creating'::character varying)::text, ('ready'::character varying)::text, ('creation_unknown'::character varying)::text, ('completed'::character varying)::text, ('expired'::character varying)::text, ('superseded'::character varying)::text, ('failed'::character varying)::text]))),
@@ -471,9 +471,12 @@ CREATE TABLE public.billing_provider_locators (
     resolved_at timestamp(6) without time zone,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
+    provider_subscription_id character varying(128),
+    billing_subscription_id bigint,
     CONSTRAINT billing_provider_locators_environment_allowed CHECK (((environment)::text = ANY (ARRAY[('test'::character varying)::text, ('live'::character varying)::text]))),
-    CONSTRAINT billing_provider_locators_lifecycle CHECK (((((status)::text = 'unresolved'::text) AND (resolved_at IS NULL)) OR (((status)::text = ANY (ARRAY[('consumed'::character varying)::text, ('definitive_creation_failure'::character varying)::text])) AND (resolved_at IS NOT NULL)))),
+    CONSTRAINT billing_provider_locators_lifecycle CHECK (((((status)::text = 'unresolved'::text) AND (resolved_at IS NULL) AND (provider_subscription_id IS NULL) AND (billing_subscription_id IS NULL)) OR (((status)::text = 'consumed'::text) AND (resolved_at IS NOT NULL) AND (provider_subscription_id IS NOT NULL)) OR (((status)::text = 'definitive_creation_failure'::text) AND (resolved_at IS NOT NULL) AND (provider_subscription_id IS NULL) AND (billing_subscription_id IS NULL)))),
     CONSTRAINT billing_provider_locators_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
+    CONSTRAINT billing_provider_locators_subscription_id_normalized CHECK (((provider_subscription_id IS NULL) OR (((provider_subscription_id)::text = btrim((provider_subscription_id)::text)) AND ((provider_subscription_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_subscription_id)::text) >= 1) AND (char_length((provider_subscription_id)::text) <= 128))))),
     CONSTRAINT billing_provider_locators_token_digest_format CHECK (((token_digest)::text ~ '^[0-9a-f]{64}$'::text))
 );
 
@@ -568,6 +571,10 @@ CREATE TABLE public.billing_subscriptions (
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
     past_due_started_at timestamp(6) without time zone,
+    last_seen_provider_updated_at timestamp(6) without time zone NOT NULL,
+    sync_state character varying(32) DEFAULT 'synced'::character varying NOT NULL,
+    origin_plan_price_id bigint NOT NULL,
+    origin_checkout_attempt_id bigint,
     CONSTRAINT billing_subscriptions_archive_after_creation CHECK (((archived_at IS NULL) OR (archived_at >= created_at))),
     CONSTRAINT billing_subscriptions_cancelled_end_required CHECK ((((status)::text <> 'cancelled'::text) OR (ends_at IS NOT NULL))),
     CONSTRAINT billing_subscriptions_card_display_consistent CHECK ((((card_brand IS NULL) AND (card_last_four IS NULL)) OR ((card_brand IS NOT NULL) AND ((card_brand)::text = btrim((card_brand)::text)) AND ((char_length((card_brand)::text) >= 1) AND (char_length((card_brand)::text) <= 32)) AND (card_last_four IS NOT NULL) AND ((card_last_four)::text ~ '^[0-9]{4}$'::text)))),
@@ -580,7 +587,9 @@ CREATE TABLE public.billing_subscriptions (
     CONSTRAINT billing_subscriptions_provider_customer_id_normalized CHECK ((((provider_customer_id)::text = btrim((provider_customer_id)::text)) AND ((provider_customer_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_customer_id)::text) >= 1) AND (char_length((provider_customer_id)::text) <= 128)))),
     CONSTRAINT billing_subscriptions_provider_subscription_id_normalized CHECK ((((provider_subscription_id)::text = btrim((provider_subscription_id)::text)) AND ((provider_subscription_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_subscription_id)::text) >= 1) AND (char_length((provider_subscription_id)::text) <= 128)))),
     CONSTRAINT billing_subscriptions_raw_payload_object_bounded CHECK (((jsonb_typeof(raw_payload) = 'object'::text) AND (pg_column_size(raw_payload) <= 65536))),
+    CONSTRAINT billing_subscriptions_seen_update_monotonic CHECK ((last_seen_provider_updated_at >= provider_updated_at)),
     CONSTRAINT billing_subscriptions_status_allowed CHECK (((status)::text = ANY (ARRAY[('on_trial'::character varying)::text, ('active'::character varying)::text, ('paused'::character varying)::text, ('past_due'::character varying)::text, ('unpaid'::character varying)::text, ('cancelled'::character varying)::text, ('expired'::character varying)::text, ('unknown'::character varying)::text]))),
+    CONSTRAINT billing_subscriptions_sync_state_allowed CHECK (((sync_state)::text = ANY ((ARRAY['synced'::character varying, 'pending'::character varying, 'mapping_error'::character varying, 'invalid'::character varying])::text[]))),
     CONSTRAINT billing_subscriptions_trial_end_required CHECK ((((status)::text <> 'on_trial'::text) OR (trial_ends_at IS NOT NULL)))
 );
 
@@ -638,6 +647,7 @@ CREATE TABLE public.billing_webhook_events (
     error_class character varying(255),
     error_message character varying(500),
     enqueued_at timestamp(6) without time zone,
+    ingress_version integer,
     CONSTRAINT billing_webhook_events_attempt_count_non_negative CHECK ((attempt_count >= 0)),
     CONSTRAINT billing_webhook_events_attempts_compatibility CHECK (((attempts_count = attempt_count) AND (attempts_count >= 0))),
     CONSTRAINT billing_webhook_events_body_sha256_format CHECK (((body_sha256)::text ~ '^[0-9a-f]{64}$'::text)),
@@ -651,6 +661,7 @@ CREATE TABLE public.billing_webhook_events (
     CONSTRAINT billing_webhook_events_external_resource_id_normalized CHECK (((external_resource_id IS NULL) OR (((external_resource_id)::text = btrim((external_resource_id)::text)) AND ((external_resource_id)::text !~ '[[:space:]]'::text) AND ((char_length((external_resource_id)::text) >= 1) AND (char_length((external_resource_id)::text) <= 128))))),
     CONSTRAINT billing_webhook_events_failed_after_processing CHECK (((failed_at IS NULL) OR ((failed_at >= verified_at) AND ((processing_started_at IS NULL) OR (failed_at >= processing_started_at))))),
     CONSTRAINT billing_webhook_events_fingerprint_format CHECK (((fingerprint)::text ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT billing_webhook_events_ingress_version_allowed CHECK (((ingress_version IS NULL) OR (ingress_version = 1))),
     CONSTRAINT billing_webhook_events_lifecycle CHECK (((((status)::text = ANY (ARRAY[('received'::character varying)::text, ('processing'::character varying)::text])) AND (processed_at IS NULL) AND (error_code IS NULL)) OR (((status)::text = ANY (ARRAY[('processed'::character varying)::text, ('ignored'::character varying)::text])) AND (processed_at IS NOT NULL) AND (error_code IS NULL)) OR (((status)::text = ANY (ARRAY[('quarantined'::character varying)::text, ('failed'::character varying)::text])) AND (processed_at IS NOT NULL) AND (error_code IS NOT NULL)))),
     CONSTRAINT billing_webhook_events_payload_compatibility CHECK ((payload = snapshot)),
     CONSTRAINT billing_webhook_events_payload_object_bounded CHECK (((jsonb_typeof(payload) = 'object'::text) AND (pg_column_size(payload) <= 65536))),
@@ -2042,6 +2053,13 @@ CREATE INDEX index_billing_price_mappings_on_provider_lookup ON public.billing_p
 
 
 --
+-- Name: index_billing_provider_locators_on_billing_subscription; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_provider_locators_on_billing_subscription ON public.billing_provider_locators USING btree (billing_subscription_id) WHERE (billing_subscription_id IS NOT NULL);
+
+
+--
 -- Name: index_billing_provider_locators_on_checkout_attempt; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2060,6 +2078,13 @@ CREATE INDEX index_billing_provider_locators_on_org_status ON public.billing_pro
 --
 
 CREATE INDEX index_billing_provider_locators_on_organization_id ON public.billing_provider_locators USING btree (organization_id);
+
+
+--
+-- Name: index_billing_provider_locators_on_subscription_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_provider_locators_on_subscription_identity ON public.billing_provider_locators USING btree (provider, environment, provider_subscription_id) WHERE (provider_subscription_id IS NOT NULL);
 
 
 --
@@ -2112,6 +2137,27 @@ CREATE INDEX index_billing_subscriptions_on_organization_id ON public.billing_su
 
 
 --
+-- Name: index_billing_subscriptions_on_origin_checkout_attempt; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_subscriptions_on_origin_checkout_attempt ON public.billing_subscriptions USING btree (origin_checkout_attempt_id) WHERE (origin_checkout_attempt_id IS NOT NULL);
+
+
+--
+-- Name: index_billing_subscriptions_on_origin_locator_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_billing_subscriptions_on_origin_locator_identity ON public.billing_subscriptions USING btree (id, organization_id, provider, environment, provider_subscription_id, origin_checkout_attempt_id);
+
+
+--
+-- Name: index_billing_subscriptions_on_origin_plan_price; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_subscriptions_on_origin_plan_price ON public.billing_subscriptions USING btree (origin_plan_price_id);
+
+
+--
 -- Name: index_billing_subscriptions_on_plan_change_identity; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2151,6 +2197,13 @@ CREATE INDEX index_billing_subscriptions_on_provider_updated_at ON public.billin
 --
 
 CREATE INDEX index_billing_subscriptions_on_status ON public.billing_subscriptions USING btree (status);
+
+
+--
+-- Name: index_billing_subscriptions_on_sync_reconciliation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_subscriptions_on_sync_reconciliation ON public.billing_subscriptions USING btree (sync_state, last_seen_provider_updated_at);
 
 
 --
@@ -2200,6 +2253,13 @@ CREATE INDEX index_billing_webhook_events_on_provider_resource ON public.billing
 --
 
 CREATE INDEX index_billing_webhook_events_on_status_and_received ON public.billing_webhook_events USING btree (status, received_at);
+
+
+--
+-- Name: index_billing_webhook_events_on_verified_recovery; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_billing_webhook_events_on_verified_recovery ON public.billing_webhook_events USING btree (status, ingress_version, received_at);
 
 
 --
@@ -2863,11 +2923,35 @@ ALTER TABLE ONLY public.billing_provider_locators
 
 
 --
+-- Name: billing_provider_locators fk_billing_provider_locators_subscription_identity; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_provider_locators
+    ADD CONSTRAINT fk_billing_provider_locators_subscription_identity FOREIGN KEY (billing_subscription_id, organization_id, provider, environment, provider_subscription_id, billing_checkout_attempt_id) REFERENCES public.billing_subscriptions(id, organization_id, provider, environment, provider_subscription_id, origin_checkout_attempt_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: billing_subscriptions fk_billing_subscriptions_customer_identity; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.billing_subscriptions
     ADD CONSTRAINT fk_billing_subscriptions_customer_identity FOREIGN KEY (billing_customer_id, organization_id, provider, environment, test_mode, provider_customer_id) REFERENCES public.billing_customers(id, organization_id, provider, environment, test_mode, provider_customer_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_subscriptions fk_billing_subscriptions_origin_checkout_identity; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_subscriptions
+    ADD CONSTRAINT fk_billing_subscriptions_origin_checkout_identity FOREIGN KEY (origin_checkout_attempt_id, organization_id, origin_plan_price_id, provider, environment) REFERENCES public.billing_checkout_attempts(id, organization_id, plan_price_id, provider, environment) ON DELETE RESTRICT;
+
+
+--
+-- Name: billing_subscriptions fk_billing_subscriptions_origin_plan_price; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.billing_subscriptions
+    ADD CONSTRAINT fk_billing_subscriptions_origin_plan_price FOREIGN KEY (origin_plan_price_id) REFERENCES public.plan_prices(id) ON DELETE RESTRICT;
 
 
 --
@@ -3237,6 +3321,7 @@ ALTER TABLE ONLY public.product_membership_roles
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20260716090000'),
 ('20260716080000'),
 ('20260716070100'),
 ('20260716070000'),

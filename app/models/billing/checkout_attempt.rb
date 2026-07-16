@@ -20,6 +20,11 @@ module Billing
       foreign_key: :billing_checkout_attempt_id,
       dependent: :restrict_with_exception,
       inverse_of: :checkout_attempt
+    has_one :originated_subscription,
+      class_name: "Billing::Subscription",
+      foreign_key: :origin_checkout_attempt_id,
+      dependent: :restrict_with_exception,
+      inverse_of: :origin_checkout_attempt
 
     enum :environment, { test: "test", live: "live" }, prefix: true, validate: true
     enum :status, {
@@ -95,7 +100,6 @@ module Billing
           errors.add(:provider_checkout_id, "must be present") if provider_checkout_id.blank?
           require_blank_terminal_fields
         when "completed"
-          errors.add(:provider_checkout_id, "must be present") if provider_checkout_id.blank?
           errors.add(:completed_at, "must be present") if completed_at.blank?
           errors.add(:token_consumed_at, "must be present") if token_consumed_at.blank?
           errors.add(:failure_code, "must be blank") if failure_code.present?

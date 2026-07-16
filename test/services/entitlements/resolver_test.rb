@@ -160,7 +160,8 @@ class Entitlements::ResolverTest < ActiveSupport::TestCase
         status: status,
         ends_at: nil,
         past_due_started_at: nil,
-        provider_updated_at: now
+        provider_updated_at: now,
+        last_seen_provider_updated_at: now
       }.merge(attributes))
       resolver = build_resolver(now: now)
 

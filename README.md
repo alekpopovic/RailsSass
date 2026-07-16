@@ -10,8 +10,9 @@ internal platform administration, and owner/billing Lemon Squeezy checkout with
 local pending state. Registration never creates an organization; verified users
 explicitly complete onboarding. Checkout/API success never changes subscription
 or entitlement state. Exact-body signed webhook ingress, durable idempotent
-receipt, and Solid Queue handoff are implemented; subscription projection,
-provider portal management, and production hardening remain open milestones.
+receipt, Solid Queue processing, and the fail-closed local subscription
+projection are implemented; provider portal management, operational
+reconciliation, and production hardening remain open milestones.
 The target behavior and delivery sequence are in
 [`docs/`](docs/), beginning with the
 [product requirements](docs/product_requirements.md),
@@ -116,8 +117,10 @@ bin/jobs
 Do not enable access from a checkout redirect or outbound Lemon API response.
 Runtime authorization will use local database state, and only verified,
 durably recorded, idempotently processed webhooks may change subscription state.
-The current webhook handoff job deliberately leaves verified events in
-`received`; it does not project a subscription or unlock paid access.
+The asynchronous processor refetches one fixed provider subscription resource,
+re-establishes tenant context through the checkout/provider locator, and updates
+the local projection transactionally. Checkout redirects and outbound API
+responses still never unlock paid access.
 
 ## Tests and quality checks
 
@@ -170,7 +173,9 @@ checkout requires `LEMON_SQUEEZY_API_KEY`, `LEMON_SQUEEZY_STORE_ID`,
 `LEMON_SQUEEZY_CHECKOUT_HOST` in ignored environment configuration or encrypted
 credentials. Webhook ingress additionally requires
 `LEMON_SQUEEZY_WEBHOOK_SECRET`; configure Lemon to send test-mode
-`subscription_created` and `subscription_updated` events to
+`subscription_created`, `subscription_updated`, `subscription_expired`,
+`subscription_payment_success`, `subscription_payment_failed`, and
+`subscription_payment_recovered` events to
 `POST /webhooks/lemon_squeezy`. `APP_HOST`/`APP_PORT` define the canonical
 pending return URL.
 Restart Rails after changing this boot-time configuration. An active paid

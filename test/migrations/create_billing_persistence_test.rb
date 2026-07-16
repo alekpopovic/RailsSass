@@ -33,6 +33,7 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
         attempt_count attempts_count snapshot payload created_at updated_at
       ]
     )
+    assert_predicate Billing::WebhookEvent.columns_hash.fetch("ingress_version"), :null
     assert_required_columns(
       Billing::PlanChange,
       %w[
@@ -370,10 +371,12 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
 
     def raw_subscription_attributes(organization:, customer:, provider_subscription_id:, **overrides)
       now = Time.current
+      plan_price_id = overrides.delete(:plan_price_id) || create_test_plan_price(plan: create_test_plan).id
       {
         organization_id: organization.id,
         billing_customer_id: customer.id,
-        plan_price_id: create_test_plan_price(plan: create_test_plan).id,
+        plan_price_id: plan_price_id,
+        origin_plan_price_id: plan_price_id,
         provider: "lemon_squeezy",
         environment: customer.environment,
         provider_subscription_id: provider_subscription_id,
@@ -381,6 +384,8 @@ class CreateBillingPersistenceTest < ActiveSupport::TestCase
         status: "active",
         current: true,
         provider_updated_at: now,
+        last_seen_provider_updated_at: now,
+        sync_state: "synced",
         pause: {},
         test_mode: customer.test_mode,
         raw_payload: {},

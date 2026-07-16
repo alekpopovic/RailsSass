@@ -41,20 +41,19 @@ local pending page. No checkout response or redirect writes a subscription.
 
 The repository now exposes an isolated `POST /webhooks/lemon_squeezy`
 controller, exact-body verifier, durable receipt service, Solid Queue handoff,
-and enqueue-recovery sweeper. The current handoff job deliberately leaves the
-verified row in `received`; there is still no subscription projection service,
-provider portal, or plan-change command execution. The billing overview,
-pending-return page, and platform-admin diagnostics are local-state readers.
-Checkout and webhook receipt write only local attempt/correlation/ledger state;
-neither is a subscription-state writer.
+enqueue-recovery sweeper, and asynchronous subscription projector. The billing
+overview, pending-return page, and platform-admin diagnostics are local-state
+readers. Checkout and browser redirects write only attempt/correlation state;
+only a processor rooted in a verified durable webhook receipt may write local
+customer or subscription state. Provider portal and plan-change command
+execution remain outside this milestone.
 
 The entitlement resolver reads a current local subscription and never calls the
-provider. No application path currently creates paid subscription state. The
-future projection milestone must consume the implemented exact environment/
-store/product/variant mapping and make verified-webhook-rooted processing the
-only application writer. A
-checkout attempt, plan-change command, redirect, or successful Lemon API
-response still cannot create or change product access.
+provider. The asynchronous projector consumes the exact environment/store/
+product/variant mapping and is the only application writer of paid subscription
+state. A checkout attempt, plan-change command, redirect, or successful Lemon
+API response without a verified webhook root still cannot create or change
+product access.
 
 `Billing::Subscription#raw_payload` is a compatibility-oriented column name for
 a bounded, recursively screened, explicitly allowlisted diagnostic snapshot. It
@@ -106,8 +105,8 @@ Squeezy.
 9. Unknown store, environment, variant, plan, status, or malformed data denies
    paid-plan selection and alerts when tenant/subscription correlation is safely
    resolved; only the explicit active free fallback may remain. When tenant
-   resolution itself is untrusted, only the event is quarantined and no tenant
-   state is guessed.
+   resolution itself is untrusted, only a terminal event error is recorded and
+   no tenant state is guessed.
 10. Runtime authorization never calls Lemon Squeezy.
 11. Test and live credentials/data/mappings are strictly separated; test data
     never grants access in production.
@@ -188,11 +187,15 @@ documentation on 2026-07-15:
   payloads contain `test_mode`.
 - Provider API calls have a documented 300-request-per-minute limit.
 
-The MVP registers exactly `subscription_created` and `subscription_updated`.
-This deliberately relies on Lemon Squeezy's current documentation that
-`subscription_updated` is the catch-all subscription lifecycle event; lifecycle
-contract tests consume the accompanying updated payload. Granular lifecycle and
-payment events are not registered for authorization.
+The webhook ingress accepts `subscription_created`, `subscription_updated`, and
+`subscription_expired` subscription resources. It also accepts
+`subscription_payment_success`, `subscription_payment_failed`, and
+`subscription_payment_recovered` subscription-invoice resources. Lemon Squeezy
+documents `subscription_updated` as the catch-all lifecycle event; the explicit
+expiration and payment events provide prompt, idempotent refetch triggers. An
+invoice payment status is never mapped directly to local subscription status or
+authorization. Its allowlisted `subscription_id` only identifies the fixed
+subscription endpoint whose current snapshot is validated by the processor.
 
 These facts are not copied into authorization code. Provider DTO mapping and the
 single local status matrix below isolate the application from provider details.
@@ -240,8 +243,9 @@ Rules:
   as `NOT VALID`; a follow-up migration backfills compatible legacy rows as
   inactive mappings, rejects unsafe identities for remediation, and validates
   the FK before application rollout completes.
-- An incoming variant with no exact active/historical mapping is quarantined and
-  fail-closed. It does not inherit a nearby plan by product name or price.
+- An incoming variant with no exact active/historical mapping is recorded as a
+  permanent projection failure and fails closed. It does not inherit a nearby
+  plan by product name or price.
 - The one active `Plan.free` row is the local runtime fallback when no paid
   subscription is accessible. It does not create a subscription, prove a
   payment, or permit tenant/manual grants.
@@ -344,15 +348,15 @@ page with a safe do-not-retry message.
 An orphan remote checkout is bounded by expiry and cannot grant access without
 the correlated verified webhook.
 
-A verified subscription webhook may arrive after local/provider checkout expiry.
-It may consume an unresolved retained attempt when the provider subscription's
-`provider_created_at <= attempt.expires_at + 5 minutes` (clock-skew allowance),
-regardless of processing time. A provider creation after that boundary is
-quarantined. If a delayed valid old attempt competes with a newer attempt, the
-organization billing lock chooses the provider-created subscription that
-predates the newer attempt and marks the unused newer local attempt
-`superseded`; two actually created non-terminal provider subscriptions are
-quarantined for operator cancellation/refund rather than granting twice.
+The signed checkout context must be received and verified before its explicit
+expiry. That durable event may be processed after local/provider checkout
+expiry and may consume the retained attempt when the provider subscription's
+`provider_created_at <= attempt.expires_at + 5 minutes` (clock-skew allowance).
+A provider creation after that boundary is failed. If a valid event received in
+time is processed after a newer local attempt exists, the organization billing
+lock marks the unused newer attempt `superseded`. Two actually created
+non-terminal provider subscriptions fail for operator cancellation/refund
+rather than granting twice.
 
 Expiry alone never resolves the checkout locator. This preserves delayed
 verified correlation and is one reason user-facing organization archive is
@@ -412,32 +416,41 @@ The endpoint performs these bounded steps:
 6. Read signed-body `meta.event_name` as the only event-name authority. The
    unsigned `X-Event-Name` header is ignored for classification, so a missing or
    mismatched value cannot create a second receipt or change behavior.
-7. Classify only `subscription_created` and `subscription_updated` with a valid
-   subscription resource as processable; other signed events are deterministic
-   ignored receipts.
-8. Validate subscription resource, configured store, and environment/test-mode
-   shape. Signed invalid envelopes or configuration mismatches are quarantined,
-   not projected.
+7. Classify created/updated/expired events only with a valid `subscriptions`
+   resource. Classify payment success/failed/recovered only with a valid
+   `subscription-invoices` resource and bounded `attributes.subscription_id`.
+   Other signed events are deterministic ignored receipts.
+8. Validate the event-specific resource, configured store, and
+   environment/test-mode shape. Signed invalid envelopes or configuration
+   mismatches are quarantined, not projected. Invoice events are refetch
+   triggers; their payment status is not subscription-state authority.
 9. For every new signed receipt, calculate exact `SHA256(raw_body)` plus
    `SHA256(provider || configured_environment || raw_body)`. The untrusted,
    unsigned header is excluded from both identities; signed `meta.event_name`
    is stored separately when parsing succeeds.
 10. If present, verify the purpose/expiry-scoped
-    `meta.custom_data.checkout_attempt_token`, validate its bounded payload,
-    calculate `SHA256(nonce)`, and retain only that digest. Never hash the raw
-    signed token as the lookup identity.
+    `meta.custom_data.checkout_attempt_token` (and accept the migration-safe
+    `checkout_context` alias), validate its bounded payload, and calculate
+    `SHA256(nonce)`. Retain only the digest and the verified organization public
+    ID, local plan-price ID, initiating user ID, and expiry needed for the later
+    cross-check. Never retain the nonce or raw signed token, and never hash the
+    raw token as the lookup identity.
 11. Insert `Billing::WebhookEvent` with the fingerprint and a minimal allowlisted
     envelope; never store raw body, signature, plaintext custom token, email,
     customer name, or signed URLs.
 12. Enqueue only processable `received` rows after commit and return 200 after
     durable receipt.
 
-A duplicate fingerprint is a successful no-op and returns 200. A persistence
+A duplicate fingerprint is a successful no-op and returns 200. When an exact
+legacy receipt has a null ingress marker, only a freshly HMAC-verified resend
+with the same provider/environment/body digest may atomically stamp the current
+marker, rebuild the screened envelope under the current allowlist, and re-enter
+enqueue recovery; timestamps or synthetic rows cannot do so. A persistence
 failure returns 503 so Lemon Squeezy retries. If enqueueing fails after receipt,
 the periodic sweeper finds the durable `received` row; the endpoint can still
 return 200 because local recovery no longer depends on provider redelivery.
-The same sweeper redispatches a row that remains `received` for six hours, so a
-future idempotent processor release can claim pre-release receipts.
+The same sweeper redispatches rows that remain `received`, exceed the processing
+lease, or hold a recoverable transient failure.
 
 HTTP outcomes are explicit:
 
@@ -478,30 +491,30 @@ The asynchronous processor:
 7. Cross-checks organization, origin/current price mapping, plan, store,
    product, variant, token digest, provider-created time, existing subscription,
    and one-current-subscription invariants.
-8. Normalizes provider status and time fields. Once the base token/tenant/store/
-   environment/time correlation is trusted, a first unknown mapping consumes
-   the checkout locator and creates an unresolved subscription locator so the
-   token cannot be reused and a controlled replay can recover. It creates no
-   subscription row or paid grant. Unknown status or malformed input sets a
-   safely resolved existing subscription to paid-fail-closed `unknown`/`invalid`.
-   An unknown variant retains the last accepted mapping and sets
-   `sync_state = mapping_error`; the unknown snapshot stays in the filtered
-   event. A first invalid/unmapped subscription creates no subscription grant.
+8. Normalizes provider status and time fields. A first unknown or mismatched
+   mapping leaves checkout authority unresolved, records a permanent redacted
+   event failure, and creates no subscription row or paid grant. Unknown status
+   for an existing subscription sets it to paid-fail-closed `unknown`/`invalid`.
+   An unknown variant retains the last accepted mapping, advances the monotonic
+   seen timestamp, and sets `sync_state = mapping_error`.
 9. In one transaction, upserts the valid current subscription, creates/fills its
    subscription locator, consumes/completes the checkout attempt, applies the
    verified current price/status transition, and marks the event processed.
 10. Clears `Current` in `ensure`.
 
-The first subscription event cannot resolve by email/name. A missing,
-already-consumed, or mismatched token digest is quarantined. A retained expired
-attempt is valid only under the provider-created-time rule in section 5.3.
+The first subscription event cannot resolve by email/name. A missing or
+mismatched token digest becomes a permanent redacted failure; an already
+consumed locator is accepted only when it is bound to the same provider
+subscription. A retained expired attempt is valid only when the event was
+received before signed-context expiry and passes the provider-created-time rule
+in section 5.3.
 
 If the organization has a current expired subscription, a valid new correlated
 subscription atomically supersedes the expired row and becomes current. A
 second external subscription while the current row is non-terminal is
-quarantined. Later verified events for a superseded subscription may update its
-historical provider fields but cannot change `archived_at`, restore `current`,
-or affect access.
+failed for admin remediation. Later verified events for a superseded
+subscription may update its historical provider fields but cannot change
+`archived_at`, restore `current`, or affect access.
 
 ## 7. Idempotency and event ordering
 
@@ -523,20 +536,17 @@ events normally converge on the newest provider state. Rules:
   its mapping is invalid; accepted projection time never moves backward;
 - an older snapshot is marked `ignored` and changes no subscription data;
 - the same timestamp and same critical snapshot is a no-op;
-- after a catalog/code repair, an explicitly requested replay may re-evaluate
-  that same verified snapshot when the local subscription is fail-closed or no
-  subscription was created; it may recover only if the stored fingerprint and
-  critical fields match and every mapping now validates;
-- the same timestamp with different status/variant/time fields is quarantined,
+- the same timestamp with different status/variant/time fields is failed for
+  admin review,
   sets a safely resolved local subscription `sync_state = invalid`, and triggers
   a refetch/alert;
 - concurrent jobs serialize on the current subscription/organization billing
   rows;
 - `past_due_started_at` is set from the validated `provider_updated_at` snapshot
   on entry into a past-due cycle, preserved through repeated past-due events,
-  and cleared after leaving that status. A provider timestamp more than five
-  minutes after local `received_at` is invalid/quarantined rather than extending
-  access.
+  and cleared after leaving that status. A provider timestamp beyond the
+  processor's bounded local clock-skew allowance is rejected rather than
+  extending access.
 
 ## 8. Subscription access matrix
 
@@ -544,8 +554,8 @@ This is the single canonical MVP paid-subscription predicate. Other documents
 and code reference it rather than define alternatives. The resolver always
 loads the candidate through `Current.organization.billing_subscriptions`, and
 requires one current, non-archived row with a known `PlanPrice` and paid `Plan`.
-The future verified writer additionally owns environment mapping, provenance,
-and synchronization validation before it may persist that row.
+The verified webhook projector additionally owns environment mapping,
+provenance, and synchronization validation before it may persist that row.
 
 | Local normalized status | Runtime billing decision | Time condition |
 | --- | ---: | --- |
@@ -580,11 +590,12 @@ plan and product entitlement fails closed. The fallback never changes local
 subscription state. Organization and billing administration remain available
 according to organization roles.
 
-`quarantined` is a webhook-event processing state, not a subscription state. If
-a verified invalid event safely resolves an existing subscription, projection
-sets that subscription to `mapping_error` or `invalid`, so runtime sees the
-denial. If tenant/subscription resolution itself is untrusted or impossible,
-only the event is quarantined and no arbitrary subscription is changed.
+`quarantined` is an ingress-envelope state, not a subscription state. If a
+verified event safely resolves an existing subscription but projection input is
+invalid, the event is marked `failed` and the subscription becomes
+`mapping_error` or `invalid`, so runtime sees the denial. If tenant/subscription
+resolution is untrusted or impossible, only a redacted event failure is stored
+and no arbitrary subscription is changed.
 
 ## 9. Plan changes, cancellation, and portal
 
@@ -613,9 +624,11 @@ only the event is quarantined and no arbitrary subscription is changed.
 - Signed customer portal/payment URLs are fetched just in time after
   authorization, returned to the browser, and not persisted or logged.
 
-Payment success/failure/refund events are outside the authorization MVP. They
-may be added later for audit/UI, but they never independently change entitlement;
-the synchronized subscription snapshot remains the only billing input.
+Payment success/failure/recovery events are accepted only as signals to refetch
+and project the associated current subscription resource. Invoice status never
+independently changes entitlement. Refund history and invoice UI remain outside
+the authorization MVP; the synchronized subscription snapshot remains the only
+billing input.
 
 ## 10. Retry, quarantine, and reconciliation
 
@@ -629,9 +642,13 @@ Retry with exponential backoff and jitter:
 - provider 404 for a short bounded propagation window;
 - transient database deadlocks.
 
-### 10.2 Permanent quarantine
+Processing is capped at eight successful claims. The worker records transient
+failures for retry, the sweeper only re-enqueues rows below that bound, and a
+stale eighth claim becomes the terminal redacted `retry_exhausted` failure.
 
-Quarantine and alert without granting access:
+### 10.2 Permanent projection failure
+
+Record a redacted terminal failure and alert without granting access:
 
 - authentication/configuration failure;
 - wrong store or environment/test mode;
@@ -683,10 +700,10 @@ this accepted operational risk without creating a second mutation authority.
   another checkout; an expired current subscription permits replacement.
 - Lazy and swept expiry release the pending unique slot only after the ten-minute
   delivery grace.
-- A webhook processed after attempt expiry succeeds only when provider creation
-  was within the five-minute skew boundary; post-expiry creation, resolved token,
-  and competing old/new attempts follow the documented rules. Expiry alone
-  leaves the locator unresolved.
+- A webhook received before context expiry may process after attempt expiry only
+  when provider creation was within the five-minute skew boundary; expired
+  context, post-boundary creation, resolved token, and competing old/new attempts
+  follow the documented rules. Expiry alone leaves the locator unresolved.
 - Timeout/reset/5xx/malformed or invalid-success responses remain
   `creation_unknown`; definitive no-create failures may become `failed`.
 - Provider API success, checkout completion, and return redirect never change
@@ -723,16 +740,16 @@ this accepted operational risk without creating a second mutation authority.
 - All tenant mutation after resolution is scoped through
   `Current.organization`.
 - Older/equal-conflicting/concurrent events follow section 7.
-- Network 429/timeouts/5xx retry; permanent failures quarantine.
+- Network 429/timeouts/5xx retry; permanent failures remain visible in the
+  failed-webhook admin view.
 - Unknown status or variant fails closed for paid-plan selection instead of
   retaining a prior paid grant; only the active free fallback may remain.
-- A controlled replay of the same verified snapshot can recover after a
-  mapping/code repair, but altered equal-timestamp data remains quarantined.
+- Equal snapshots are no-ops; altered equal-timestamp data fails closed.
 - One attempt cannot create two subscriptions; one organization cannot have two
   current subscriptions.
 - A new subscription atomically supersedes only an expired current row; a
-  second non-terminal subscription quarantines, and later events cannot
-  reactivate an archived row.
+  second non-terminal subscription fails for admin remediation, and later
+  events cannot reactivate an archived row.
 - Plan changes take effect only from verified-webhook processing.
 
 ### 11.4 Matrix and runtime
@@ -765,10 +782,12 @@ checkout, redirect-before-webhook, webhook simulation/resend, duplicate,
 cancel/resume/pause/expire, plan change, and live/test separation. Sanitized
 fixtures derived from those payloads become automated contract tests.
 
-Webhook configuration subscribes exactly to `subscription_created` and
-`subscription_updated`; lifecycle drills verify the accompanying catch-all
-updated event drives projection rather than relying on an unregistered granular
-event.
+Webhook configuration subscribes to `subscription_created`,
+`subscription_updated`, `subscription_expired`,
+`subscription_payment_success`, `subscription_payment_failed`, and
+`subscription_payment_recovered`. Lifecycle drills verify that invoice events
+only trigger a fixed subscription refetch and that the normalized subscription
+snapshot—not the invoice status—drives projection.
 
 ### 11.7 Internal diagnostic views
 

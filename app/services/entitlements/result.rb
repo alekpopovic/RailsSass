@@ -30,6 +30,7 @@ module Entitlements
       subscription_paused
       subscription_plan_is_free
       subscription_plan_missing
+      subscription_sync_invalid
       subscription_unknown_status
       subscription_unpaid
     ].freeze

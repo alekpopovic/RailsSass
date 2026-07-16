@@ -34,6 +34,58 @@ class Billing::LemonSqueezy::ClientTest < ActiveSupport::TestCase
     )
   end
 
+  test "retrieves a strict sanitized subscription snapshot from the fixed resource path" do
+    client = build_client(store_id: "61001")
+    payload = valid_subscription_payload
+    payload["data"]["attributes"].merge!(
+      "user_email" => "private-customer@example.test",
+      "urls" => { "customer_portal" => "https://provider.test/signed" }
+    )
+    stub_request(:get, "#{BASE_URL}/v1/subscriptions/sub_123").to_return(
+      status: 200,
+      body: payload.to_json
+    )
+
+    snapshot = client.retrieve_subscription_snapshot(provider_subscription_id: "sub_123")
+
+    assert_equal "sub_123", snapshot.provider_subscription_id
+    assert_equal "64004", snapshot.provider_variant_id
+    assert_equal "active", snapshot.status
+    assert_not_includes snapshot.to_h.to_json, "private-customer@example.test"
+    assert_not_includes snapshot.to_h.to_json, "customer_portal"
+    assert_requested(
+      :get,
+      "#{BASE_URL}/v1/subscriptions/sub_123",
+      headers: {
+        "Accept" => "application/vnd.api+json",
+        "Authorization" => "Bearer #{API_KEY}",
+        "Content-Type" => "application/vnd.api+json"
+      },
+      times: 1
+    )
+  end
+
+  test "maps a semantically invalid subscription response to a safe parse error" do
+    client = build_client(store_id: "61001")
+    payload = valid_subscription_payload
+    payload["data"]["attributes"]["store_id"] = 99_999
+    payload["data"]["attributes"]["user_email"] = "private-customer@example.test"
+    stub_request(:get, "#{BASE_URL}/v1/subscriptions/sub_123").to_return(
+      status: 200,
+      body: payload.to_json
+    )
+
+    error = assert_raises(Billing::LemonSqueezy::SubscriptionSnapshot::ParseError) do
+      client.retrieve_subscription_snapshot(provider_subscription_id: "sub_123")
+    end
+
+    assert_equal 200, error.status
+    assert_nil error.cause
+    assert_not_includes error.full_message, "private-customer@example.test"
+    assert_not_includes error.full_message, "99999"
+    assert_requested :get, "#{BASE_URL}/v1/subscriptions/sub_123", times: 1
+  end
+
   test "uses explicit bounded connection and read timeouts" do
     client = build_client(open_timeout: 1.25, read_timeout: 4.5)
 
@@ -287,5 +339,30 @@ class Billing::LemonSqueezy::ClientTest < ActiveSupport::TestCase
         headers: { "Authorization" => "Bearer #{api_key}" },
         times: 1
       )
+    end
+
+    def valid_subscription_payload
+      {
+        "data" => {
+          "type" => "subscriptions",
+          "id" => "sub_123",
+          "attributes" => {
+            "store_id" => 61_001,
+            "customer_id" => 62_002,
+            "product_id" => 63_003,
+            "variant_id" => 64_004,
+            "status" => "active",
+            "card_brand" => "visa",
+            "card_last_four" => "4242",
+            "pause" => nil,
+            "trial_ends_at" => nil,
+            "renews_at" => "2026-08-16T00:00:00Z",
+            "ends_at" => nil,
+            "created_at" => "2026-07-01T12:00:00Z",
+            "updated_at" => "2026-07-16T12:30:45Z",
+            "test_mode" => true
+          }
+        }
+      }
     end
 end

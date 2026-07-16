@@ -4,7 +4,7 @@ module Billing
     PAUSE_KEYS = %w[mode resumes_at].freeze
     SNAPSHOT_KEYS = %w[
       card_brand card_last_four ends_at event_name mode pause provider_customer_id
-      provider_product_id provider_resource_id provider_store_id
+      provider_created_at provider_product_id provider_resource_id provider_store_id
       past_due_started_at provider_subscription_id provider_updated_at provider_variant_id
       reason_code renews_at resource_type resumes_at status test_mode trial_ends_at
     ].freeze
@@ -14,6 +14,18 @@ module Billing
       class_name: "Billing::Customer",
       inverse_of: :subscriptions
     belongs_to :plan_price, inverse_of: :billing_subscriptions
+    belongs_to :origin_plan_price,
+      class_name: "PlanPrice",
+      inverse_of: :origin_billing_subscriptions
+    belongs_to :origin_checkout_attempt,
+      class_name: "Billing::CheckoutAttempt",
+      optional: true,
+      inverse_of: :originated_subscription
+    has_one :provider_locator,
+      class_name: "Billing::ProviderLocator",
+      foreign_key: :billing_subscription_id,
+      dependent: :restrict_with_exception,
+      inverse_of: :billing_subscription
     has_many :plan_changes,
       class_name: "Billing::PlanChange",
       foreign_key: :billing_subscription_id,
@@ -33,14 +45,24 @@ module Billing
       expired: "expired",
       unknown: "unknown"
     }, prefix: true, validate: true
+    enum :sync_state, {
+      synced: "synced",
+      pending: "pending",
+      mapping_error: "mapping_error",
+      invalid: "invalid"
+    }, prefix: true, validate: true
 
     normalizes :provider_subscription_id, :provider_customer_id,
       with: ->(identifier) { identifier.to_s.strip }
     normalizes :card_brand, :card_last_four,
       with: ->(value) { value.to_s.strip.presence }
 
+    before_validation :set_projection_defaults, on: :create
+
     attr_readonly :organization_id,
       :billing_customer_id,
+      :origin_plan_price_id,
+      :origin_checkout_attempt_id,
       :provider,
       :environment,
       :provider_subscription_id,
@@ -58,12 +80,15 @@ module Billing
       format: { with: PROVIDER_ID_PATTERN }
     validates :current, :test_mode, inclusion: { in: [ true, false ] }
     validates :provider_updated_at, presence: true
+    validates :last_seen_provider_updated_at, presence: true
     validates :card_brand, length: { maximum: 32 }, allow_nil: true
     validates :card_last_four,
       format: { with: /\A[0-9]{4}\z/ },
       allow_nil: true
     validate :test_mode_matches_environment
     validate :customer_identity_matches
+    validate :origin_identity_matches
+    validate :provider_update_order_is_consistent
     validate :archive_state_is_consistent
     validate :archived_state_is_one_way, on: :update
     validate :status_timestamps_are_present
@@ -91,6 +116,36 @@ module Billing
           billing_customer.provider_customer_id
         ]
         errors.add(:billing_customer, "must match the tenant and provider identity") unless actual == expected
+      end
+
+      def set_projection_defaults
+        self.origin_plan_price ||= plan_price
+        self.last_seen_provider_updated_at ||= provider_updated_at
+      end
+
+      def origin_identity_matches
+        return unless origin_checkout_attempt
+
+        expected = [
+          organization_id,
+          origin_plan_price_id,
+          provider,
+          environment
+        ]
+        actual = [
+          origin_checkout_attempt.organization_id,
+          origin_checkout_attempt.plan_price_id,
+          origin_checkout_attempt.provider,
+          origin_checkout_attempt.environment
+        ]
+        errors.add(:origin_checkout_attempt, "must match the subscription origin") unless actual == expected
+      end
+
+      def provider_update_order_is_consistent
+        return if provider_updated_at.blank? || last_seen_provider_updated_at.blank?
+        return unless last_seen_provider_updated_at < provider_updated_at
+
+        errors.add(:last_seen_provider_updated_at, "cannot precede the accepted provider update")
       end
 
       def archive_state_is_consistent

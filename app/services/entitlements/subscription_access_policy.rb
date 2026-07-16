@@ -13,6 +13,7 @@ module Entitlements
     def call
       return denied(:no_current_subscription) unless subscription
       return denied(:subscription_not_current) unless subscription.current? && subscription.archived_at.nil?
+      return denied(:subscription_sync_invalid) unless subscription.sync_state_synced?
 
       case subscription.status
       when "on_trial"

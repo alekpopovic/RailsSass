@@ -1,12 +1,15 @@
 class Billing::ProcessWebhookJob < ApplicationJob
   queue_as :billing
 
-  # This ingress milestone hands a durable receipt to Solid Queue. Subscription
-  # projection remains a separate, idempotent worker milestone; leaving the row
-  # in `received` preserves the verified authority until that processor claims
-  # it. The sweeper redispatches stale receipts so a later worker release can
-  # claim events accepted before projection exists.
+  retry_on Billing::Webhooks::Processor::RetryableError,
+    wait: :polynomially_longer,
+    attempts: 8
+  retry_on ActiveRecord::Deadlocked,
+    ActiveRecord::SerializationFailure,
+    wait: :polynomially_longer,
+    attempts: 5
+
   def perform(webhook_event_id)
-    Billing::WebhookEvent.find(webhook_event_id)
+    Billing::Webhooks::Processor.call(webhook_event_id: webhook_event_id)
   end
 end

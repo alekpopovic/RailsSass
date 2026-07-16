@@ -642,11 +642,11 @@ grant access.
 
 ### 8.2 Implemented Billing persistence foundation
 
-The current tables provide constrained storage and history plus an authorized
-outbound checkout path. Checkout creates only attempt/correlation state and
-does not implement webhook receipt or subscription projection. A read-only
-runtime policy uses only the current subscription row; every other Billing row
-remains non-authoritative. Tenant reads must use the corresponding
+The current tables provide constrained storage/history, an authorized outbound
+checkout path, durable signed-webhook receipt, and verified subscription
+projection. Checkout creates only attempt/correlation state. A read-only runtime
+policy uses only the synchronized current subscription row; every other Billing
+row remains non-authoritative. Tenant reads must use the corresponding
 `Current.organization` association.
 
 #### 8.2.1 `Billing::Customer` / `billing_customers`
@@ -723,7 +723,7 @@ paired bounded card display fields, and JSON object/size limits.
 The additive past-due check is installed `NOT VALID`: PostgreSQL enforces it for
 every new or changed row, while a pre-existing past-due row is deliberately not
 given a fabricated cycle start. Such a legacy row fails closed in the policy
-until a future verified projection re-synchronizes it. After that remediation a
+until a verified projection re-synchronizes it. After that remediation a
 separate operational migration may validate the constraint globally.
 
 Despite its name, `raw_payload` is only a bounded, recursively screened,
@@ -759,6 +759,9 @@ shape needed for verified receipt and later projection work:
   `provider_updated_at`; mirrored non-negative `attempts_count`/`attempt_count`;
   optional bounded `error_class`, `error_message`, redacted `error_code`, and
   `test_mode`;
+- nullable constrained `ingress_version`; only value `1` currently means the
+  exact body passed the current signature-first receipt contract. Legacy or
+  synthetic rows remain null and cannot be claimed;
 - mirrored non-null screened JSON-object `payload`/`snapshot` plus ordinary
   timestamps.
 
@@ -771,6 +774,15 @@ normalized-field allowlist and is limited to 64 KiB under the same
 no-body/no-secret/no-PII rule as subscriptions. Only the isolated signed webhook
 receipt service writes verified ingress rows; a synthetic row still cannot
 represent provider authority merely because `verified_at` is populated.
+A duplicate exact processable body can upgrade a null marker only after a fresh
+successful HMAC verification and exact provider/environment/body-digest match.
+The receipt identity remains unchanged while its screened envelope is rebuilt
+from the freshly verified bytes under the current allowlist.
+For a verified checkout token, the screened envelope may retain only its nonce
+digest plus organization public ID, local plan-price ID, initiating user ID, and
+expiry. The raw token and nonce are never retained. Subscription-invoice payment
+events retain a bounded `provider_subscription_id` solely as a later fixed-API
+refetch trigger; invoice status is not local subscription status authority.
 
 #### 8.2.5 `Billing::PlanChange` / `billing_plan_changes`
 
@@ -823,53 +835,54 @@ and store only the bounded provider checkout ID. The transient signed URL is
 neither persisted nor logged.
 
 `expired` means only that the URL/correlation window elapsed; it is not evidence
-that no purchase occurred. A future verified projection may consume a retained
-attempt only under the provider-created-time and correlation rules in the
-Billing model. No current checkout transition creates or changes a
-`Billing::Subscription`.
+that no purchase occurred. An event whose signed context was received before
+expiry may be projected later against a retained attempt only under the
+provider-created-time and correlation rules in the Billing model. No checkout
+transition creates or changes a `Billing::Subscription`.
 
-### 8.4 Future authoritative `Billing::Subscription` projection
+### 8.4 Authoritative `Billing::Subscription` projection
 
-This target is an additive expansion of the implemented subscription history
-table. `past_due_started_at` and the read-only runtime status policy are already
-implemented. Origin mapping, synchronization state, monotonic provider
-timestamps, and applying the existing environment-qualified price mapping to
-subscription projection remain future verified-writer prerequisites.
+The subscription history table includes the additive provenance and monotonic
+state required by the verified webhook projector. Runtime authorization remains
+a local-only reader.
 
 - `organization_id`: not-null tenant foreign key.
 - `plan_price_id`: not-null current local plan-price foreign key.
 - `origin_plan_price_id`: not-null original local plan-price foreign key.
-- `origin_checkout_attempt_id`: not-null immutable unique foreign key.
+- `origin_checkout_attempt_id`: immutable foreign key, required for every row
+  created by the webhook projector; nullable only for legacy/local rows that
+  predate verified projection, with uniqueness when present.
 - `provider`: `lemon_squeezy`.
 - `environment`: `test` or `live`.
 - `test_mode`: non-null boolean matching environment.
 - `provider_subscription_id`: non-blank text.
-- `provider_store_id`, `provider_product_id`, `provider_variant_id`: non-blank
-  text copied from the verified provider snapshot.
+- provider store/product/variant identity is retained only in the bounded
+  sanitized diagnostic snapshot and resolved through the exact
+  environment-qualified `Billing::ProviderPriceMapping`.
 - optional external customer/order identifiers needed for diagnostics, never
   used to resolve a tenant by email/name.
 - `status`: normalized `on_trial`, `active`, `paused`, `past_due`, `unpaid`,
   `cancelled`, `expired`, or `unknown`.
 - `sync_state`: `synced`, `pending`, `mapping_error`, or `invalid`.
 - `trial_ends_at`, `renews_at`, `ends_at`, `past_due_started_at`.
-- `provider_created_at`, `provider_updated_at`, `status_changed_at`,
-  `last_seen_provider_updated_at`, `last_verified_webhook_at`.
+- `provider_updated_at` and monotonic `last_seen_provider_updated_at`; bounded
+  provider-created time remains in the sanitized snapshot.
 - existing `current`, `archived_at`, and optimistic `lock_version` history
   fields.
 
 Constraints and indexes:
 
 - unique `(provider, environment, provider_subscription_id)`;
-- unique non-null `origin_checkout_attempt_id`;
+- partial unique non-null `origin_checkout_attempt_id`;
 - supporting unique
-  `(id, organization_id, provider, environment, provider_subscription_id)` for
-  the global provider locator;
+  `(id, organization_id, provider, environment, provider_subscription_id,
+  origin_checkout_attempt_id)` for the global provider locator;
 - partial unique index on `organization_id WHERE current` and the existing
   `current = (archived_at IS NULL)` check;
 - foreign key to organization;
 - ordinary restricted foreign key from `plan_price_id` to `plan_prices`, plus
-  a projection-specific reference to the implemented environment-qualified
-  provider mapping;
+  exact environment-qualified provider mapping validation in the locked
+  projector;
 - composite foreign key
   `(origin_checkout_attempt_id, organization_id, origin_plan_price_id,
   provider, environment)` to the supporting tuple on
@@ -887,8 +900,8 @@ Constraints and indexes:
 
 `past_due_started_at` is derived from the validated provider update timestamp on
 entry to a past-due cycle, remains stable through that cycle, and is cleared on
-exit. A provider timestamp more than five minutes after the event's local
-`received_at` is invalid rather than an access extension mechanism.
+exit. A provider timestamp beyond the processor's bounded local clock-skew
+allowance is invalid rather than an access extension mechanism.
 
 For an existing subscription, an unknown variant retains the last accepted
 price/plan/provider mapping, records the unknown input only in the filtered
@@ -901,8 +914,8 @@ subscription row and grants nothing.
 There is no `organizations.plan_id` and no separate mutable effective-plan row.
 An accessible current paid subscription derives its canonical plan through its
 current `PlanPrice`; otherwise the resolver selects the one active free plan.
-`PlanPrice` alone still grants nothing. The future subscription writer must
-validate synchronization and exact environment-qualified provider mapping. A
+`PlanPrice` alone still grants nothing. The verified subscription writer
+validates synchronization and exact environment-qualified provider mapping. A
 verified plan change updates only the current `plan_price_id` and matching
 provider identifiers; origin fields stay unchanged.
 
@@ -910,45 +923,46 @@ Only `expired` is terminal for starting a replacement subscription in the MVP.
 When a verified new subscription is correlated after an expired current row,
 the locked transaction sets the old row to `current = false` with an
 `archived_at` timestamp before inserting the new current row. Any second
-subscription while the current row is not expired is quarantined. Later events
+subscription while the current row is not expired fails for admin remediation. Later events
 for an archived provider subscription ID may update bounded historical fields
 for audit but never make it current or access-granting.
 
 ### 8.5 Implemented checkout `Billing::ProviderLocator` /
 `billing_provider_locators`
 
-The current table is a minimal global, non-authoritative lookup index for one
-checkout token. It contains:
+The table is a global, non-authoritative discovery index that binds checkout
+correlation to provider subscription identity. It contains:
 
 - not-null `organization_id`, `billing_checkout_attempt_id`, `provider`,
   `environment`, and `token_digest`;
 - `status`: `unresolved`, `consumed`, or
   `definitive_creation_failure`;
-- nullable `resolved_at` plus ordinary timestamps.
+- nullable `provider_subscription_id`, `billing_subscription_id`, `resolved_at`,
+  plus ordinary timestamps.
 
 The attempt reference and `(provider, environment, token_digest)` are each
 unique. A composite foreign key requires checkout-attempt ID, organization,
 provider, environment, and token digest to identify the same tenant attempt;
 the organization foreign key is delete-restricted. The lifecycle check requires
-an unresolved row to have no `resolved_at` and either terminal status to have
-one. Identity columns are immutable.
+an unresolved row to have no provider-subscription binding or `resolved_at`;
+consumed rows require a provider subscription identity and resolution time.
+When `billing_subscription_id` is present, a composite foreign key requires the
+same organization/provider/environment/subscription identity and the same
+checkout attempt as `origin_checkout_attempt_id`. Both provider and local
+subscription identities are unique and become immutable after binding.
 
 Checkout creation inserts the attempt and locator atomically. The locator stores
 the digest of the signed token's nonce, not the raw signed token. A definitive
 checkout-creation rejection may resolve it as
 `definitive_creation_failure`; timeout, readiness, abandonment, or expiry never
-does. The future verified resolver may use an unresolved digest only to discover
-a candidate organization, then must set `Current.organization` and reload the
-attempt through that tenant before trusting it.
+does. The verified resolver uses an unresolved digest only to discover a
+candidate organization, then sets `Current.organization` and reloads the
+attempt through that tenant before trusting it. Once correlation is proven, the
+same projection transaction consumes the locator and binds its provider and
+local subscription identities; locator rows remain retained for idempotency and
+history.
 
-Subscription-ID lookup and its optional `billing_subscription_id` binding are
-not implemented. The verified-projection milestone must add that locator shape
-or a separate table, with unique provider/environment/subscription identity and
-a composite tenant subscription foreign key. Once verified correlation is
-trusted, one transaction will consume the checkout locator and establish the
-subscription locator; locator rows remain retained for idempotency and history.
-
-### 8.6 Remaining verified-event projection expansion
+### 8.6 Verified-event projection boundary
 
 Section 8.2.4 defines the implemented signed-ingress ledger. It already has the
 exact-body digest, environment-qualified fingerprint, resource identity,
@@ -956,19 +970,16 @@ screened payload, receipt/processing/failure timestamps, attempt counters,
 idempotency indexes, and enqueue-recovery index. It is not an ordinary tenant
 resource and receipt alone is not a subscription writer.
 
-The projection milestone may add only the normalized fields proven necessary
-for processing, notably a recorded verification-key version for bounded secret
-rotation and a first-class checkout-token digest if querying inside the screened
-payload is insufficient. Trusted provider-subscription lookup also requires the
-subscription locator described in section 8.5. Those changes remain additive,
-indexed, and constrained; they do not replace the existing receipt identity.
+Future hardening may add only normalized fields proven necessary, such as a
+recorded verification-key version for bounded secret rotation. Such changes
+remain additive, indexed, and constrained; they do not replace the existing
+receipt or locator identities.
 
-Rows that predate the ingress migration have no retained raw bytes. Their
-compatibility backfill copies the earlier environment-qualified `fingerprint`
-into `body_sha256`; only rows written by the signed receipt service carry a true
-exact-body digest. Such legacy/synthetic rows cannot acquire provider authority
-from timestamps or digest shape and must not be projected without a new verified
-delivery.
+Rows that predate the projection marker have `ingress_version = NULL`. They
+cannot acquire provider authority from timestamps or digest shape. A fresh
+validly signed resend of the exact same provider/environment/body may
+atomically rebuild the screened envelope and stamp the current marker;
+otherwise they remain permanently unclaimable.
 
 Do not persist raw bodies, signatures, plaintext custom tokens, emails,
 customer names, API keys, or signed checkout/portal URLs in this ledger. After

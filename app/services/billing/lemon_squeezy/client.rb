@@ -122,6 +122,18 @@ module Billing
         request(method: :get, path: "/v1/subscriptions/#{provider_subscription_id}")
       end
 
+      def retrieve_subscription_snapshot(provider_subscription_id:)
+        provider_subscription_id = provider_subscription_id.to_s
+        payload = retrieve_subscription(provider_subscription_id: provider_subscription_id)
+
+        SubscriptionSnapshot.parse(
+          payload:,
+          expected_subscription_id: provider_subscription_id,
+          expected_store_id: store_id,
+          expected_test_mode: test_mode?
+        )
+      end
+
       def inspect
         "#<#{self.class.name} configured=true>"
       end

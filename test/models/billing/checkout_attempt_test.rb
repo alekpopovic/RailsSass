@@ -54,4 +54,23 @@ class Billing::CheckoutAttemptTest < ActiveSupport::TestCase
     assert_not attempt.valid?
     assert_includes attempt.errors[:failure_code], "must be present"
   end
+
+  test "webhook may complete an attempt whose checkout response remained unknown" do
+    organization, membership = create_billing_tenant(prefix: "checkout-webhook-completion")
+    attempt = create_billing_checkout_attempt(
+      organization: organization,
+      membership: membership,
+      status: :creation_unknown
+    )
+    completed_at = Time.current
+
+    attempt.update!(
+      status: :completed,
+      completed_at: completed_at,
+      token_consumed_at: completed_at
+    )
+
+    assert_predicate attempt, :status_completed?
+    assert_nil attempt.provider_checkout_id
+  end
 end

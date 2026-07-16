@@ -46,6 +46,19 @@ class Entitlements::SubscriptionAccessPolicyTest < ActiveSupport::TestCase
     assert_equal :subscription_not_current, archived.reason_code
   end
 
+  test "fails closed while a provider snapshot is unresolved or invalid" do
+    organization, = create_billing_tenant(prefix: "entitlement-policy-sync")
+    subscription = create_billing_subscription(organization: organization)
+
+    %w[pending mapping_error invalid].each do |sync_state|
+      subscription.sync_state = sync_state
+      result = policy(subscription).call
+
+      assert_predicate result, :denied?
+      assert_equal :subscription_sync_invalid, result.reason_code
+    end
+  end
+
   test "allows cancelled subscriptions only before the exact end boundary" do
     organization, = create_billing_tenant(prefix: "entitlement-policy-cancelled")
     subscription = create_billing_subscription(organization: organization)

@@ -1,9 +1,11 @@
 require "test_helper"
 require "openssl"
 require "stringio"
+require_relative "../support/billing_test_helper"
 
 class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
   include ActiveJob::TestHelper
+  include BillingTestHelper
 
   SECRET = "synthetic-webhook-secret"
   CUSTOMER_SENTINEL = "private-customer@example.test"
@@ -48,6 +50,7 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
     assert_equal event.provider_resource_id, event.external_resource_id
     assert_equal event.snapshot, event.payload
     assert_equal event.attempt_count, event.attempts_count
+    assert_equal Billing::WebhookEvent::CURRENT_INGRESS_VERSION, event.ingress_version
     assert_equal "active", event.payload.fetch("status")
     assert_not_includes event.payload.to_json, CUSTOMER_SENTINEL
     assert_predicate event, :status_received?
@@ -119,6 +122,68 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
     assert_equal 1, Billing::WebhookEvent.where(body_sha256: Digest::SHA256.hexdigest(body)).count
   end
 
+  test "a valid signed resend re-screens and grants provenance to an exact legacy receipt" do
+    user = create_test_user(email_address: "legacy-resend-#{SecureRandom.hex(4)}@example.test")
+    organization, = create_test_organization_with_owner(
+      owner: user,
+      name: "Legacy Webhook Organization",
+      slug: "legacy-webhook-#{SecureRandom.hex(4)}"
+    )
+    plan_price = create_test_plan_price(plan: create_test_plan)
+    now = Time.current.change(usec: 0)
+    nonce = Billing::Checkouts::Token.generate_nonce
+    expires_at = now + 15.minutes
+    token = Billing::Checkouts::Token.issue(
+      organization: organization,
+      plan_price: plan_price,
+      user: user,
+      nonce: nonce,
+      expires_at: expires_at
+    )
+    payload = JSON.parse(subscription_body("subscription_created", status: "active"))
+    payload.fetch("meta")["custom_data"] = { "checkout_attempt_token" => token }
+    body = JSON.generate(payload)
+    post_signed(body)
+    assert_response :ok
+
+    event = Billing::WebhookEvent.order(:id).last
+    legacy_payload = event.payload.slice(
+      "event_name",
+      "resource_type",
+      "provider_resource_id",
+      "provider_subscription_id",
+      "provider_store_id",
+      "test_mode",
+      "checkout_token_digest"
+    )
+    Billing::WebhookEvent.where(id: event.id).update_all(
+      ingress_version: nil,
+      payload: legacy_payload,
+      snapshot: legacy_payload,
+      enqueued_at: event.enqueued_at
+    )
+    clear_enqueued_jobs
+
+    assert_no_difference -> { Billing::WebhookEvent.count } do
+      assert_enqueued_with(job: Billing::ProcessWebhookJob, args: [ event.id ], queue: "billing") do
+        post_signed(body)
+      end
+    end
+
+    assert_response :ok
+    event.reload
+    assert_equal Billing::WebhookEvent::CURRENT_INGRESS_VERSION, event.ingress_version
+    assert_equal organization.public_id, event.payload.fetch("checkout_organization_public_id")
+    assert_equal plan_price.id, event.payload.fetch("checkout_plan_price_id")
+    assert_equal user.id, event.payload.fetch("checkout_user_id")
+    assert_equal expires_at.utc.iso8601(6), event.payload.fetch("checkout_expires_at")
+    assert_equal Billing::Checkouts::Token.digest_nonce(nonce),
+      event.payload.fetch("checkout_token_digest")
+    assert_not_includes event.payload.to_json, token
+    assert_not_includes event.payload.to_json, nonce
+    assert event.enqueued_at
+  end
+
   test "enqueue failure keeps a durable recoverable receipt and still acknowledges delivery" do
     body = valid_body
 
@@ -161,6 +226,150 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
     assert_equal "unsupported_event", event.payload.fetch("reason_code")
     assert event.processed_at
     assert_nil event.enqueued_at
+  end
+
+  test "supported lifecycle and payment events are handed off with the correct subscription identity" do
+    bodies = [
+      subscription_body("subscription_created", status: "active"),
+      subscription_body("subscription_expired", status: "expired"),
+      payment_body("subscription_payment_success", invoice_id: "invoice_success", status: "paid"),
+      payment_body("subscription_payment_failed", invoice_id: "invoice_failed", status: "pending"),
+      payment_body("subscription_payment_recovered", invoice_id: "invoice_recovered", status: "paid")
+    ]
+
+    assert_difference -> { Billing::WebhookEvent.count }, bodies.length do
+      assert_enqueued_jobs bodies.length do
+        bodies.each do |body|
+          post_signed(body)
+          assert_response :ok
+        end
+      end
+    end
+
+    expired_event = Billing::WebhookEvent.find_by!(event_name: "subscription_expired")
+    assert_equal "subscriptions", expired_event.external_resource_type
+    assert_equal "sub_123", expired_event.payload.fetch("provider_subscription_id")
+    assert_equal "expired", expired_event.payload.fetch("status")
+
+    payment_events = Billing::WebhookEvent.where(event_name: Billing::Webhooks::Receive::PAYMENT_EVENTS)
+    assert_equal 3, payment_events.count
+    payment_events.each do |event|
+      assert_equal "subscription-invoices", event.external_resource_type
+      assert_equal "sub_123", event.payload.fetch("provider_subscription_id")
+      assert event.payload.key?("payment_status")
+      assert_not event.payload.key?("status")
+      assert_predicate event, :status_received?
+    end
+  end
+
+  test "payment events with the wrong resource shape are quarantined without handoff" do
+    wrong_type = JSON.parse(subscription_body("subscription_payment_success", status: "active"))
+    missing_subscription = JSON.parse(
+      payment_body("subscription_payment_failed", invoice_id: "invoice_missing_subscription", status: "pending")
+    )
+    missing_subscription.fetch("data").fetch("attributes").delete("subscription_id")
+
+    assert_difference -> { Billing::WebhookEvent.count }, 2 do
+      assert_no_enqueued_jobs do
+        [ wrong_type, missing_subscription ].each do |payload|
+          post_signed(JSON.generate(payload))
+          assert_response :ok
+        end
+      end
+    end
+
+    events = Billing::WebhookEvent.order(id: :desc).limit(2)
+    assert events.all?(&:status_quarantined?)
+    assert events.all? { |event| event.error_code == "invalid_subscription_resource" }
+  end
+
+  test "verified checkout token claims are retained without persisting the token or nonce" do
+    user = create_test_user(email_address: "webhook-context-#{SecureRandom.hex(4)}@example.test")
+    organization, = create_test_organization_with_owner(
+      owner: user,
+      name: "Webhook Context Organization",
+      slug: "webhook-context-#{SecureRandom.hex(4)}"
+    )
+    plan_price = create_test_plan_price(plan: create_test_plan)
+    now = Time.current.change(usec: 0)
+    nonce = Billing::Checkouts::Token.generate_nonce
+    expires_at = now + 15.minutes
+    token = Billing::Checkouts::Token.issue(
+      organization: organization,
+      plan_price: plan_price,
+      user: user,
+      nonce: nonce,
+      expires_at: expires_at
+    )
+
+    %w[checkout_attempt_token checkout_context].each do |custom_key|
+      payload = JSON.parse(subscription_body("subscription_created", status: "active"))
+      payload.fetch("meta")["custom_data"] = { custom_key => token }
+
+      post_signed(JSON.generate(payload))
+      assert_response :ok
+    end
+
+    events = Billing::WebhookEvent.where(event_name: "subscription_created").order(:id).last(2)
+    assert_equal 2, events.size
+    events.each do |event|
+      snapshot = event.payload
+      assert_equal Billing::Checkouts::Token.digest_nonce(nonce), snapshot.fetch("checkout_token_digest")
+      assert_equal organization.public_id, snapshot.fetch("checkout_organization_public_id")
+      assert_equal plan_price.id, snapshot.fetch("checkout_plan_price_id")
+      assert_equal user.id, snapshot.fetch("checkout_user_id")
+      assert_equal expires_at.utc.iso8601(6), snapshot.fetch("checkout_expires_at")
+      assert_not_includes snapshot.to_json, token
+      assert_not_includes snapshot.to_json, nonce
+    end
+  end
+
+  test "invalid or ambiguous checkout context is not retained as provider authority" do
+    payload = JSON.parse(subscription_body("subscription_created", status: "active"))
+    payload.fetch("meta")["custom_data"] = {
+      "checkout_attempt_token" => "invalid-signed-context",
+      "checkout_context" => "conflicting-signed-context"
+    }
+
+    assert_difference -> { Billing::WebhookEvent.count }, 1 do
+      assert_enqueued_jobs 1 do
+        post_signed(JSON.generate(payload))
+      end
+    end
+
+    assert_response :ok
+    snapshot = Billing::WebhookEvent.order(:id).last.payload
+    assert_not snapshot.keys.any? { |key| key.start_with?("checkout_") }
+    assert_not_includes snapshot.to_json, "invalid-signed-context"
+    assert_not_includes snapshot.to_json, "conflicting-signed-context"
+  end
+
+  test "expired signed checkout context is not retained as provider authority" do
+    user = create_test_user(email_address: "expired-context-#{SecureRandom.hex(4)}@example.test")
+    organization, = create_test_organization_with_owner(
+      owner: user,
+      name: "Expired Context Organization",
+      slug: "expired-context-#{SecureRandom.hex(4)}"
+    )
+    plan_price = create_test_plan_price(plan: create_test_plan)
+    issued_at = Time.current.change(usec: 0)
+    token = Billing::Checkouts::Token.issue(
+      organization: organization,
+      plan_price: plan_price,
+      user: user,
+      expires_at: issued_at + 1.minute
+    )
+    payload = JSON.parse(subscription_body("subscription_created", status: "active"))
+    payload.fetch("meta")["custom_data"] = { "checkout_attempt_token" => token }
+
+    travel_to(issued_at + 2.minutes) do
+      post_signed(JSON.generate(payload))
+    end
+
+    assert_response :ok
+    snapshot = Billing::WebhookEvent.order(:id).last.payload
+    assert_not snapshot.keys.any? { |key| key.start_with?("checkout_") }
+    assert_not_includes snapshot.to_json, token
   end
 
   test "signed invalid envelope is quarantined without processing" do
@@ -278,8 +487,12 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
 
   private
     def valid_body
+      subscription_body("subscription_updated", status: "active")
+    end
+
+    def subscription_body(event_name, status:)
       JSON.generate(
-        "meta" => { "event_name" => "subscription_updated" },
+        "meta" => { "event_name" => event_name },
         "data" => {
           "type" => "subscriptions",
           "id" => "sub_123",
@@ -288,12 +501,32 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
             "customer_id" => 62_002,
             "product_id" => 63_003,
             "variant_id" => 64_004,
-            "status" => "active",
+            "status" => status,
             "test_mode" => true,
             "renews_at" => "2026-08-16T00:00:00Z",
             "updated_at" => "2026-07-16T00:00:00Z",
             "user_email" => CUSTOMER_SENTINEL,
             "urls" => { "customer_portal" => "https://provider.example/signed" }
+          }
+        }
+      )
+    end
+
+    def payment_body(event_name, invoice_id:, status:)
+      JSON.generate(
+        "meta" => { "event_name" => event_name },
+        "data" => {
+          "type" => "subscription-invoices",
+          "id" => invoice_id,
+          "attributes" => {
+            "store_id" => 61_001,
+            "subscription_id" => "sub_123",
+            "customer_id" => 62_002,
+            "status" => status,
+            "test_mode" => true,
+            "updated_at" => "2026-07-16T00:00:00Z",
+            "user_email" => CUSTOMER_SENTINEL,
+            "urls" => { "invoice_url" => "https://provider.example/signed" }
           }
         }
       )

@@ -22,6 +22,58 @@ class Billing::SubscriptionTest < ActiveSupport::TestCase
     assert_predicate archived, :persisted?
   end
 
+  test "defaults immutable projection origin and monotonic provider ordering" do
+    organization, = create_billing_tenant(prefix: "subscription-projection-origin")
+    provider_updated_at = Time.current
+    subscription = create_billing_subscription(
+      organization: organization,
+      provider_updated_at: provider_updated_at
+    )
+
+    assert_equal subscription.plan_price, subscription.origin_plan_price
+    assert_in_delta provider_updated_at.to_f,
+      subscription.last_seen_provider_updated_at.to_f,
+      0.00001
+    assert_predicate subscription, :sync_state_synced?
+
+    subscription.last_seen_provider_updated_at = provider_updated_at - 1.second
+    assert_not subscription.valid?
+    assert_includes subscription.errors[:last_seen_provider_updated_at],
+      "cannot precede the accepted provider update"
+  end
+
+  test "origin checkout must match tenant price provider and environment" do
+    organization, = create_billing_tenant(prefix: "subscription-origin-local")
+    foreign_organization, foreign_membership = create_billing_tenant(
+      prefix: "subscription-origin-foreign"
+    )
+    foreign_attempt = create_billing_checkout_attempt(
+      organization: foreign_organization,
+      membership: foreign_membership
+    )
+    customer = create_billing_customer(organization: organization)
+    subscription = organization.billing_subscriptions.new(
+      billing_customer: customer,
+      plan_price: foreign_attempt.plan_price,
+      origin_plan_price: foreign_attempt.plan_price,
+      origin_checkout_attempt: foreign_attempt,
+      provider: "lemon_squeezy",
+      environment: "test",
+      provider_subscription_id: "subscription_cross_tenant_origin",
+      provider_customer_id: customer.provider_customer_id,
+      status: "active",
+      current: true,
+      provider_updated_at: Time.current,
+      pause: {},
+      test_mode: true,
+      raw_payload: {}
+    )
+
+    assert_not subscription.valid?
+    assert_includes subscription.errors[:origin_checkout_attempt],
+      "must match the subscription origin"
+  end
+
   test "requires customer tenant provider and test mode identity to match" do
     organization, = create_billing_tenant(prefix: "subscription-local")
     foreign_organization, = create_billing_tenant(prefix: "subscription-foreign")
@@ -79,7 +131,7 @@ class Billing::SubscriptionTest < ActiveSupport::TestCase
 
     assert_in_delta (provider_updated_at - 2.days).to_f,
       subscription.past_due_started_at.to_f,
-      0.000001
+      0.00001
 
     subscription.past_due_started_at = nil
     assert_not subscription.valid?

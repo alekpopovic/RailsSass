@@ -41,6 +41,19 @@ class Billing::SweepWebhookEventsJobTest < ActiveJob::TestCase
     end
   end
 
+  test "does not enqueue legacy rows without current signed-ingress provenance" do
+    now = Time.current
+    event = create_billing_webhook_event(
+      received_at: now - 2.minutes,
+      verified_at: now - 2.minutes,
+      ingress_version: nil
+    )
+
+    assert_no_enqueued_jobs do
+      Billing::SweepWebhookEventsJob.perform_now(now: now)
+    end
+  end
+
   test "redispatches a stale received receipt so a later processor release can claim it" do
     now = Time.current
     event = create_billing_webhook_event(
@@ -57,7 +70,7 @@ class Billing::SweepWebhookEventsJobTest < ActiveJob::TestCase
     assert_predicate event, :status_received?
   end
 
-  test "processing job receives only the global receipt id and does not mutate billing state" do
+  test "processing job delegates only the durable global receipt id to the processor" do
     now = Time.current
     event = create_billing_webhook_event(
       received_at: now - 1.second,
@@ -65,12 +78,52 @@ class Billing::SweepWebhookEventsJobTest < ActiveJob::TestCase
       enqueued_at: now
     )
 
-    assert_no_difference -> { Billing::Subscription.count } do
-      Billing::ProcessWebhookJob.perform_now(event.id)
+    calls = []
+    processor = lambda do |**attributes|
+      calls << attributes
+      Billing::Webhooks::Processor::Result.new(
+        status: :noop,
+        event: event,
+        subscription: nil
+      )
     end
 
-    assert_predicate event.reload, :status_received?
-    assert_nil event.processing_started_at
-    assert_nil event.processed_at
+    original_call = Billing::Webhooks::Processor.method(:call)
+    Billing::Webhooks::Processor.define_singleton_method(:call, processor)
+    begin
+      Billing::ProcessWebhookJob.perform_now(event.id)
+    ensure
+      Billing::Webhooks::Processor.define_singleton_method(:call, original_call)
+    end
+
+    assert_equal [ { webhook_event_id: event.id } ], calls
+  end
+
+  test "sweeper redispatches abandoned processing and recoverable failed events" do
+    now = Time.current
+    processing_event = create_billing_webhook_event(
+      status: :processing,
+      received_at: now - 8.hours,
+      verified_at: now - 8.hours,
+      processing_started_at: now - Billing::Webhooks::Processor::PROCESSING_LEASE - 1.second,
+      attempt_count: 1
+    )
+    failed_event = create_billing_webhook_event(
+      status: :failed,
+      received_at: now - 8.hours,
+      verified_at: now - 8.hours,
+      processing_started_at: now - 8.hours,
+      processed_at: now - 7.hours,
+      failed_at: now - 7.hours,
+      error_code: "provider_temporarily_unavailable",
+      attempt_count: 1,
+      snapshot: { "reason_code" => "provider_temporarily_unavailable" }
+    )
+
+    assert_enqueued_with(job: Billing::ProcessWebhookJob, args: [ processing_event.id ]) do
+      assert_enqueued_with(job: Billing::ProcessWebhookJob, args: [ failed_event.id ]) do
+        Billing::SweepWebhookEventsJob.perform_now(now: now)
+      end
+    end
   end
 end

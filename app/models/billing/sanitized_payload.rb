@@ -15,6 +15,7 @@ module Billing
       /(?:\A|_)card_number\z/,
       /_url\z/
     ].freeze
+    SAFE_DERIVED_KEYS = %w[checkout_token_digest].freeze
 
     class << self
       def validate(record, attribute, allowed_keys:)
@@ -68,6 +69,8 @@ module Billing
         end
 
         def sensitive_key?(key)
+          return false if SAFE_DERIVED_KEYS.include?(key)
+
           SENSITIVE_KEYS.include?(key) ||
             SENSITIVE_KEY_PATTERNS.any? { |pattern| pattern.match?(key) }
         end

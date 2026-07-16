@@ -1,14 +1,17 @@
 module Billing
   class WebhookEvent < ApplicationRecord
+    CURRENT_INGRESS_VERSION = 1
     DIGEST_PATTERN = /\A[0-9a-f]{64}\z/
     PROVIDER_ID_PATTERN = /\A\S+\z/
     CODE_PATTERN = /\A[a-z][a-z0-9_]*\z/
     RESOURCE_TYPE_PATTERN = /\A[a-z][a-z0-9_-]*\z/
     SNAPSHOT_KEYS = %w[
-      checkout_token_digest ends_at event_name provider_customer_id provider_product_id
-      provider_resource_id provider_store_id provider_subscription_id
+      card_brand card_last_four checkout_expires_at checkout_organization_public_id
+      checkout_plan_price_id checkout_token_digest checkout_user_id ends_at event_name
+      mode pause payment_status provider_created_at provider_customer_id
+      provider_product_id provider_resource_id provider_store_id provider_subscription_id
       provider_updated_at provider_variant_id reason_code renews_at resource_type
-      status test_mode trial_ends_at
+      resumes_at status test_mode trial_ends_at
     ].freeze
 
     belongs_to :organization, optional: true, inverse_of: :billing_webhook_events
@@ -41,7 +44,8 @@ module Billing
       :body_sha256,
       :provider_event_id,
       :received_at,
-      :verified_at
+      :verified_at,
+      :ingress_version
 
     validates :provider, inclusion: { in: %w[lemon_squeezy] }
     validates :fingerprint,
@@ -82,6 +86,9 @@ module Billing
     validates :attempts_count,
       numericality: { only_integer: true, greater_than_or_equal_to: 0 }
     validates :received_at, :verified_at, presence: true
+    validates :ingress_version,
+      inclusion: { in: [ CURRENT_INGRESS_VERSION ] },
+      allow_nil: true
     validates :test_mode, inclusion: { in: [ true, false ] }, allow_nil: true
     validate :test_mode_matches_environment
     validate :lifecycle_is_consistent

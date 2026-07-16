@@ -119,6 +119,7 @@ module BillingTestHelper
       fingerprint: Digest::SHA256.hexdigest(SecureRandom.hex(32)),
       status: "received",
       test_mode: true,
+      ingress_version: Billing::WebhookEvent::CURRENT_INGRESS_VERSION,
       received_at: now,
       verified_at: now,
       snapshot: {}

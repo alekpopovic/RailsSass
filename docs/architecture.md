@@ -441,7 +441,7 @@ controls but never replace request authorization.
 - `PlanPrice` is catalog/display data and a Billing input, not an access grant.
   Checkout requires an immutable exact `Billing::ProviderPriceMapping` for the
   configured test/live environment and store. The mapping and attempt remain
-  non-authoritative; future verified webhook projection is the only path that
+  non-authoritative; verified webhook projection is the only path that
   may change a subscription.
 - Service objects own multi-row state transitions. Authorization-sensitive
   invariants do not depend on uncontrolled Active Record callbacks.
@@ -465,21 +465,22 @@ operational reconciliation. The webhook HTTP endpoint performs bounded
 verification and durable receipt, then acknowledges quickly. Business
 processing occurs asynchronously.
 
-The current ingress milestone enqueues only the global event ID and records
-`enqueued_at`. Its handoff job intentionally leaves the event in `received` and
-cannot mutate a subscription. The periodic sweeper retries receipts whose
-initial enqueue failed and redispatches still-`received` handoffs after six
-hours, so receipts accepted before the processor release are not stranded. A
-later projection worker will claim the verified row idempotently, establish
-tenant context after provider-locator resolution, and own all subscription
-mutation.
+Ingress enqueues only the global event ID and records `enqueued_at`. The worker
+idempotently claims a current-provenance receipt, refetches one fixed provider
+subscription resource, resolves a candidate through the provider locator, then
+sets `Current.organization` and reloads every tenant row through its
+associations. The periodic sweeper recovers failed initial enqueue, stale
+`received`/`processing` leases, and bounded retryable failures. Only this
+verified-event-rooted worker may mutate subscription state.
 
 Job rules:
 
 - Enqueue only after the receipt transaction commits.
 - Make every job idempotent and safe to retry.
 - Use exponential backoff with jitter for network/429/5xx failures.
-- Quarantine permanent provider mapping or validation failures and alert.
+- Record permanent provider mapping or projection validation failures as
+  redacted `failed` events and alert; ingress-envelope mismatches remain
+  `quarantined` without projection.
 - Re-enqueue stale `received`/`processing` webhook rows with a periodic sweeper.
 - A reconciliation job may detect and report drift, but it cannot independently
   mutate local subscription state. Repair is rooted in a verified webhook
@@ -514,10 +515,11 @@ framework logging. None of these outcomes mutates local subscription state or
 grants access. WebMock disables non-local network access in the test
 environment, and adapter examples stub every provider response.
 
-`Billing::LemonSqueezy::WebhookVerifier` consumes exact raw request bytes and a
-versioned credential, verifies HMAC-SHA256 in constant time, and returns a
-validated envelope. It is a planned component: parsing and tenant resolution
-will happen only after verification when signed ingress is implemented.
+`Billing::Webhooks::SignatureVerifier` consumes exact raw request bytes and the
+configured credential and verifies HMAC-SHA256 in constant time. Only then does
+`Billing::Webhooks::Receive` parse and retain a screened envelope. Tenant
+resolution remains asynchronous and occurs only after current ingress
+provenance plus provider refetch validation.
 
 Provider DTOs are mapped into local models. JSON:API payload structure does not
 leak into product modules or Pundit policies.

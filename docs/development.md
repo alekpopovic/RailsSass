@@ -120,8 +120,10 @@ HTTPS checkout hostname. It never blindly retries the non-idempotent POST.
 Signed webhook delivery is accepted at `POST /webhooks/lemon_squeezy`. The
 isolated endpoint verifies `X-Signature` against exact request bytes before JSON
 parsing, stores only a screened diagnostic envelope, and hands the receipt ID
-to Solid Queue. The current handoff job does not project subscriptions;
-provider portal operations and subscription projection remain unimplemented.
+to Solid Queue. The asynchronous worker refetches the fixed subscription
+resource and may project it only after verified checkout/provider correlation,
+exact test/live mapping, tenant re-establishment, and row locking. Provider
+portal operations and operational reconciliation remain unimplemented.
 The test helper enables WebMock globally and blocks all non-local network
 traffic while allowing localhost for Rails/system tests; provider tests must
 stub every request with synthetic data.
@@ -132,8 +134,10 @@ stub every request with synthetic data.
    `LEMON_SQUEEZY_WEBHOOK_SECRET` in the ignored `.env`, then restart Rails.
 2. Expose an HTTPS URL that terminates at
    `POST /webhooks/lemon_squeezy`; never place the secret in the callback URL.
-3. Configure the Lemon test-mode webhook with the same signing secret and only
-   the `subscription_created` and `subscription_updated` events.
+3. Configure the Lemon test-mode webhook with the same signing secret and the
+   `subscription_created`, `subscription_updated`, `subscription_expired`,
+   `subscription_payment_success`, `subscription_payment_failed`, and
+   `subscription_payment_recovered` events.
 4. Keep `bin/jobs` running when using the production/Solid Queue adapter.
 
 The endpoint returns `401` for a missing/invalid signature, `400` for signed
@@ -161,8 +165,9 @@ entitlements.
 
 The pending page displays local attempt/subscription state only. A provider API
 success or return redirect never changes the current subscription, effective
-plan, or entitlements; that remains reserved for future verified webhook
-projection. Automated tests continue to block every unstubbed external request.
+plan, or entitlements; only asynchronous processing rooted in a verified
+webhook may do so. Automated tests continue to block every unstubbed external
+request.
 
 ## Internal platform administration
 

@@ -729,24 +729,23 @@ environment-qualified `ProviderPriceMapping`, a checkout-token
 `ProviderLocator`, and the strict `Billing::LemonSqueezy::Client`. It also has a
 read-only Entitlements policy/resolver, audited mapping administration, and an
 owner/billing checkout/pending controller. It still has no subscription
-processor/projection writer, subscription-ID locator transition, or provider
-portal. `raw_payload` is restricted to a bounded screened
+portal or plan-change command writer. The verified webhook processor and
+subscription-ID locator binding are implemented. `raw_payload` is restricted to a bounded screened
 diagnostic snapshot and never means a raw request or complete provider payload.
 Subscription history is one-way and deletion-protected. The event ledger keeps
 a mandatory content fingerprint plus a unique optional provider event identity;
 Lemon's lack of a documented delivery ID leaves the fingerprint authoritative
 for delivery idempotency.
 
-The signed-ingress checkpoint now adds the isolated webhook verifier/controller,
+The signed-ingress checkpoint provides the isolated webhook verifier/controller,
 exact-body digest, sanitized durable receipt, Solid Queue ID-only handoff, and
-enqueue-recovery sweeper. The current handoff job is intentionally not the
-subscription processor and leaves rows in `received`; therefore the projection
-writer, subscription-ID locator transition, and provider portal remain open.
+enqueue-recovery sweeper. PR-14B's processor claims that handoff and projects
+verified state; the provider portal remains open.
 
 The remaining PRs extend these tables through backward-compatible migrations
 rather than recreating them. Checkout/API responses remain unable to edit local
-subscription state; only PR-14B's later verified-webhook-rooted service may do
-so. WebMock blocks non-local network access throughout automated tests.
+subscription state; only PR-14B's verified-webhook-rooted service may do so.
+WebMock blocks non-local network access throughout automated tests.
 
 ### PR-11: Add environment-qualified price mapping and checkout persistence —
 implemented checkpoint
@@ -820,7 +819,7 @@ Scope:
 - Add services for pending-attempt serialization and event claiming/state
   transition, with no external endpoint.
 - Define filtered provider envelope DTO and log filtering.
-- Extend the existing pure local subscription policy with future verified
+- Extend the existing pure local subscription policy with verified
   synchronization/mapping preconditions without duplicating its status matrix.
 
 Migrations: subscription, provider-locator, and webhook-event tables; exact
@@ -863,10 +862,12 @@ Scope:
   production-hardening follow-up.
 - Enforce a 256 KiB application body limit and validate content type. Use signed
   `meta.event_name` as authority, ignore the unsigned header for classification,
-  and validate the exact created+updated processing allowlist, resource type,
+  and validate the created/updated/expired subscription-resource allowlist plus
+  payment success/failed/recovered subscription-invoice triggers, resource type,
   store, and environment/test mode. Edge rate limiting remains a deployment
   hardening item.
-- Hash allowlisted checkout custom token after HMAC; persist only its digest.
+- Verify the allowlisted checkout custom token after HMAC; persist only its nonce
+  digest and bounded verified correlation claims, never the raw token or nonce.
 - Fingerprint only provider + configured environment + exact raw body; exclude
   signature and unsigned headers so a mutated header cannot create a new event.
 - Implement the ingress HTTP outcomes: 400/401/413/415, durable 200
@@ -874,13 +875,15 @@ Scope:
   configuration failure. The deployment edge owns 429 enforcement.
 - Compute both the exact body digest and environment-qualified fingerprint and
   insert only the filtered event. The public route, durable ID-only handoff,
-  and recovery sweeper are enabled; subscription projection remains absent.
+  and recovery sweeper are enabled. The later PR-14B checkpoint consumes the
+  durable handoff; ingress itself still cannot unlock access.
 
 Migrations: additive receipt identity/lifecycle fields, named checks, exact-body
 unique index, and enqueue-recovery index.
 
 Implemented tests: valid real HMAC, byte/signature mutation, missing signature,
 signed malformed JSON, size/content-type bounds, unsupported event, duplicate,
+subscription/payment resource classification, verified-context sanitization,
 enqueue failure+sweeper recovery, requested ledger constraints, and log
 redaction. Previous-key rotation, deployment 429 behavior, and full provider
 contract fixtures remain production-hardening evidence.
@@ -888,7 +891,7 @@ contract fixtures remain production-hardening evidence.
 Acceptance: no subscription row can be changed by this PR; ingress receipt and
 queue handoff alone never unlock access.
 
-### PR-14A: Add the Lemon subscription client and DTO contract
+### PR-14A: Add the Lemon subscription client and DTO contract — implemented checkpoint
 
 Depends on: PR-13.
 
@@ -905,21 +908,20 @@ Scope:
   normalized snapshot without PII/signed URLs.
 - Classify timeout/429/404-propagation/5xx as retryable and auth/malformed as
   permanent, with redacted errors.
-- Add a job shell that can fetch/validate a claimed verified event but cannot
-  write `Billing::Subscription`; production ingress remains disabled.
+- Add a strict subscription snapshot DTO used by the verified PR-14B writer;
+  the low-level client itself never writes local subscription state.
 
 Migrations: none expected; any normalized snapshot shape field is additive,
 constrained, and justified in this PR.
 
-Tests: exact URL/origin/headers, DTO field allowlist, response mismatch, payload
-URL SSRF attempt, oversized/truncated response, timeouts, 429, bounded 404, 5xx,
-permanent failures, rate-limit handling, and log redaction. Assert zero
-subscription mutations.
+Implemented tests cover exact URL/origin/headers, DTO field allowlist, response
+mismatch, fixed-path behavior, timestamps, pause/card bounds, timeouts, 429,
+5xx, permanent failures, rate-limit handling, and log redaction.
 
-Acceptance: provider behavior is contract-tested but no subscription mutation
-or production projection enablement exists.
+Acceptance: provider HTTP/DTO behavior is contract-tested and all mutation is
+delegated to the verified-event projector.
 
-### PR-14B: Add webhook-rooted tenant resolution and projection
+### PR-14B: Add webhook-rooted tenant resolution and projection — implemented checkpoint
 
 Depends on: PR-14A.
 
@@ -928,8 +930,9 @@ Depends on: PR-14A.
 Scope:
 
 - Replace the existing read-only handoff job with the idempotent claim/
-  projection worker while keeping provider registration restricted to
-  created+updated.
+  projection worker for the ingress allowlist. Payment invoice events supply
+  only a subscription ID for a fixed current-resource refetch; they never map
+  invoice status directly into authorization state.
 - Resolve candidates only through `Billing::ProviderLocator` by external
   subscription ID or checkout-token digest, then reload every tenant row through
   `Current.organization`.
@@ -940,38 +943,41 @@ Scope:
   event completion, and expired-current supersession.
 - Implement `last_seen_provider_updated_at`, stale ignore, equal conflict,
   fail-closed existing-subscription `mapping_error`/`invalid`, and safe recovery.
-- A first unknown mapping creates no subscription; a second non-terminal
-  subscription quarantines; trusted first-correlation still consumes the
-  checkout locator and creates an unresolved subscription locator for safe
-  replay. Superseded rows never reactivate.
+- A first unknown mapping creates no subscription or grant and retains
+  unresolved checkout authority for controlled remediation; a second
+  non-terminal subscription fails closed. Superseded rows never reactivate.
 
 Migrations: only focused additive constraints/indexes discovered necessary
 during projection, each with direct database tests.
 
-Tests:
+Implemented tests:
 
-- locator candidate plus tenant reload and every token/store/price/environment
+- locator candidate plus tenant reload, signed-context and exact variant
   mismatch;
-- delayed expired-attempt success, post-expiry provider creation denial, and
-  competing old/new attempts;
-- duplicate, stale, equal-conflicting, reordered, and concurrent events;
-- expired-current atomic supersession and later superseded event isolation;
-- unknown/malformed first vs existing subscription fail-closed behavior;
-- verified same-snapshot replay recovers only after a mapping/code repair and
-  cannot bypass timestamp or fingerprint conflict checks;
-- every matrix transition including recovery/plan change;
+- duplicate/equal no-op, stale/reordered events, and row-lock/database
+  concurrency guards;
+- expired-current atomic supersession and non-terminal-current rejection;
+- unknown first/existing status or variant fail-closed behavior;
+- active, past-due-cycle, cancelled-before-end, expired, and recovery
+  transitions;
 - all tenant mutations occur through `Current.organization`;
 - enqueue failure+sweeper recovery.
 
-Acceptance: enable test-mode provider webhook only after automated suite is
-green; complete dashboard resend/simulation contract test with sanitized output.
+Provider dashboard simulation, competing remote-checkout drills, and an
+operator-triggered verified-event replay command remain launch/follow-up work;
+none is a second runtime mutation authority.
+
+Checkpoint acceptance: the async worker, exact subscription DTO, locator
+binding, monotonic projection, fail-closed entitlement state, retry/sweeper
+behavior, and status/ordering tests are implemented. Provider dashboard
+simulation remains operational launch evidence.
 
 ### PR-15: Add central product authorization and a thin vertical slice — implemented checkpoint
 
 Depends on: PR-08, PR-10B, PR-12, PR-14B, and chosen initial product contract.
-The implemented application checkpoint uses synthetic/local catalog and
-subscription projection state; it does not waive the still-unimplemented
-verified Billing projection or approved production catalog inputs.
+The implemented application checkpoint uses local catalog and verified/local
+subscription projection state; it does not waive approved production catalog
+inputs or provider launch drills.
 
 **Goal:** enforce the complete entitlement AND permission decision on a real
 server-side action.
@@ -1094,8 +1100,8 @@ fallback.
 Checkpoint acceptance: implementation and model/service/client/request/policy
 coverage are present, including a dedicated two-thread checkout race test and a
 browser test for the eligible CTA plus local-only pending status. A test-mode
-purchase stays pending until the future PR-14B processor consumes a verified
-webhook; only then may the local product gate change on a later request.
+purchase stays pending until the PR-14B processor consumes a verified webhook;
+only then may the local product gate change on a later request.
 
 ### PR-17: Add subscription management portal and billing UI
 
