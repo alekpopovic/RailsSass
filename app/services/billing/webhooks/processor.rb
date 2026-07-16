@@ -8,6 +8,7 @@ module Billing
       CLOCK_SKEW = 5.minutes
       MAX_PROCESSING_ATTEMPTS = 8
       CREATED_EVENT = "subscription_created"
+      PLAN_CHANGE_EVENT = "subscription_updated"
       RETRYABLE_ERROR_CODES = %w[
         provider_temporarily_unavailable
         database_temporarily_unavailable
@@ -378,7 +379,29 @@ module Billing
           upsert_customer!(event, snapshot, expected_customer: subscription.billing_customer)
           subscription.assign_attributes(existing_snapshot_attributes(subscription, snapshot, mapping.plan_price))
           subscription.save!
+          reconcile_plan_change!(event, subscription, mapping, incoming_at)
           complete_event!(event, snapshot, subscription: subscription)
+        end
+
+        def reconcile_plan_change!(event, subscription, mapping, incoming_at)
+          return unless event.event_name == PLAN_CHANGE_EVENT
+
+          plan_change = Current.organization.billing_plan_changes
+            .open
+            .where(billing_subscription_id: subscription.id)
+            .lock
+            .first
+          return unless plan_change
+          return if plan_change.provider_updated_at && incoming_at < plan_change.provider_updated_at
+          return if mapping.plan_price_id == plan_change.from_plan_price_id
+
+          status = mapping.plan_price_id == plan_change.to_plan_price_id ? :applied : :superseded
+          plan_change.update!(
+            status: status,
+            provider_updated_at: incoming_at,
+            completed_at: @now,
+            failure_code: nil
+          )
         end
 
         def verified_checkout_context(event)

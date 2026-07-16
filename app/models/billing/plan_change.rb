@@ -1,6 +1,7 @@
 module Billing
   class PlanChange < ApplicationRecord
     CODE_PATTERN = /\A[a-z][a-z0-9_]*\z/
+    OPEN_STATUSES = %w[pending submitted creation_unknown].freeze
 
     belongs_to :organization, inverse_of: :billing_plan_changes
     belongs_to :billing_subscription,
@@ -25,6 +26,8 @@ module Billing
       failed: "failed",
       superseded: "superseded"
     }, prefix: true, validate: true
+
+    scope :open, -> { where(status: OPEN_STATUSES) }
 
     normalizes :failure_code, with: ->(value) { value.to_s.strip.presence }
 

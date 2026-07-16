@@ -112,8 +112,9 @@ Observed on 2026-07-16:
   mappings, checkout-token locators, an audited admin mapping surface, a strict
   Lemon checkout client operation, and owner/billing checkout/pending routes.
   Checkout success changes only attempt state. Verified webhook
-  ingress/projection, subscription-ID locator transitions, portal actions, and
-  production hardening remain unimplemented. A read-only Entitlements
+  ingress/projection, subscription-ID locator transitions, fresh portal actions,
+  and webhook-confirmed plan changes are implemented. Production hardening
+  remains unimplemented. A read-only Entitlements
   status/catalog resolver uses current local subscriptions and the active free
   fallback without provider I/O.
 - Product-role/permission and tenant product-assignment persistence now exist,
@@ -125,8 +126,8 @@ Observed on 2026-07-16:
   organization settings, profile pages, and checkout/pending state. The
   Analytics reference slice adds
   tenant-owned reports, exact feature/permission action mappings, atomic
-  report-limit enforcement, and CSV export. Billing synchronization, portal
-  actions, and production hardening remain unimplemented.
+  report-limit enforcement, and CSV export. Billing synchronization and portal
+  actions are implemented; production hardening remains unimplemented.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
 
@@ -728,8 +729,8 @@ The repository has constrained `Billing::Customer`, `CheckoutAttempt`,
 environment-qualified `ProviderPriceMapping`, a checkout-token
 `ProviderLocator`, and the strict `Billing::LemonSqueezy::Client`. It also has a
 read-only Entitlements policy/resolver, audited mapping administration, and an
-owner/billing checkout/pending controller. It still has no subscription
-portal or plan-change command writer. The verified webhook processor and
+  owner/billing checkout/pending controller, fresh subscription portal redirect,
+  and idempotent plan-change command writer. The verified webhook processor and
 subscription-ID locator binding are implemented. `raw_payload` is restricted to a bounded screened
 diagnostic snapshot and never means a raw request or complete provider payload.
 Subscription history is one-way and deletion-protected. The event ledger keeps
@@ -740,7 +741,8 @@ for delivery idempotency.
 The signed-ingress checkpoint provides the isolated webhook verifier/controller,
 exact-body digest, sanitized durable receipt, Solid Queue ID-only handoff, and
 enqueue-recovery sweeper. PR-14B's processor claims that handoff and projects
-verified state; the provider portal remains open.
+verified state; PR-17 adds the portal and plan-change surface without another
+subscription writer.
 
 The remaining PRs extend these tables through backward-compatible migrations
 rather than recreating them. Checkout/API responses remain unable to edit local
@@ -1103,7 +1105,7 @@ browser test for the eligible CTA plus local-only pending status. A test-mode
 purchase stays pending until the PR-14B processor consumes a verified webhook;
 only then may the local product gate change on a later request.
 
-### PR-17: Add subscription management portal and billing UI
+### PR-17: Add subscription management portal and billing UI — implemented checkpoint
 
 Depends on: PR-16.
 

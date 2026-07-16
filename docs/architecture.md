@@ -20,9 +20,10 @@ covers the implemented customer shell, audited product-assignment surface, and
 the Analytics report/action/capacity vertical slice. Owner/billing checkout,
 environment-qualified provider-price mapping, digest-only provider correlation,
 and the local pending-return page are implemented. Signed webhook
-ingress, durable receipt, and Solid Queue handoff are also implemented;
-subscription projection, provider portal operations, broader product workflows,
-and deployment hardening remain incremental milestones.
+ingress, durable receipt, Solid Queue handoff, subscription projection, fresh
+provider portal retrieval, and webhook-confirmed plan changes are also
+implemented; broader product workflows and deployment hardening remain
+incremental milestones.
 
 Related contracts:
 
@@ -66,7 +67,7 @@ flowchart LR
   Web --> Queue[(Solid Queue database)]
   Worker[Rails job process] --> Queue
   Worker --> Primary
-  Web -->|server-side checkout API; future portal API| Lemon
+  Web -->|server-side checkout, portal, and plan-change API| Lemon
   Worker -->|fixed-origin subscription fetch| Lemon
   Web --> Cache[(Solid Cache database)]
   Web --> Cable[(Solid Cable database)]
@@ -145,6 +146,13 @@ owns the organization lock, authoritative report count, and mutation
 transaction. It depends on Access rather than reading Billing projection state
 directly.
 
+For customer plan changes, the web delivery layer injects the product-owned
+`Products::PlanCompatibility` contract into the Billing command. Billing calls
+that neutral callable under its organization lock and consumes only the
+structured result; it never names or queries product resource models. This
+preserves the dependency direction while keeping compatibility preflight in the
+same locked command that records provider intent.
+
 The internal platform-admin web layer orchestrates Accounts authentication,
 Catalog mutation commands, and bounded Billing reads. It does not move catalog
 rules into controllers and does not reuse tenant controllers for cross-tenant
@@ -157,8 +165,8 @@ Keep conventional top-level Active Record aggregate names where they improve
 Rails clarity (`User`, `Organization`, `Plan`, `ProductMembership`). Namespace
 orchestration and provider-specific code by owning module.
 
-Implemented and planned layout (checkout mapping/locator/command plus webhook
-receipt/handoff are present; subscription projection, portal, and broader
+Implemented and planned layout (checkout mapping/locator, webhook
+receipt/projection, portal, and plan-change commands are present; broader
 product modules remain planned):
 
 ```text

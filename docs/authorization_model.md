@@ -21,9 +21,9 @@ persistence, tenant-scoped transactional assignment commands,
 exist. The customer product-assignment controller applies
 `ProductMembershipPolicy`, and the Analytics reference slice composes an exact
 server-owned action registry, `AnalyticsReport` policy/scope, and an atomic
-report-limit command. The application still has no production subscription
-writer; only the future verified-webhook projection may create or change paid
-local state.
+report-limit command. The verified-webhook projection is the only production
+subscription writer; portal and plan-change API responses never create or
+change paid local state.
 
 ## 2. Security invariants
 
@@ -285,6 +285,10 @@ selection metadata rather than authorization kill switches.
 - Each limit feature has a code-reviewed registry entry defining unit,
   authoritative query/counter, lock strategy, and which actions consume or
   release capacity.
+- Billing plan-change preflight consumes that product-owned registry instead of
+  querying product records. It blocks an application-originated target below
+  current usage and fails closed for an enabled limit without a registry entry;
+  this preflight is compatibility feedback, not runtime authorization.
 
 Time-window metering is not part of the MVP.
 

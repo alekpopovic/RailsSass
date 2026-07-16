@@ -26,6 +26,7 @@ module Billing
       class TimeoutError < Error; end
       class ConnectionError < Error; end
       class InvalidResponseError < Error; end
+      class VariantMismatchError < InvalidResponseError; end
       class UnexpectedResponseError < Error; end
     end
   end

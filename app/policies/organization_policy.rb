@@ -26,6 +26,8 @@ class OrganizationPolicy < ApplicationPolicy
   end
 
   alias_method :checkout?, :billing?
+  alias_method :portal?, :billing?
+  alias_method :change_plan?, :billing?
 
   private
     def active_context?

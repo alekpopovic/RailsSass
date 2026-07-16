@@ -106,6 +106,8 @@ Rails.application.routes.draw do
     get "settings", to: "settings#show", as: :settings
     patch "settings", to: "settings#update"
     get "billing", to: "billing#show", as: :billing
+    post "billing/portal", to: "billing_portals#create", as: :billing_portal
+    post "billing/plan_changes", to: "billing_plan_changes#create", as: :billing_plan_changes
     post "billing/checkouts", to: "billing_checkouts#create", as: :billing_checkouts
     get "billing/checkouts/pending", to: "billing_checkouts#pending", as: :billing_checkout_pending
   end

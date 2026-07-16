@@ -797,9 +797,10 @@ refetch trigger; invoice status is not local subscription status authority.
   redacted `failure_code`; ordinary timestamps.
 
 The source and target prices must differ. Creation-time model guards require a
-current subscription and its then-current source price; the future command must
-repeat those checks while locking rows transactionally before exposing a
-writer. A partial unique index permits at most one `pending`, `submitted`, or
+current subscription and its then-current source price; the implemented command
+repeats those checks, authorization, target mapping, and product-owned limit
+compatibility while locking rows transactionally. A partial unique index permits
+at most one `pending`, `submitted`, or
 `creation_unknown` command per subscription, while a non-partial history index
 supports all subscription commands. Checks tie terminal statuses to
 completion/failure metadata. This table records intent and provider-command

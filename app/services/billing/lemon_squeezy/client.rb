@@ -27,6 +27,10 @@ module Billing
       NUMERIC_PROVIDER_ID = /\A[1-9][0-9]*\z/
       CHECKOUT_PATH = %r{\A/checkout/custom/[a-zA-Z0-9_-]+\z}
       CHECKOUT_HOST = /\A[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\z/
+      PORTAL_PATH = "/billing"
+      PORTAL_SIGNATURE = /\A[0-9a-f]{64}\z/i
+      MAX_PORTAL_URL_BYTES = 4_096
+      MAX_PORTAL_LIFETIME_SECONDS = 25.hours.to_i
       MAX_CHECKOUT_TOKEN_BYTES = 2_048
       MAX_EMAIL_BYTES = 254
 
@@ -114,10 +118,7 @@ module Billing
       end
 
       def retrieve_subscription(provider_subscription_id:)
-        provider_subscription_id = provider_subscription_id.to_s
-        unless SAFE_PROVIDER_ID.match?(provider_subscription_id)
-          raise Errors::RequestError, "Invalid Lemon Squeezy subscription ID"
-        end
+        provider_subscription_id = subscription_id!(provider_subscription_id)
 
         request(method: :get, path: "/v1/subscriptions/#{provider_subscription_id}")
       end
@@ -134,11 +135,85 @@ module Billing
         )
       end
 
+      def retrieve_customer_portal_url(provider_subscription_id:, expected_customer_id:)
+        ensure_checkout_configuration!
+        provider_subscription_id = subscription_id!(provider_subscription_id)
+        expected_customer_id = numeric_provider_id!(expected_customer_id, "customer")
+        expected_store_id = numeric_provider_id!(store_id, "store")
+        payload = retrieve_subscription(provider_subscription_id: provider_subscription_id)
+
+        customer_portal_url(
+          payload,
+          provider_subscription_id: provider_subscription_id,
+          expected_customer_id: expected_customer_id,
+          expected_store_id: expected_store_id
+        )
+      end
+
+      def update_subscription_variant(provider_subscription_id:, variant_id:)
+        provider_subscription_id = subscription_id!(provider_subscription_id)
+        variant_id = numeric_provider_id!(variant_id, "variant")
+        expected_store_id = numeric_provider_id!(store_id, "store")
+        payload = request(
+          method: :patch,
+          path: "/v1/subscriptions/#{provider_subscription_id}",
+          body: subscription_variant_request_body(
+            provider_subscription_id: provider_subscription_id,
+            variant_id: variant_id
+          )
+        )
+        snapshot = SubscriptionSnapshot.parse(
+          payload: payload,
+          expected_subscription_id: provider_subscription_id,
+          expected_store_id: expected_store_id,
+          expected_test_mode: test_mode?
+        )
+        invalid_subscription_update_response! unless snapshot.known_status?
+        subscription_variant_mismatch! unless snapshot.provider_variant_id == variant_id
+
+        snapshot
+      end
+
       def inspect
         "#<#{self.class.name} configured=true>"
       end
 
       private
+        def subscription_variant_request_body(provider_subscription_id:, variant_id:)
+          {
+            data: {
+              type: "subscriptions",
+              id: provider_subscription_id,
+              attributes: { variant_id: variant_id.to_i }
+            }
+          }
+        end
+
+        def customer_portal_url(
+          payload,
+          provider_subscription_id:,
+          expected_customer_id:,
+          expected_store_id:
+        )
+          invalid_customer_portal_response! unless payload.is_a?(Hash)
+
+          data = payload["data"]
+          valid_data = data.is_a?(Hash) &&
+            data["type"] == "subscriptions" &&
+            data["id"] == provider_subscription_id
+          invalid_customer_portal_response! unless valid_data
+
+          attributes = data["attributes"]
+          valid_attributes = attributes.is_a?(Hash) &&
+            attributes["store_id"].to_s == expected_store_id &&
+            attributes["customer_id"].to_s == expected_customer_id &&
+            attributes["test_mode"] == test_mode? &&
+            attributes["urls"].is_a?(Hash)
+          invalid_customer_portal_response! unless valid_attributes
+
+          safe_customer_portal_url!(attributes.dig("urls", "customer_portal"))
+        end
+
         def checkout_request_body(
           store_id:,
           variant_id:,
@@ -227,6 +302,13 @@ module Billing
           raise Errors::RequestError, "Invalid Lemon Squeezy #{label} ID"
         end
 
+        def subscription_id!(value)
+          normalized = value.to_s
+          return normalized if SAFE_PROVIDER_ID.match?(normalized)
+
+          raise Errors::RequestError, "Invalid Lemon Squeezy subscription ID"
+        end
+
         def safe_return_url!(value)
           normalized = value.to_s
           uri = URI.parse(normalized)
@@ -289,6 +371,46 @@ module Billing
           invalid_checkout_response!
         end
 
+        def safe_customer_portal_url!(value)
+          normalized = value.to_s
+          uri = URI.parse(normalized)
+          valid = normalized.bytesize <= MAX_PORTAL_URL_BYTES &&
+            uri.is_a?(URI::HTTPS) &&
+            uri.host&.downcase == checkout_host &&
+            uri.port == 443 &&
+            uri.userinfo.nil? &&
+            uri.fragment.nil? &&
+            uri.path == PORTAL_PATH &&
+            uri.query.present? &&
+            !control_characters?(normalized) &&
+            valid_portal_query?(uri.query)
+          return normalized if valid
+
+          invalid_customer_portal_response!
+        rescue URI::InvalidURIError, ArgumentError
+          invalid_customer_portal_response!
+        end
+
+        def valid_portal_query?(query)
+          pairs = URI.decode_www_form(query)
+          return false if pairs.empty? || pairs.any? { |key, value|
+            key.blank? || value.blank? || control_characters?(key) || control_characters?(value)
+          }
+
+          grouped = pairs.group_by(&:first)
+          expires = grouped["expires"]
+          signatures = grouped["signature"]
+          return false unless expires&.one? && signatures&.one?
+
+          expires_at = expires.first.last
+          signature = signatures.first.last
+          return false unless /\A[0-9]+\z/.match?(expires_at) && PORTAL_SIGNATURE.match?(signature)
+
+          seconds_until_expiry = expires_at.to_i - Time.current.to_i
+          seconds_until_expiry.positive? &&
+            seconds_until_expiry <= MAX_PORTAL_LIFETIME_SECONDS
+        end
+
         def strict_iso8601_time(value)
           return invalid_checkout_response! unless value.is_a?(String)
 
@@ -300,6 +422,27 @@ module Billing
         def invalid_checkout_response!
           raise Errors::InvalidResponseError.new(
             "Lemon Squeezy returned an invalid checkout response",
+            status: 200
+          ), cause: nil
+        end
+
+        def invalid_customer_portal_response!
+          raise Errors::InvalidResponseError.new(
+            "Lemon Squeezy returned an invalid customer portal response",
+            status: 200
+          ), cause: nil
+        end
+
+        def invalid_subscription_update_response!
+          raise Errors::InvalidResponseError.new(
+            "Lemon Squeezy returned an invalid subscription update response",
+            status: 200
+          ), cause: nil
+        end
+
+        def subscription_variant_mismatch!
+          raise Errors::VariantMismatchError.new(
+            "Lemon Squeezy returned an unexpected subscription variant",
             status: 200
           ), cause: nil
         end

@@ -25,8 +25,9 @@ audited membership administration, and the constrained local product/plan
 catalog also exist. Billing now has constrained local persistence/history
 primitives, exact test/live price mappings, checkout-token locators, an audited
 mapping-management surface, a strict Lemon checkout operation, and
-owner/billing checkout plus local pending-return endpoints. It still has no
-verified webhook ingress/projection, subscription writer, or portal flow. A
+owner/billing checkout plus local pending-return endpoints. Verified webhook
+ingress/projection, fresh portal retrieval, and webhook-confirmed plan-change
+commands are also implemented. A
 read-only local Entitlements resolver covers paid status, free fallback, and
 catalog typing;
 product-RBAC persistence, transactional assignment commands, and the central
@@ -35,10 +36,9 @@ internal `/admin` surface now provides audited catalog maintenance and bounded,
 read-only billing diagnostics for `platform_admin` users. The customer shell,
 audited product-assignment UI, and a tenant-owned Analytics report vertical
 slice now exercise the central action registry, product policies, CSV export,
-and atomic `report_limit` capacity command. Checkout success changes only local
-checkout-attempt state and never grants access. Signed webhook synchronization,
-subscription-management/portal operations, and deployment hardening remain
-separate execution-plan milestones.
+and atomic `report_limit` capacity command. Checkout success and outbound
+subscription-update responses change only command state and never grant access.
+Deployment hardening remains a separate execution-plan milestone.
 
 Each milestone must inspect and test existing behavior rather than assume an
 earlier prompt was implemented perfectly.
@@ -256,8 +256,8 @@ explicit deny permission.
   `Billing::ProviderPriceMapping` for the configured environment and store.
   Provider IDs, environment, amount, token semantics, expiry, and return URL are
   server-owned.
-- Only owner/billing may initiate checkout. Provider subscription management and
-  portal access remain a later milestone.
+- Only owner/billing may initiate checkout, request a fresh customer portal URL,
+  or create a plan-change command.
 - At most one current subscription and one pending checkout per
   organization.
 - Only verified `expired` is terminal for replacement checkout; a new verified
@@ -275,11 +275,11 @@ explicit deny permission.
   secrets.
 - Customer portal URLs are requested only after authorization and are not
   persisted or logged.
-- The tenant billing overview remains read-only and local-only. Pricing may
-  initiate checkout and the pending page may display attempt state, but neither
-  return navigation nor provider API success mutates a subscription, effective
-  plan, or entitlement. Portal and verified webhook projection remain
-  unimplemented.
+- The tenant billing overview remains local-only. Pricing may initiate checkout,
+  the pending page may display attempt state, and billing management may create
+  provider commands, but return navigation, portal visits, and provider API
+  success never mutate a subscription, effective plan, or entitlement. Only a
+  matching verified webhook projection confirms the change.
 
 ### 6.5 Internal platform administration
 
@@ -324,11 +324,13 @@ explicit deny permission.
   settings, organization switching/dashboard/settings, member and product-role
   administration, enabled/locked product cards, local pricing/billing state,
   and the Analytics report slice. Checkout controls, generic error feedback,
-  explicit test-mode labeling, and local pending/synchronized states are
-  implemented; portal state and webhook-driven activation remain later work.
+  explicit test-mode labeling, local pending/synchronized states, fresh portal
+  redirects, plan-change compatibility feedback, and webhook-driven
+  confirmation are implemented.
 - Customer routes include `/o/:organization_slug/dashboard`, `/products`,
   `/products/:product_key/members`, `/pricing`, `/billing`,
-  `POST /billing/checkouts`, `GET /billing/checkouts/pending`, `/settings`, and
+  `POST /billing/checkouts`, `GET /billing/checkouts/pending`,
+  `POST /billing/portal`, `POST /billing/plan_changes`, `/settings`, and
   the `/analytics/...` product routes. `/profile` is global and accepts only the
   authenticated user's display name; email remains read-only in this flow.
 - Locked product cards name the first active plan that contains the required

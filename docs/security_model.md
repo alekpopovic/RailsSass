@@ -262,13 +262,15 @@ The read-only Entitlements policy consumes only synchronized current local
 subscription rows; neither checkout nor receipt alone can create or mutate
 them. Verified-event projection is the only permitted writer.
 
-The customer billing overview is also read-only: it loads the current
+The customer billing overview loads the current
 subscription through `Current.organization.billing_subscriptions`, displays
 local effective-plan/status information, and performs no provider request.
-Pricing is a local catalog GET, but an active owner/billing member may submit a
-separate CSRF-protected checkout POST for an eligible mapped price. The
-canonical pending return page reads only tenant attempt/subscription state.
-There is no portal, plan-change execution, or subscription mutation control.
+Pricing is a local catalog GET, but an active owner/billing member may submit
+separate CSRF-protected checkout, fresh-portal, and plan-change POSTs. Portal
+URLs are exact-host validated, returned with no-store/no-referrer, and never
+persisted or logged. A plan-change response writes command state only; the
+canonical pending return page and billing GET read only local state, and only a
+verified webhook projector mutates subscription authority.
 
 - Store API keys and webhook secrets only in environment/credential stores.
 - Use separate live/test keys, webhook endpoints/configuration, and mappings.

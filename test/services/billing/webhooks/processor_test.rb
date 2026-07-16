@@ -373,6 +373,148 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
     assert_predicate subscription.reload, :sync_state_invalid?
   end
 
+  test "a monotonic subscription update applies its matching open plan change atomically" do
+    create_subscription_projection!
+    subscription = @organization.billing_subscriptions.find_by!(current: true)
+    target_price, target_mapping = create_mapped_plan_price
+    plan_change = create_plan_change(
+      subscription: subscription,
+      to_plan_price: target_price,
+      status: :pending
+    )
+    updated_at = @initial_updated_at + 10.seconds
+    event = update_event
+
+    result = process(
+      event,
+      client: fake_client(
+        snapshot: snapshot(
+          provider_variant_id: target_mapping.provider_variant_id,
+          updated_at: updated_at
+        )
+      ),
+      now: updated_at + 1.second
+    )
+
+    assert_predicate result, :processed?
+    assert_equal target_price, subscription.reload.plan_price
+    assert_predicate plan_change.reload, :status_applied?
+    assert_equal updated_at.to_i, plan_change.provider_updated_at.to_i
+    assert_equal (updated_at + 1.second).to_i, plan_change.completed_at.to_i
+
+    completed_at = plan_change.completed_at
+    duplicate = process(event, client: fake_client(snapshot: snapshot))
+    assert_equal :noop, duplicate.status
+    assert_equal completed_at, plan_change.reload.completed_at
+  end
+
+  test "a source variant update leaves an open plan change awaiting confirmation" do
+    create_subscription_projection!
+    subscription = @organization.billing_subscriptions.find_by!(current: true)
+    target_price, = create_mapped_plan_price
+    plan_change = create_plan_change(subscription: subscription, to_plan_price: target_price)
+    updated_at = @initial_updated_at + 10.seconds
+
+    process(
+      update_event,
+      client: fake_client(snapshot: snapshot(updated_at: updated_at)),
+      now: updated_at + 1.second
+    )
+
+    assert_equal @plan_price, subscription.reload.plan_price
+    assert_predicate plan_change.reload, :status_submitted?
+    assert_nil plan_change.completed_at
+  end
+
+  test "a different known variant supersedes an open plan change without rewriting history" do
+    create_subscription_projection!
+    subscription = @organization.billing_subscriptions.find_by!(current: true)
+    target_price, = create_mapped_plan_price
+    replacement_price, replacement_mapping = create_mapped_plan_price
+    plan_change = create_plan_change(subscription: subscription, to_plan_price: target_price)
+    updated_at = @initial_updated_at + 10.seconds
+
+    process(
+      update_event,
+      client: fake_client(
+        snapshot: snapshot(
+          provider_variant_id: replacement_mapping.provider_variant_id,
+          updated_at: updated_at
+        )
+      ),
+      now: updated_at + 1.second
+    )
+
+    assert_equal replacement_price, subscription.reload.plan_price
+    assert_predicate plan_change.reload, :status_superseded?
+    assert_equal updated_at.to_i, plan_change.provider_updated_at.to_i
+    assert plan_change.completed_at
+  end
+
+  test "stale and equal conflicting snapshots cannot confirm an open plan change" do
+    create_subscription_projection!
+    subscription = @organization.billing_subscriptions.find_by!(current: true)
+    target_price, target_mapping = create_mapped_plan_price
+    plan_change = create_plan_change(subscription: subscription, to_plan_price: target_price)
+
+    stale_event = update_event
+    process(
+      stale_event,
+      client: fake_client(
+        snapshot: snapshot(
+          provider_variant_id: target_mapping.provider_variant_id,
+          updated_at: @initial_updated_at - 1.second
+        )
+      )
+    )
+    assert_predicate stale_event.reload, :status_ignored?
+    assert_predicate plan_change.reload, :status_submitted?
+
+    equal_event = update_event
+    process(
+      equal_event,
+      client: fake_client(
+        snapshot: snapshot(provider_variant_id: target_mapping.provider_variant_id)
+      )
+    )
+    assert_failed equal_event, "provider_timestamp_conflict"
+    assert_predicate plan_change.reload, :status_submitted?
+    assert_nil plan_change.completed_at
+    assert_equal @plan_price, subscription.reload.plan_price
+  end
+
+  test "later webhooks cannot regress a terminal applied plan change" do
+    create_subscription_projection!
+    subscription = @organization.billing_subscriptions.find_by!(current: true)
+    target_price, target_mapping = create_mapped_plan_price
+    plan_change = create_plan_change(subscription: subscription, to_plan_price: target_price)
+    applied_at = @initial_updated_at + 10.seconds
+
+    process(
+      update_event,
+      client: fake_client(
+        snapshot: snapshot(
+          provider_variant_id: target_mapping.provider_variant_id,
+          updated_at: applied_at
+        )
+      ),
+      now: applied_at + 1.second
+    )
+    completed_at = plan_change.reload.completed_at
+
+    reverted_at = applied_at + 10.seconds
+    process(
+      update_event,
+      client: fake_client(snapshot: snapshot(updated_at: reverted_at)),
+      now: reverted_at + 1.second
+    )
+
+    assert_predicate plan_change.reload, :status_applied?
+    assert_equal completed_at, plan_change.completed_at
+    assert_equal applied_at.to_i, plan_change.provider_updated_at.to_i
+    assert_equal @plan_price, subscription.reload.plan_price
+  end
+
   test "payment triggers refetch the authoritative subscription and transient provider failures retry safely" do
     create_subscription_projection!
     recovered_at = @initial_updated_at + 20.seconds
@@ -459,6 +601,31 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
   private
     def create_subscription_projection!
       process(created_event, client: fake_client(snapshot: snapshot))
+    end
+
+    def create_mapped_plan_price
+      price = create_test_plan_price(
+        plan: create_test_plan,
+        lemon_store_id: @mapping.provider_store_id,
+        lemon_product_id: @mapping.provider_product_id,
+        lemon_variant_id: unique_numeric_id
+      )
+      [ price, create_billing_provider_price_mapping(plan_price: price) ]
+    end
+
+    def create_plan_change(subscription:, to_plan_price:, status: :submitted)
+      @organization.billing_plan_changes.create!(
+        billing_subscription: subscription,
+        requested_by_membership: @membership,
+        from_plan_price: subscription.plan_price,
+        to_plan_price: to_plan_price,
+        provider: subscription.provider,
+        environment: subscription.environment,
+        test_mode: subscription.test_mode,
+        status: status,
+        requested_at: @processing_now,
+        provider_updated_at: status == :pending ? nil : @processing_now
+      )
     end
 
     def process(event, client:, now: @processing_now)

@@ -113,17 +113,21 @@ lemon_squeezy:
 ```
 
 The adapter uses a fixed Lemon HTTPS origin, explicit connect/read timeouts, and
-one network attempt per call. It implements strict subscription retrieval and
-one-attempt checkout creation. Checkout validates the configured environment and
+one network attempt per call. It implements strict subscription retrieval,
+one-attempt checkout creation, fresh portal-link retrieval, and one-attempt
+subscription variant updates. Checkout validates the configured environment and
 store, response identity, expiry, test mode, exact enabled variant, and an exact
-HTTPS checkout hostname. It never blindly retries the non-idempotent POST.
+HTTPS checkout hostname. Portal retrieval uses the same exact configured
+customer-facing host and validates Lemon's signed `/billing` URL before a manual
+redirect. It never blindly retries non-idempotent POST/PATCH requests.
 Signed webhook delivery is accepted at `POST /webhooks/lemon_squeezy`. The
 isolated endpoint verifies `X-Signature` against exact request bytes before JSON
 parsing, stores only a screened diagnostic envelope, and hands the receipt ID
 to Solid Queue. The asynchronous worker refetches the fixed subscription
 resource and may project it only after verified checkout/provider correlation,
-exact test/live mapping, tenant re-establishment, and row locking. Provider
-portal operations and operational reconciliation remain unimplemented.
+exact test/live mapping, tenant re-establishment, and row locking. Plan changes
+remain local commands until this verified projection confirms the target.
+Operational reconciliation remains unimplemented.
 The test helper enables WebMock globally and blocks all non-local network
 traffic while allowing localhost for Rails/system tests; provider tests must
 stub every request with synthetic data.

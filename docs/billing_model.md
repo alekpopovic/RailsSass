@@ -25,8 +25,9 @@ Related documents:
 ### 1.1 Current implementation boundary
 
 The repository currently contains the local Billing persistence foundation,
-the outbound `Billing::LemonSqueezy::Client`, the customer checkout initiation
-and pending-return flow, and the read-only
+the outbound `Billing::LemonSqueezy::Client`, customer checkout initiation,
+pending-return, fresh customer-portal retrieval, idempotent plan-change
+commands, and the read-only
 `Entitlements::SubscriptionAccessPolicy`/`Resolver`. The persistence layer
 includes tenant-owned customers, checkout attempts, subscriptions, plan-change
 commands, checkout-token provider locators, environment-qualified provider
@@ -42,11 +43,13 @@ local pending page. No checkout response or redirect writes a subscription.
 The repository now exposes an isolated `POST /webhooks/lemon_squeezy`
 controller, exact-body verifier, durable receipt service, Solid Queue handoff,
 enqueue-recovery sweeper, and asynchronous subscription projector. The billing
-overview, pending-return page, and platform-admin diagnostics are local-state
-readers. Checkout and browser redirects write only attempt/correlation state;
-only a processor rooted in a verified durable webhook receipt may write local
-customer or subscription state. Provider portal and plan-change command
-execution remain outside this milestone.
+overview, pending-return page, and platform-admin diagnostics read local state.
+Checkout and browser redirects write only attempt/correlation state. A portal
+click performs one fresh subscription retrieval and returns the validated
+signed portal URL without persistence. A plan-change POST records a command and
+performs one provider variant PATCH, but only a processor rooted in a verified
+durable webhook receipt may write local customer or subscription state or mark
+the command applied.
 
 The entitlement resolver reads a current local subscription and never calls the
 provider. The asynchronous projector consumes the exact environment/store/
@@ -115,12 +118,28 @@ Squeezy.
 
 `GET /o/:organization_slug/billing` is available only to an active `owner` or
 `billing` membership. It authorizes `Current.organization`, loads the current
-subscription only through `Current.organization.billing_subscriptions`, and
-renders its local status, lifecycle dates, effective plan, and
-`Entitlements::SubscriptionAccessPolicy` decision. It performs no Lemon API
-request. Starting checkout is a separate authorized POST and neither surface
-offers a portal, plan-change, or subscription mutation action. A redirect or
-outbound provider result therefore cannot change what the runtime gate sees.
+subscription and command history only through tenant associations, and renders
+its plan, interval/price, local status, lifecycle dates, payment-method summary,
+effective-plan access, limit compatibility, and safe warnings. The GET performs
+no Lemon API request. Portal and plan-change operations are separate authorized,
+rate-limited POSTs. Their redirects and outbound provider results cannot change
+what the runtime gate sees.
+
+`POST /o/:organization_slug/billing/portal` revalidates the live membership and
+current tenant subscription before and after the provider request. Each click
+retrieves a fresh subscription resource and accepts only the expected
+subscription/customer/store/environment plus an HTTPS signed portal URL on the
+configured exact host. The controller emits a manual no-store/no-referrer 303;
+the URL is never persisted or logged.
+
+`POST /o/:organization_slug/billing/plan_changes` accepts only a local active
+paid `PlanPrice`, resolves an exact active provider mapping, and invokes the
+product-owned compatibility registry. It creates at most one open command per
+subscription before sending one non-retried PATCH. A repeated request for the
+same target returns the existing command; a different concurrent target is
+rejected. Definitive provider rejection becomes `failed`; timeout, connection,
+rate-limit, server, or malformed-success ambiguity becomes `creation_unknown`
+and retains the unique open slot. Neither outcome changes the subscription.
 
 `GET /o/:organization_slug/pricing` is a catalog comparison for any active
 organization member. It shows active local plans and prices plus the locally
@@ -602,9 +621,9 @@ and no arbitrary subscription is changed.
 - `Billing::PlanChange` is a tenant-owned command-history record. It captures
   a targeted subscription, requested source/target `PlanPrice`, requesting
   membership, provider environment, state, timestamps, and a redacted failure
-  code. Creation currently validates that the target is current and the source
-  price matches; a future command must repeat this under a lock. It is not an
-  entitlement projection.
+  code. The command revalidates active owner/billing authority, current synced
+  subscription, source price, target price, and exact provider mapping under an
+  organization lock. It is not an entitlement projection.
 - Creating or marking a plan-change command submitted never edits the
   subscription's `plan_price_id`, status, or access decision. Only later
   verified-webhook projection may mark it applied and update the authoritative
@@ -616,13 +635,21 @@ and no arbitrary subscription is changed.
   local subscription status or plan.
 - A variant change takes effect locally only after a verified
   `subscription_updated` webhook maps the exact variant to a `PlanPrice` and
-  plan in the configured environment.
+  plan in the configured environment. The same projection transaction marks an
+  exact open target `applied`; a verified different known target supersedes it,
+  while an unchanged source variant leaves it open.
 - Cancellation remains access-granting only before local `ends_at` according to
   the matrix.
 - Resume, pause, recovery, and expiration are likewise synchronized from a
   verified event.
 - Signed customer portal/payment URLs are fetched just in time after
   authorization, returned to the browser, and not persisted or logged.
+- Product-owned compatibility preflight currently registers Analytics
+  `report_limit` usage through `Current.organization.analytics_reports`. Exact
+  finite capacity and unlimited are allowed; a missing/disabled target limit is
+  zero capacity; an enabled unregistered limit fails closed. An external
+  provider downgrade is still projected and appears as an over-limit warning,
+  while an application-originated incompatible change is blocked before PATCH.
 
 Payment success/failure/recovery events are accepted only as signals to refetch
 and project the associated current subscription resource. Invoice status never

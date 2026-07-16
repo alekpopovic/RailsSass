@@ -11,8 +11,11 @@ local pending state. Registration never creates an organization; verified users
 explicitly complete onboarding. Checkout/API success never changes subscription
 or entitlement state. Exact-body signed webhook ingress, durable idempotent
 receipt, Solid Queue processing, and the fail-closed local subscription
-projection are implemented; provider portal management, operational
-reconciliation, and production hardening remain open milestones.
+projection are implemented. Owner/billing subscription management now fetches
+fresh customer-portal links, records idempotent plan-change commands, performs
+product-owned limit preflight, and waits for verified webhook confirmation
+before changing the local effective plan. Operational reconciliation and
+production hardening remain open milestones.
 The target behavior and delivery sequence are in
 [`docs/`](docs/), beginning with the
 [product requirements](docs/product_requirements.md),
