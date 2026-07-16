@@ -41,6 +41,33 @@ class AuditEvents::RecordTest < ActiveSupport::TestCase
     assert_equal "job-123", event.job_id
   end
 
+  test "accepts allowlisted stable product and product role keys" do
+    product = Product.create!(
+      key: "audit_product",
+      name: "Audit Product",
+      description: "Synthetic audit metadata product."
+    )
+    product_membership = @organization.product_memberships.create!(
+      organization_membership: @organization.organization_memberships.find_by!(user: @owner),
+      product: product
+    )
+
+    event = AuditEvents::Record.call(
+      organization: @organization,
+      actor_user: @owner,
+      action: "product.membership.role_assigned",
+      subject: product_membership,
+      metadata: {
+        membership_id: product_membership.organization_membership_id,
+        product_key: product.key,
+        product_role_key: "product_admin"
+      }
+    )
+
+    assert_equal "audit_product", event.metadata.fetch("product_key")
+    assert_equal "product_admin", event.metadata.fetch("product_role_key")
+  end
+
   test "rejects sensitive or non-allowlisted metadata keys and values" do
     [
       { email_address: "hidden@example.test" },
@@ -48,7 +75,9 @@ class AuditEvents::RecordTest < ActiveSupport::TestCase
       { target: "hidden@example.test" },
       { value: SecureRandom.urlsafe_base64(32) },
       { membership_id: "123" },
-      { organization_role: "super_owner" }
+      { organization_role: "super_owner" },
+      { product_key: "Invalid Product" },
+      { product_role_key: "viewer;delete" }
     ].each do |metadata|
       assert_raises(ArgumentError) do
         AuditEvents::Record.call(

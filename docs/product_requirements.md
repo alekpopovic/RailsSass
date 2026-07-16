@@ -29,9 +29,12 @@ Entitlements resolver now covers paid status, free fallback, and catalog typing;
 product-RBAC persistence, transactional assignment commands, and the central
 runtime Access decision/Pundit integration also exist. A Pundit-protected
 internal `/admin` surface now provides audited catalog maintenance and bounded,
-read-only billing diagnostics for `platform_admin` users. Product-domain routes,
-UI/action registry, atomic capacity commands, billing workflows, and deployment
-hardening remain separate execution-plan milestones.
+read-only billing diagnostics for `platform_admin` users. The customer shell,
+audited product-assignment UI, and a tenant-owned Analytics report vertical
+slice now exercise the central action registry, product policies, CSV export,
+and atomic `report_limit` capacity command. Checkout, signed webhook
+synchronization, provider management, and deployment hardening remain separate
+execution-plan milestones.
 
 Each milestone must inspect and test existing behavior rather than assume an
 earlier prompt was implemented perfectly.
@@ -214,6 +217,22 @@ explicit deny permission.
   entitlement-and-permission gate, then apply record-specific rules.
 - Cross-organization record identifiers never expose or mutate another
   organization's data.
+- The tenant product-member surface uses stable product keys and permits only
+  owner/admin actors for products in the effective plan. Submitted membership,
+  assignment, and role inputs are re-resolved through `Current.organization`
+  or the product's active system-role allowlist; every mutation is revalidated
+  and audited inside its transaction.
+- The reference Analytics product provides `/analytics/dashboard`, report
+  index/create/show, and CSV export routes under the tenant path. Its exact
+  feature keys are `dashboards`, `custom_reports`, `csv_export`, and
+  `report_limit`; its permission keys are `analytics.dashboard.read`,
+  `analytics.report.read`, `analytics.report.create`,
+  `analytics.report.manage`, and `analytics.export.run`.
+- Analytics report creation consumes one organization-wide report slot. It
+  revalidates the `custom_reports` flag, typed `report_limit`, product
+  membership, and `analytics.report.create` permission while holding the
+  organization lock, then counts and creates through
+  `Current.organization.analytics_reports` in the same transaction.
 
 ### 6.4 Billing
 
@@ -248,6 +267,9 @@ explicit deny permission.
   secrets.
 - Customer portal URLs are requested only after authorization and are not
   persisted or logged.
+- The implemented tenant billing overview is read-only and local-only. It shows
+  the current local subscription/effective plan to owner/billing roles and
+  performs no checkout, portal, provider lookup, or subscription mutation.
 
 ### 6.5 Internal platform administration
 
@@ -284,9 +306,19 @@ explicit deny permission.
 ### 6.6 User experience
 
 - Server-rendered Hotwire/Turbo flows with focused Stimulus controllers.
-- Tailwind-based responsive pages for authentication, organization switching,
-  membership administration, product assignments, subscription status, and
-  checkout pending/success/error states.
+- Tailwind-based responsive pages for authentication, global name-only profile
+  settings, organization switching/dashboard/settings, member and product-role
+  administration, enabled/locked product cards, local pricing/billing state,
+  and the Analytics report slice. Checkout pending/success/error states remain
+  part of the later Billing workflow.
+- Customer routes include `/o/:organization_slug/dashboard`, `/products`,
+  `/products/:product_key/members`, `/pricing`, `/billing`, `/settings`, and the
+  `/analytics/...` product routes. `/profile` is global and accepts only the
+  authenticated user's display name; email remains read-only in this flow.
+- Locked product cards name the first active plan that contains the required
+  product/feature when one exists. Plan-entitlement and product-permission
+  failures use distinct safe messages, while server policies still authorize
+  every direct request.
 - Accessible forms, validation messages, keyboard navigation, and clear 403,
   404, and billing-pending states.
 - UI controls use the same permission predicates for presentation while the
@@ -398,7 +430,9 @@ explicit deny permission.
 - User file uploads unless a concrete product module requires them; local
   Active Storage is not accepted as durable production storage.
 - Concrete product-domain functionality beyond the thin vertical slice needed
-  to prove the platform authorization contract.
+  to prove the platform authorization contract. The slice is limited to
+  Analytics dashboard/report metadata and one-row CSV export; it is not a
+  general analytics engine, query builder, or data warehouse.
 - Organization archive/hard deletion. The provider does not expose an
   authoritative checkout-completion state that can safely close every abandoned
   correlation; lifecycle deletion requires a later product/operations ADR.
@@ -449,6 +483,10 @@ The MVP is acceptable when all of the following are demonstrated:
     identity fields cannot be changed, catalog mutations are audited, billing
     diagnostics remain read-only and tenant-rooted, and no admin response exposes
     provider secrets or stored diagnostic payloads.
+15. The Analytics slice requires its exact server-owned feature and permission
+    contract, creates reports within an atomic finite/unlimited organization
+    limit, scopes show/export by `Current.organization`, and neutralizes
+    spreadsheet-formula prefixes in exported user-controlled cells.
 
 ## 11. Required product inputs before launch
 

@@ -1,5 +1,6 @@
 class Access::ProductMemberships::Reactivate < Access::ProductMemberships::Base
-  def initialize(product_membership_id:)
+  def initialize(product_membership_id:, actor: nil)
+    initialize_actor(actor)
     @product_membership_id = product_membership_id
   end
 
@@ -11,9 +12,16 @@ class Access::ProductMemberships::Reactivate < Access::ProductMemberships::Base
         product_membership.organization_membership_id
       )
       locked_active_product!(product_membership.product_id)
+      authorize_actor_for_product!(organization, product_membership.product_id)
       next product_membership if product_membership.active?
 
-      transition!(organization, product_membership, status: "active")
+      reactivated_membership = transition!(organization, product_membership, status: "active")
+      record_audit_event!(
+        action: "product.membership.reactivated",
+        subject: reactivated_membership,
+        metadata: audit_metadata(reactivated_membership)
+      )
+      reactivated_membership
     end
   end
 end

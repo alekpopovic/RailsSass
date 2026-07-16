@@ -13,6 +13,9 @@ class Organization < ApplicationRecord
   has_many :audit_events,
     dependent: :restrict_with_exception,
     inverse_of: :organization
+  has_many :analytics_reports,
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
   has_many :billing_customers,
     class_name: "Billing::Customer",
     dependent: :restrict_with_exception,

@@ -31,8 +31,9 @@ includes tenant-owned customers, checkout attempts, subscriptions, and
 plan-change commands plus the provider-wide webhook-event ledger. It still
 exposes no checkout route, webhook controller, webhook processor, provider
 locator, environment-qualified price mapping, subscription projection service,
-or portal. It does expose a platform-admin-only, read-only diagnostic view of
-local subscriptions and failed webhook ledger rows; that view is not a billing
+or portal. It does expose two read-only surfaces over local state: the
+customer-facing tenant billing overview and the platform-admin diagnostic view
+of subscriptions and failed webhook ledger rows. Neither surface is a billing
 state writer.
 
 The entitlement resolver reads a current local subscription and never calls the
@@ -93,7 +94,25 @@ cannot contact Lemon Squeezy.
 11. Test and live credentials/data/mappings are strictly separated; test data
     never grants access in production.
 
-### 2.1 Internal billing diagnostics
+### 2.1 Customer billing and pricing shell
+
+`GET /o/:organization_slug/billing` is available only to an active `owner` or
+`billing` membership. It authorizes `Current.organization`, loads the current
+subscription only through `Current.organization.billing_subscriptions`, and
+renders its local status, lifecycle dates, effective plan, and
+`Entitlements::SubscriptionAccessPolicy` decision. It performs no Lemon API
+request and exposes no checkout, portal, plan-change, or subscription mutation
+action. A redirect or outbound provider result therefore cannot change what the
+runtime gate sees.
+
+`GET /o/:organization_slug/pricing` is a catalog comparison for any active
+organization member. It shows active local plans and prices plus the locally
+resolved effective plan. It is not checkout, does not claim provider
+availability, and cannot grant an entitlement. Until environment-qualified
+mapping and the verified webhook projection exist, upgrade controls remain
+informational rather than provider actions.
+
+### 2.2 Internal billing diagnostics
 
 The `/admin` subscription index is a bounded support view, not a global
 tenant-child query. A live platform administrator submits one exact organization

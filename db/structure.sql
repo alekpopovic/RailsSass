@@ -221,6 +221,42 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
+-- Name: analytics_reports; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.analytics_reports (
+    id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    public_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name character varying(100) NOT NULL,
+    description text DEFAULT ''::text NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT analytics_reports_description_normalized CHECK (((description = btrim(description)) AND (char_length(description) <= 2000))),
+    CONSTRAINT analytics_reports_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100))))
+);
+
+
+--
+-- Name: analytics_reports_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.analytics_reports_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: analytics_reports_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.analytics_reports_id_seq OWNED BY public.analytics_reports.id;
+
+
+--
 -- Name: ar_internal_metadata; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1240,6 +1276,13 @@ ALTER SEQUENCE public.users_id_seq OWNED BY public.users.id;
 
 
 --
+-- Name: analytics_reports id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.analytics_reports ALTER COLUMN id SET DEFAULT nextval('public.analytics_reports_id_seq'::regclass);
+
+
+--
 -- Name: audit_events id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1405,6 +1448,14 @@ ALTER TABLE ONLY public.sessions ALTER COLUMN id SET DEFAULT nextval('public.ses
 --
 
 ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_id_seq'::regclass);
+
+
+--
+-- Name: analytics_reports analytics_reports_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.analytics_reports
+    ADD CONSTRAINT analytics_reports_pkey PRIMARY KEY (id);
 
 
 --
@@ -1635,6 +1686,27 @@ CREATE INDEX idx_on_organization_id_status_role_ce3565acf4 ON public.organizatio
 --
 
 CREATE UNIQUE INDEX idx_on_organization_membership_id_c0ffad9c57 ON public.organization_access_locators USING btree (organization_membership_id);
+
+
+--
+-- Name: index_analytics_reports_on_org_created_at_and_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_analytics_reports_on_org_created_at_and_id ON public.analytics_reports USING btree (organization_id, created_at, id);
+
+
+--
+-- Name: index_analytics_reports_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_analytics_reports_on_organization_id ON public.analytics_reports USING btree (organization_id);
+
+
+--
+-- Name: index_analytics_reports_on_public_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_analytics_reports_on_public_id ON public.analytics_reports USING btree (public_id);
 
 
 --
@@ -2786,6 +2858,14 @@ ALTER TABLE ONLY public.product_roles
 
 
 --
+-- Name: analytics_reports fk_rails_8ec405440b; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.analytics_reports
+    ADD CONSTRAINT fk_rails_8ec405440b FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: product_features fk_rails_9019f50ede; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2904,6 +2984,7 @@ ALTER TABLE ONLY public.product_membership_roles
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20260716060000'),
 ('20260716050000'),
 ('20260716040000'),
 ('20260716030100'),

@@ -32,7 +32,7 @@ class Access::SeedSystemProductRbacTest < ActiveSupport::TestCase
     analytics = Product.find_by!(key: "analytics")
     ProductRole.find_by!(product: analytics, organization: nil, key: "viewer")
       .update!(name: "Renamed Viewer", active: false)
-    ProductPermission.find_by!(product: analytics, key: "reports.view")
+    ProductPermission.find_by!(product: analytics, key: "analytics.report.read")
       .update!(name: "Renamed permission", description: "Changed description.")
 
     2.times { assert service.call }
@@ -57,7 +57,7 @@ class Access::SeedSystemProductRbacTest < ActiveSupport::TestCase
     service.call
     analytics = Product.find_by!(key: "analytics")
     viewer = ProductRole.find_by!(product: analytics, organization: nil, key: "viewer")
-    view_reports = ProductPermission.find_by!(product: analytics, key: "reports.view")
+    view_reports = ProductPermission.find_by!(product: analytics, key: "analytics.report.read")
     ProductRolePermission.find_by!(
       product_role: viewer,
       product_permission: view_reports
@@ -67,17 +67,18 @@ class Access::SeedSystemProductRbacTest < ActiveSupport::TestCase
     assert_equal expected_mappings, seeded_mapping_rows
   end
 
-  test "obsolete mappings on seeded roles are removed without deleting the permission" do
+  test "legacy mappings on seeded roles are removed without deleting stable permission identities" do
     service = Access::SeedSystemProductRbac.new
     service.call
     analytics = Product.find_by!(key: "analytics")
     viewer = ProductRole.find_by!(product: analytics, organization: nil, key: "viewer")
-    obsolete_permission = ProductPermission.create!(
+    obsolete_permission = ProductPermission.find_or_create_by!(
       product: analytics,
-      key: "exports.manage",
-      name: "Manage exports",
-      description: "Synthetic obsolete seed mapping."
-    )
+      key: "reports.view"
+    ) do |permission|
+      permission.name = "Legacy report viewer"
+      permission.description = "Synthetic legacy Analytics permission."
+    end
     obsolete_mapping = ProductRolePermission.create!(
       product: analytics,
       product_role: viewer,
@@ -135,7 +136,16 @@ class Access::SeedSystemProductRbacTest < ActiveSupport::TestCase
 
     def seeded_permissions
       ProductPermission.where(product: products).where(
-        key: %w[contacts.manage contacts.view reports.manage reports.view settings.manage]
+        key: %w[
+          analytics.dashboard.read
+          analytics.export.run
+          analytics.report.create
+          analytics.report.manage
+          analytics.report.read
+          contacts.manage
+          contacts.view
+          settings.manage
+        ]
       )
     end
 
@@ -155,7 +165,16 @@ class Access::SeedSystemProductRbacTest < ActiveSupport::TestCase
         .where(
           products: { key: PRODUCT_KEYS },
           product_permissions: {
-            key: %w[contacts.manage contacts.view reports.manage reports.view settings.manage]
+            key: %w[
+              analytics.dashboard.read
+              analytics.export.run
+              analytics.report.create
+              analytics.report.manage
+              analytics.report.read
+              contacts.manage
+              contacts.view
+              settings.manage
+            ]
           }
         )
         .order("products.key", "product_permissions.key")
@@ -188,9 +207,36 @@ class Access::SeedSystemProductRbacTest < ActiveSupport::TestCase
 
     def expected_permissions
       [
-        [ "analytics", "reports.manage", "Manage reports", "Create and manage Analytics reports." ],
-        [ "analytics", "reports.view", "View reports", "View Analytics reports." ],
-        [ "analytics", "settings.manage", "Manage settings", "Manage Analytics product settings." ],
+        [
+          "analytics",
+          "analytics.dashboard.read",
+          "View Analytics dashboard",
+          "View the Analytics product dashboard."
+        ],
+        [
+          "analytics",
+          "analytics.export.run",
+          "Export Analytics reports",
+          "Export Analytics reports as CSV files."
+        ],
+        [
+          "analytics",
+          "analytics.report.create",
+          "Create Analytics reports",
+          "Create custom Analytics reports."
+        ],
+        [
+          "analytics",
+          "analytics.report.manage",
+          "Manage Analytics reports",
+          "Manage custom Analytics reports."
+        ],
+        [
+          "analytics",
+          "analytics.report.read",
+          "View Analytics reports",
+          "View custom Analytics reports."
+        ],
         [ "crm", "contacts.manage", "Manage contacts", "Create and manage CRM contacts." ],
         [ "crm", "contacts.view", "View contacts", "View CRM contacts." ],
         [ "crm", "settings.manage", "Manage settings", "Manage CRM product settings." ]
@@ -199,12 +245,17 @@ class Access::SeedSystemProductRbacTest < ActiveSupport::TestCase
 
     def expected_mappings
       [
-        [ "analytics", "contributor", "reports.manage" ],
-        [ "analytics", "contributor", "reports.view" ],
-        [ "analytics", "product_admin", "reports.manage" ],
-        [ "analytics", "product_admin", "reports.view" ],
-        [ "analytics", "product_admin", "settings.manage" ],
-        [ "analytics", "viewer", "reports.view" ],
+        [ "analytics", "contributor", "analytics.dashboard.read" ],
+        [ "analytics", "contributor", "analytics.export.run" ],
+        [ "analytics", "contributor", "analytics.report.create" ],
+        [ "analytics", "contributor", "analytics.report.read" ],
+        [ "analytics", "product_admin", "analytics.dashboard.read" ],
+        [ "analytics", "product_admin", "analytics.export.run" ],
+        [ "analytics", "product_admin", "analytics.report.create" ],
+        [ "analytics", "product_admin", "analytics.report.manage" ],
+        [ "analytics", "product_admin", "analytics.report.read" ],
+        [ "analytics", "viewer", "analytics.dashboard.read" ],
+        [ "analytics", "viewer", "analytics.report.read" ],
         [ "crm", "contributor", "contacts.manage" ],
         [ "crm", "contributor", "contacts.view" ],
         [ "crm", "product_admin", "contacts.manage" ],

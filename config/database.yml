@@ -59,6 +59,8 @@ test:
   <<: *default
   database: rails_sass_test
   schema_format: sql
+  # Keep quality-gate data deterministic; test seeds remain available via db:seed.
+  seeds: false
 
 # As with config/credentials.yml, you never want to store sensitive information,
 # like your database password, in your source code. If your source code is

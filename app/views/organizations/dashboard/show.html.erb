@@ -1,9 +1,59 @@
 <% content_for :title, "#{Current.organization.name} dashboard" %>
 
-<section class="py-12">
-  <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Organization dashboard</p>
-  <h1 class="mt-2 text-3xl font-bold tracking-tight text-slate-950"><%= Current.organization.name %></h1>
-  <p class="mt-4 max-w-2xl text-slate-600">
-    Your tenant context is active. Products and plan entitlements will appear here as they are added.
-  </p>
+<section class="py-10 sm:py-12" aria-labelledby="dashboard-title">
+  <div class="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Organization dashboard</p>
+      <h1 id="dashboard-title" class="mt-2 text-3xl font-bold tracking-tight text-slate-950"><%= Current.organization.name %></h1>
+      <p class="mt-2 max-w-2xl text-slate-600">
+        Review your plan, open available products, and manage your organization workspace.
+      </p>
+    </div>
+
+    <%= link_to "Browse products",
+      organization_products_path(organization_slug: Current.organization.slug),
+      class: "inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+  </div>
+
+  <dl class="mt-8 grid gap-4 sm:grid-cols-3">
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <dt class="text-sm font-medium text-slate-500">Current plan</dt>
+      <dd class="mt-2 text-xl font-bold text-slate-950"><%= @effective_plan&.name || "No plan available" %></dd>
+      <dd class="mt-1 text-sm text-slate-600"><%= @effective_plan&.free? ? "Free fallback" : "Local subscription" if @effective_plan %></dd>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <dt class="text-sm font-medium text-slate-500">Active members</dt>
+      <dd class="mt-2 text-xl font-bold text-slate-950"><%= @active_members_count %></dd>
+      <dd class="mt-1 text-sm text-slate-600">Your role: <%= Current.membership.role.humanize %></dd>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <dt class="text-sm font-medium text-slate-500">Product assignments</dt>
+      <dd class="mt-2 text-xl font-bold text-slate-950"><%= @active_product_memberships_count %></dd>
+      <dd class="mt-1 text-sm text-slate-600">Active seats across enabled products</dd>
+    </div>
+  </dl>
+
+  <div class="mt-8 grid gap-4 md:grid-cols-2">
+    <article class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 class="text-lg font-semibold text-slate-950">Products and pricing</h2>
+      <p class="mt-2 text-sm leading-6 text-slate-600">See which products your organization can use and which plan unlocks unavailable products.</p>
+      <div class="mt-5 flex flex-wrap gap-3">
+        <%= link_to "Product catalog", organization_products_path(organization_slug: Current.organization.slug), class: "font-semibold text-indigo-700 hover:text-indigo-600" %>
+        <%= link_to "Compare plans", organization_pricing_path(organization_slug: Current.organization.slug), class: "font-semibold text-indigo-700 hover:text-indigo-600" %>
+      </div>
+    </article>
+
+    <article class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 class="text-lg font-semibold text-slate-950">Organization administration</h2>
+      <p class="mt-2 text-sm leading-6 text-slate-600">Organization and billing roles remain separate from product permissions.</p>
+      <div class="mt-5 flex flex-wrap gap-3">
+        <% if policy(Current.organization).members? %>
+          <%= link_to "Manage members", organization_members_path(organization_slug: Current.organization.slug), class: "font-semibold text-indigo-700 hover:text-indigo-600" %>
+        <% end %>
+        <% if policy(Current.organization).billing? %>
+          <%= link_to "Billing overview", organization_billing_path(organization_slug: Current.organization.slug), class: "font-semibold text-indigo-700 hover:text-indigo-600" %>
+        <% end %>
+      </div>
+    </article>
+  </div>
 </section>

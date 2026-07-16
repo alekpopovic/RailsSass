@@ -5,25 +5,49 @@ class Access::SeedSystemProductRbac
     "analytics" => {
       permissions: [
         {
-          key: "reports.view",
-          name: "View reports",
-          description: "View Analytics reports."
+          key: "analytics.dashboard.read",
+          name: "View Analytics dashboard",
+          description: "View the Analytics product dashboard."
         },
         {
-          key: "reports.manage",
-          name: "Manage reports",
-          description: "Create and manage Analytics reports."
+          key: "analytics.report.read",
+          name: "View Analytics reports",
+          description: "View custom Analytics reports."
         },
         {
-          key: "settings.manage",
-          name: "Manage settings",
-          description: "Manage Analytics product settings."
+          key: "analytics.report.create",
+          name: "Create Analytics reports",
+          description: "Create custom Analytics reports."
+        },
+        {
+          key: "analytics.report.manage",
+          name: "Manage Analytics reports",
+          description: "Manage custom Analytics reports."
+        },
+        {
+          key: "analytics.export.run",
+          name: "Export Analytics reports",
+          description: "Export Analytics reports as CSV files."
         }
       ],
       role_permissions: {
-        "viewer" => %w[reports.view],
-        "contributor" => %w[reports.view reports.manage],
-        "product_admin" => %w[reports.view reports.manage settings.manage]
+        "viewer" => %w[
+          analytics.dashboard.read
+          analytics.report.read
+        ],
+        "contributor" => %w[
+          analytics.dashboard.read
+          analytics.report.read
+          analytics.report.create
+          analytics.export.run
+        ],
+        "product_admin" => %w[
+          analytics.dashboard.read
+          analytics.report.read
+          analytics.report.create
+          analytics.report.manage
+          analytics.export.run
+        ]
       }
     },
     "crm" => {

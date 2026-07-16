@@ -15,10 +15,11 @@ tenancy, audited organization invitations/member administration, and the
 constrained local product/plan catalog. It also contains a non-authoritative
 Billing persistence foundation, a fixed-origin Lemon API client, the local
 Entitlements read side, product-RBAC persistence with transactional assignment
-commands, and the central runtime Access/Pundit composition. This document
-describes both those established boundaries and the remaining target
-architecture; checkout, signed webhook ingress/projection, product-domain
-actions/UI, and deployment hardening remain incremental milestones.
+commands, and the central runtime Access/Pundit composition. This document also
+covers the implemented customer shell, audited product-assignment surface, and
+the Analytics report/action/capacity vertical slice. Checkout, signed webhook
+ingress/projection, broader product workflows, and deployment hardening remain
+incremental milestones.
 
 Related contracts:
 
@@ -126,11 +127,20 @@ permissions, and Billing does not grant permissions.
 Access Control owns the constrained product membership, role, permission, and
 assignment persistence, tenant-scoped transactional commands,
 `Access::Gate`/`PermissionChecker`/`Decision`, and Pundit integration helpers.
-The assignment commands deliberately remain internal and contain no actor
-authorization; `ProductMembershipPolicy` is the required owner/admin and plan
-gate for a future controller/UI surface. System roles are global reviewed
+The tenant product-membership controller applies `ProductMembershipPolicy`,
+passes the authenticated actor into the transactional commands, and those
+commands revalidate live owner/admin plus entitlement state and append audit
+evidence. Actor-less compatibility calls remain internal-only and require a
+separately authorized system boundary. System roles are global reviewed
 definitions; the nullable organization scope is schema support for future
 custom roles, not an MVP custom-role builder.
+
+The `Products::Analytics` namespace is the reference product boundary. Its
+action registry fixes permission, typed-feature, and capacity semantics in
+server code; its Pundit policies add tenant-record rules, and `CreateReport`
+owns the organization lock, authoritative report count, and mutation
+transaction. It depends on Access rather than reading Billing projection state
+directly.
 
 The internal platform-admin web layer orchestrates Accounts authentication,
 Catalog mutation commands, and bounded Billing reads. It does not move catalog
@@ -145,7 +155,7 @@ Rails clarity (`User`, `Organization`, `Plan`, `ProductMembership`). Namespace
 orchestration and provider-specific code by owning module.
 
 Implemented and planned layout (provider mapping, locator, webhook delivery,
-jobs, product-domain policies/UI, and atomic capacity commands remain planned):
+jobs, and broader product modules remain planned):
 
 ```text
 app/
@@ -176,6 +186,7 @@ app/
     product_role.rb
     product_permission.rb
     product_role_permission.rb
+    analytics_report.rb
     audit_event.rb
     platform/audit_event.rb
     billing/customer.rb
@@ -189,6 +200,7 @@ app/
     admin/...
     application_policy.rb
     product_membership_policy.rb
+    products/analytics/...
   services/
     platform/persist_catalog.rb
     organizations/
@@ -210,8 +222,13 @@ app/
       product_memberships/assign_role.rb
       product_memberships/suspend.rb
       product_memberships/reactivate.rb
+      product_memberships/unassign_role.rb
       seed_system_product_rbac.rb
       decision.rb
+    products/analytics/
+      action_registry.rb
+      create_report.rb
+      csv_exporter.rb
     billing/...
       lemon_squeezy/client.rb
       lemon_squeezy/errors.rb
@@ -286,7 +303,8 @@ All organization application routes are nested under:
 
 ```ruby
 scope "/o/:organization_slug", as: :organization do
-  # tenant routes
+  # dashboard, products/product members, pricing, billing, settings
+  # analytics dashboard and reports
 end
 ```
 
@@ -309,6 +327,10 @@ record identifiers from another tenant cannot escape the tenant-rooted query.
 The invitation-acceptance route is a special pre-membership flow: it sets a
 tentative organization root from the public slug and may query only that
 organization's invitation association until token/email validation succeeds.
+The customer pricing page reads only active global catalog rows; the tenant
+billing page reads the current subscription only through
+`Current.organization.billing_subscriptions`. Neither route calls Lemon nor
+writes subscription/access state.
 
 ### 6.4 Background jobs
 
@@ -360,6 +382,15 @@ transaction as mutation; explicit unlimited capacity still follows the command
 and permission path but has no numeric ceiling. Action-to-permission, feature,
 and consumption mappings are server-owned, so a client cannot omit a capacity
 check.
+
+For Analytics, `ActionRegistry` evaluates `dashboard_read`, `report_read`,
+`report_create`, `report_manage`, and `export_run` through the common gate.
+`AnalyticsReport` show/export loaders begin at
+`Current.organization.analytics_reports` and use an immutable public UUID.
+`CreateReport` repeats the `report_create` decision while holding the tenant
+root lock, treats one new report as a server-calculated delta of one, compares
+the tenant-scoped count to finite or explicit unlimited `report_limit`, and
+persists only if the same transaction still has capacity.
 
 Organization administration and billing actions use the explicit organization
 role matrix and do not require a product subscription. Product actions always

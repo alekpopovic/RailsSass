@@ -6,6 +6,14 @@
       organization_dashboard_path(organization_slug: Current.organization.slug),
       class: "whitespace-nowrap font-semibold text-slate-700 hover:text-slate-950" %>
 
+    <%= link_to "Products",
+      organization_products_path(organization_slug: Current.organization.slug),
+      class: "whitespace-nowrap font-semibold text-slate-700 hover:text-slate-950" %>
+
+    <%= link_to "Pricing",
+      organization_pricing_path(organization_slug: Current.organization.slug),
+      class: "whitespace-nowrap font-semibold text-slate-700 hover:text-slate-950" %>
+
     <% if policy(Current.organization).members? %>
       <%= link_to "Members",
         organization_members_path(organization_slug: Current.organization.slug),

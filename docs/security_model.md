@@ -69,8 +69,8 @@ plaintext tokens are never stored.
 | Stale tenant context | Reused thread/job retains prior organization | Establish context explicitly; reset in `ensure`; fail closed without context | Sequential request/job tests including exceptions |
 | Platform privilege escalation | Signup submits `system_role`, an organization owner enters `/admin`, a revoked/stale role remains accepted, or a hidden admin action is called directly | Public role parameter exclusion; explicit verified-user promotion task; live PostgreSQL role check in `PlatformAdminPolicy`; one admin base controller and policy scopes; no organization-role substitution | Task, policy, request, and system tests for ordinary user/owner denial, role revocation, and direct mutations |
 | Organization privilege escalation | Admin grants owner/billing, concurrent removal leaves no owner, user disable or reactivation orphans/resurrects access, or UI-hidden POST succeeds | Exact role matrix; organization-row locking in `Organizations::Memberships::ChangeRole`/`Remove`/`Reactivate`; soft suspension removes locators/product assignments once present; server authorization; cross-organization account-disable guard added with locator/bootstrap | Table-driven service/policy, reactivation, direct request, and concurrency tests |
-| Product privilege escalation | Owner assumes implicit access; billing role reaches product data; a cross-product or cross-tenant custom role is attached; suspended membership or inactive role remains effective | Central ordered Access gate: authenticated user, active tenant/member, entitlement, active product membership, non-billing role, and permission from an active correctly scoped role; no owner/admin bypass; composite tenant/product FKs plus same-tenant custom-role trigger | Constraint/trigger, central truth-table, permission-union, policy, and two-tenant scope tests; direct-request tests land with the first product controller |
-| Numeric-limit race/bypass | Two concurrent creates consume the final unit, or client omits feature/delta | Server-owned action registry; product command revalidates common grant and locks/conditionally mutates usage in one transaction | Parameter-tamper plus concurrency test proving at most one commit |
+| Product privilege escalation | Owner assumes implicit access; billing role reaches product data; a cross-product or cross-tenant custom role is attached; suspended membership or inactive role remains effective | Central ordered Access gate: authenticated user, active tenant/member, entitlement, active product membership, non-billing role, and permission from an active correctly scoped role; no owner/admin bypass; composite tenant/product FKs plus same-tenant custom-role trigger | Constraint/trigger, central truth-table, permission-union, policy, product-assignment direct-request, and two-tenant scope tests |
+| Numeric-limit race/bypass | Two concurrent report creates consume the final unit, or a client omits/changes feature or delta | Server-owned Analytics action registry; report command revalidates the common grant, counts only `Current.organization` reports, and locks the organization in the mutation transaction | Parameter-tamper, boundary, downgrade, and concurrency tests proving at most one final-slot commit |
 | Webhook forgery/tampering | Attacker posts active status or modifies one byte | HMAC-SHA256 exact raw body, constant-time compare, credential separation | Official-style fixture, mutation, bad/missing signature tests |
 | Webhook replay | Valid body is resent many times or an unsigned event header is changed | Signed-body event name is authoritative; fingerprint provider/configured-environment/exact-body only; unique index plus idempotent projection | Duplicate/resend/mutated-header tests and metric |
 | Webhook reordering/race | Old active event overwrites expired, or two jobs race | Current provider refetch rooted in verified event, row locks, monotonic provider timestamp, conflict quarantine | Reordered/concurrent/equal-conflict tests |
@@ -83,6 +83,7 @@ plaintext tokens are never stored.
 | Session theft/fixation | Stolen or reused session token | Secure/HttpOnly/SameSite cookies, rotate on login, revoke sessions on password/security change, TLS | Session lifecycle/request tests |
 | Credential stuffing | Automated login/reset/invite guessing | Generic responses, rate limiting, strong password hashing, token entropy/expiry, alerting | Throttle and enumeration tests |
 | XSS | User-controlled organization name injects script | Rails escaping, sanitized rich text only, no unsafe HTML, CSP, no secret-bearing JS | View/security-header tests and Brakeman |
+| CSV formula injection | A report name or description begins with spreadsheet formula syntax | Fixed export columns, Rails-owned row selection, and neutralize leading `=`, `+`, `-`, or `@` before CSV serialization | Exporter tests for every formula prefix and ordinary values |
 | SQL injection/mass assignment | Crafted sort/filter/role parameter changes arbitrary data | Active Record bind values, allowlisted sort/filter, strong parameters, server-resolved role transitions | Request/unit tests and static analysis |
 | Open redirect | Client changes login return location or billing return/provider URL | Validate login destinations as internal application locations; use canonical billing return paths and allowlisted provider host/scheme | Redirect validation tests |
 | Sensitive logging | Payload/email/signature/portal URL appears in logs | Parameter/header filtering, structured reason codes, no raw body logging, exception scrubbing | Log-capture tests |
@@ -120,6 +121,13 @@ billing surface: a platform administrator submits one exact organization
 reuse tenant controllers, establish membership, or grant mutation authority.
 Subscription and global failed-webhook ledger indexes are each bounded to 100
 rows per page.
+
+`AnalyticsReport` is tenant-owned even though its route uses a globally unique
+`public_id`. Index/scope queries start from
+`Current.organization.analytics_reports`, and show/export resolve the public ID
+through that association before policy evaluation. A guessed report ID from a
+different tenant is therefore not found; UUID opacity is not treated as an
+authorization control.
 
 ## 7. Authentication and account security
 
@@ -193,10 +201,12 @@ The normative decision flow is in
 - Do not use owner/admin organization role as a product permission shortcut;
   billing organization membership is categorically ineligible for product-data
   access.
-- Product-RBAC persistence commands remain internal and transactional; they are
-  not an authorization boundary. A future controller must first apply the
-  implemented `ProductMembershipPolicy` and then invoke the command. Every
-  tenant row is re-resolved through `Current.organization` inside the command.
+- Product-RBAC persistence commands remain transactional and are not their own
+  authorization boundary. The customer controller first applies
+  `ProductMembershipPolicy`, resolves the target through
+  `Current.organization`, and passes the actor into the command. The command
+  then revalidates live owner/admin authority and entitlement under the
+  organization lock before changing or auditing an assignment.
 - Permit global system roles across tenants, but permit a nullable
   organization-scoped role only for a product membership from that same
   organization. Enforce this conditional rule in PostgreSQL as well as the
@@ -219,6 +229,10 @@ The normative decision flow is in
   deletes the membership row.
 - Resolve permission/feature/consumption behavior from a server-owned action
   registry; never accept those security semantics as optional client input.
+- For Analytics, use only the reviewed `dashboard_read`, `report_read`,
+  `report_create`, `report_manage`, and `export_run` registry entries. Report
+  creation derives a delta of one, rechecks access inside the locked command,
+  and measures usage through `Current.organization.analytics_reports`.
 - Audit both successful sensitive changes and denied high-risk attempts without
   logging sensitive input.
 - Route catalog writes through the transactional audited persistence command;
@@ -242,6 +256,12 @@ controller and no provider locator or projection writer. The read-only
 Entitlements policy consumes current local subscription rows, but no production
 application path can create them yet. A future signed-webhook pipeline remains
 the only permitted writer.
+
+The customer billing overview is also read-only: it loads the current
+subscription through `Current.organization.billing_subscriptions`, displays
+local effective-plan/status information, and performs no provider request.
+Pricing displays the local catalog only. Neither route exposes checkout, portal,
+plan-change, or subscription mutation controls.
 
 - Store API keys and webhook secrets only in environment/credential stores.
 - Use separate live/test keys, webhook endpoints/configuration, and mappings.
@@ -416,6 +436,10 @@ Deployment requirements:
 - Database constraint and invalid composite-association tests.
 - Last-owner role-change/removal and numeric-limit concurrency tests; add
   account-disable races with the locator/bootstrap follow-up.
+- Analytics request/system tests for missing entitlement versus missing
+  permission, direct create/show/export authorization, finite limit exhaustion,
+  and two-tenant not-found behavior; exporter tests neutralize spreadsheet
+  formula prefixes.
 - HMAC, replay, ordering, variant/environment mismatch, redirect-no-grant, and
   status matrix billing tests.
 - WebMock denies non-local network access; fixed-origin adapter tests stub every

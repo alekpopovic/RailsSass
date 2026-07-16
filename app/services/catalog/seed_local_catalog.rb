@@ -41,6 +41,39 @@ class Catalog::SeedLocalCatalog
     }
   ].freeze
 
+  PRODUCT_FEATURES = {
+    "analytics" => [
+      {
+        key: "dashboards",
+        name: "Dashboards",
+        description: "View Analytics dashboards.",
+        kind: "flag",
+        active: true
+      },
+      {
+        key: "custom_reports",
+        name: "Custom reports",
+        description: "Create and view custom Analytics reports.",
+        kind: "flag",
+        active: true
+      },
+      {
+        key: "csv_export",
+        name: "CSV export",
+        description: "Export Analytics reports as CSV files.",
+        kind: "flag",
+        active: true
+      },
+      {
+        key: "report_limit",
+        name: "Report limit",
+        description: "Maximum number of Analytics reports for an organization.",
+        kind: "limit",
+        active: true
+      }
+    ]
+  }.freeze
+
   def call
     return false unless local_environment?
 
@@ -50,6 +83,7 @@ class Catalog::SeedLocalCatalog
       )
       seed_records(Product, PRODUCTS)
       seed_records(Plan, PLANS)
+      seed_product_features
     end
 
     true
@@ -65,6 +99,26 @@ class Catalog::SeedLocalCatalog
         record = model.find_or_initialize_by(key: definition.fetch(:key))
         record.assign_attributes(definition.except(:key))
         record.save!
+      end
+    end
+
+    def seed_product_features
+      PRODUCT_FEATURES.each do |product_key, definitions|
+        product = Product.find_by!(key: product_key)
+
+        definitions.each do |definition|
+          feature = product.product_features.find_or_initialize_by(key: definition.fetch(:key))
+          expected_kind = definition.fetch(:kind)
+          if feature.persisted? && feature.kind != expected_kind
+            feature.errors.add(:kind, "does not match the reviewed feature identity")
+            raise ActiveRecord::RecordInvalid, feature
+          end
+
+          mutable_attributes = definition.except(:key, :kind)
+          mutable_attributes[:kind] = expected_kind if feature.new_record?
+          feature.assign_attributes(mutable_attributes)
+          feature.save!
+        end
       end
     end
 end

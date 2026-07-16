@@ -18,10 +18,12 @@ The read-only `Entitlements::Resolver` now implements local subscription status,
 effective-plan selection, and typed catalog entitlement results. Product-RBAC
 persistence, tenant-scoped transactional assignment commands,
 `Access::Gate`/`PermissionChecker`/`Decision`, and base Pundit integration also
-exist. Product-domain controllers/UI and atomic capacity commands remain later
-vertical slices. The application still has no production subscription writer;
-only the future verified-webhook projection may create or change paid local
-state.
+exist. The customer product-assignment controller applies
+`ProductMembershipPolicy`, and the Analytics reference slice composes an exact
+server-owned action registry, `AnalyticsReport` policy/scope, and an atomic
+report-limit command. The application still has no production subscription
+writer; only the future verified-webhook projection may create or change paid
+local state.
 
 ## 2. Security invariants
 
@@ -311,6 +313,35 @@ Representative denial codes are `no_effective_plan`, `product_not_found`,
 resolver has no user, membership, ProductRole, ProductPermission, usage, or
 provider-HTTP logic.
 
+### 5.7 Analytics action contract
+
+The implemented Analytics reference slice registers these exact actions:
+
+| Action | Permission | Required feature | Capacity |
+| --- | --- | --- | --- |
+| `dashboard_read` | `analytics.dashboard.read` | `dashboards` flag | none |
+| `report_read` | `analytics.report.read` | `custom_reports` flag | none |
+| `report_create` | `analytics.report.create` | `custom_reports` flag and `report_limit` limit | one report |
+| `report_manage` | `analytics.report.manage` | `custom_reports` flag | none |
+| `export_run` | `analytics.export.run` | `csv_export` flag | none |
+
+`Products::Analytics::ActionRegistry` is the only mapping from those
+application actions to product, feature, permission, and consumption
+semantics. `Products::Analytics::CreateReport` requires
+`Current.organization`, locks it, repeats the `report_create` decision inside
+the transaction, counts that organization's reports through
+`Current.organization.analytics_reports`, and permits the exact finite boundary
+while denying the next row. Unlimited capacity skips only the numeric ceiling;
+all other gate factors still apply. The command derives the unit and delta
+server-side and accepts only report attributes, so client-supplied organization,
+permission, feature, or usage values have no authority.
+
+`Products::Analytics::ReportPolicy::Scope` starts from
+`Current.organization.analytics_reports`. Show and CSV export load by
+`public_id` through that association before applying `report_read` or
+`export_run`, respectively. A report ID from another organization therefore
+behaves as not found, independent of role or entitlement.
+
 ## 6. Pundit integration
 
 Pundit policies compose the common decision with product-owned record-specific
@@ -328,8 +359,12 @@ assert record ownership and start collection queries at
 `Current.organization`. `ProductMembershipPolicy` is the distinct product
 assignment policy: active owner/admin plus plan product entitlement may
 manage members without requiring the administrator's own product seat;
-billing/member deny. The assignment services remain internal until controllers
-apply that policy.
+billing/member deny. The customer product-membership controller applies that
+policy, re-resolves submitted memberships and active system roles through
+`Current.organization` and the selected product, and passes the actor into the
+transactional command. The command revalidates live owner/admin authority and
+product entitlement under the organization lock and audits successful changes;
+the UI control is never the authorization boundary.
 
 Controller requirements:
 
@@ -525,6 +560,14 @@ change the required permission, feature, consumption flag, or delta calculator.
 Separate unit tests cover the pure common gate, product policy record rules, and
 the product command's atomic capacity+mutation transaction; request tests prove
 all applicable layers compose.
+
+The Analytics reference suite covers the exact action mapping, finite zero,
+exact-boundary and over-limit behavior, unlimited capacity, downgrade behavior,
+authorization revalidation inside the command, final-slot concurrency, report
+ownership, and CSV formula-prefix neutralization. Request and system coverage
+also exercises the dashboard, create/show/export flow, distinct missing
+entitlement and missing-permission denials, exhausted limits, and two-tenant
+not-found behavior.
 
 ### 11.3 Request and isolation tests
 

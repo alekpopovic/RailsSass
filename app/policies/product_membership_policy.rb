@@ -33,6 +33,8 @@ class ProductMembershipPolicy < ApplicationPolicy
   include ManagementContext
 
   def index?
+    return manageable_record? if record.is_a?(ProductMembership)
+
     product_membership_management_context? && Entitlements::Resolver.new(
       organization: Current.organization
     ).enabled_products.any?
@@ -55,6 +57,10 @@ class ProductMembershipPolicy < ApplicationPolicy
 
   def assign_role?
     update? && record.active? && active_product?
+  end
+
+  def unassign_role?
+    update?
   end
 
   def suspend?

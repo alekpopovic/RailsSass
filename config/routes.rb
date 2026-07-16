@@ -4,6 +4,7 @@ Rails.application.routes.draw do
   resources :active_sessions, only: %i[ index destroy ]
   resource :password, only: %i[ new create edit update ]
   resource :email_verification, only: %i[ new create edit update ]
+  resource :profile, only: %i[ show update ]
   resources :organizations, only: %i[ new create ]
 
   namespace :admin do
@@ -54,6 +55,29 @@ Rails.application.routes.draw do
 
   scope "/o/:organization_slug", as: :organization, module: :organizations do
     get "dashboard", to: "dashboard#show", as: :dashboard
+    get "products", to: "products#index", as: :products
+    get "pricing", to: "pricing#index", as: :pricing
+
+    scope "products/:product_key", as: :product do
+      resources :members, controller: :product_memberships, only: %i[index create destroy] do
+        member do
+          patch :suspend
+          patch :reactivate
+          post :assign_role
+          delete :unassign_role
+        end
+      end
+    end
+
+    scope "analytics", as: :analytics, module: :analytics do
+      get "dashboard", to: "dashboard#show", as: :dashboard
+      resources :reports, param: :public_id, only: %i[index new create show] do
+        member do
+          get :export, defaults: { format: :csv }
+        end
+      end
+    end
+
     get "invitations/accept", to: "invitation_acceptances#show", as: :invitation_acceptance
     patch "invitations/accept", to: "invitation_acceptances#update"
 
@@ -70,6 +94,7 @@ Rails.application.routes.draw do
       end
     end
     get "settings", to: "settings#show", as: :settings
+    patch "settings", to: "settings#update"
     get "billing", to: "billing#show", as: :billing
   end
 

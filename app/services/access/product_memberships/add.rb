@@ -1,5 +1,6 @@
 class Access::ProductMemberships::Add < Access::ProductMemberships::Base
-  def initialize(organization_membership_id:, product_id:)
+  def initialize(organization_membership_id:, product_id:, actor: nil)
+    initialize_actor(actor)
     @organization_membership_id = organization_membership_id
     @product_id = product_id
   end
@@ -11,6 +12,7 @@ class Access::ProductMemberships::Add < Access::ProductMemberships::Base
         @organization_membership_id
       )
       product = locked_active_product!(@product_id)
+      authorize_actor_for_product!(organization, product.id)
       product_membership = organization.product_memberships.lock.find_by(
         organization_membership_id: organization_membership.id,
         product_id: product.id
@@ -21,11 +23,17 @@ class Access::ProductMemberships::Add < Access::ProductMemberships::Base
         next product_membership
       end
 
-      organization.product_memberships.create!(
+      product_membership = organization.product_memberships.create!(
         organization_membership: organization_membership,
         product: product,
         status: :active
       )
+      record_audit_event!(
+        action: "product.membership.created",
+        subject: product_membership,
+        metadata: audit_metadata(product_membership)
+      )
+      product_membership
     end
   end
 end

@@ -1,9 +1,45 @@
 <% content_for :title, "#{Current.organization.name} billing" %>
 
-<section class="py-12">
+<section class="py-10 sm:py-12" aria-labelledby="billing-title">
   <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Organization</p>
-  <h1 class="mt-2 text-3xl font-bold tracking-tight text-slate-950">Billing</h1>
-  <p class="mt-4 max-w-2xl text-slate-600">
-    Subscription details will be shown here after the local billing projection is implemented.
-  </p>
+  <h1 id="billing-title" class="mt-2 text-3xl font-bold tracking-tight text-slate-950">Billing overview</h1>
+  <p class="mt-2 max-w-2xl text-slate-600">This page reflects the local subscription projection used for runtime access. Provider redirects never change access.</p>
+
+  <% if @subscription %>
+    <div class="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div class="flex flex-col gap-3 border-b border-slate-200 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p class="text-sm font-medium text-slate-500">Current subscription</p>
+          <h2 class="mt-1 text-xl font-bold text-slate-950"><%= @subscription.plan_price.plan.name %></h2>
+        </div>
+        <span class="w-fit rounded-full px-3 py-1 text-sm font-semibold <%= @subscription_access.allowed? ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900" %>">
+          <%= @subscription.status.humanize %>
+        </span>
+      </div>
+
+      <dl class="grid gap-5 p-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div><dt class="text-sm font-medium text-slate-500">Billing interval</dt><dd class="mt-1 font-semibold text-slate-950"><%= @subscription.plan_price.billing_interval.humanize %></dd></div>
+        <div><dt class="text-sm font-medium text-slate-500">Price</dt><dd class="mt-1 font-semibold text-slate-950"><%= number_to_currency(@subscription.plan_price.amount_cents / 100.0, unit: "#{@subscription.plan_price.currency} ") %></dd></div>
+        <div><dt class="text-sm font-medium text-slate-500">Runtime access</dt><dd class="mt-1 font-semibold text-slate-950"><%= @subscription_access.allowed? ? "Available" : "Unavailable" %></dd></div>
+        <div><dt class="text-sm font-medium text-slate-500">Renews</dt><dd class="mt-1 text-slate-950"><%= @subscription.renews_at ? l(@subscription.renews_at, format: :long) : "Not scheduled" %></dd></div>
+        <div><dt class="text-sm font-medium text-slate-500">Ends</dt><dd class="mt-1 text-slate-950"><%= @subscription.ends_at ? l(@subscription.ends_at, format: :long) : "No end date" %></dd></div>
+        <div><dt class="text-sm font-medium text-slate-500">Payment method</dt><dd class="mt-1 text-slate-950"><%= @subscription.card_brand.present? ? "#{@subscription.card_brand} ending in #{@subscription.card_last_four}" : "Not available" %></dd></div>
+      </dl>
+    </div>
+  <% else %>
+    <div class="mt-8 rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center">
+      <h2 class="text-lg font-semibold text-slate-950">No paid subscription</h2>
+      <p class="mx-auto mt-2 max-w-xl text-sm text-slate-600">
+        <% if @effective_plan %>
+          Your organization currently uses the <%= @effective_plan.name %> plan.
+        <% else %>
+          No effective local plan is available. Product access fails closed.
+        <% end %>
+      </p>
+    </div>
+  <% end %>
+
+  <div class="mt-6">
+    <%= link_to "Compare plans", organization_pricing_path(organization_slug: Current.organization.slug), class: "font-semibold text-indigo-700 hover:text-indigo-600" %>
+  </div>
 </section>

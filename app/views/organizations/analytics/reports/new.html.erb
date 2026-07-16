@@ -1,0 +1,9 @@
+<% content_for :title, "New Analytics report · #{Current.organization.name}" %>
+
+<section class="mx-auto max-w-2xl py-10 sm:py-12" aria-labelledby="new-report-title">
+  <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Analytics</p>
+  <h1 id="new-report-title" class="mt-2 text-3xl font-bold tracking-tight text-slate-950">New report</h1>
+  <p class="mt-2 text-slate-600">Each report consumes one unit of the organization-wide report limit.</p>
+
+  <%= render "form", report: @report %>
+</section>

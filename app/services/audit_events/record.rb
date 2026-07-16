@@ -6,6 +6,8 @@ class AuditEvents::Record
     "from_role" => ->(value) { OrganizationMembership.roles.key?(value.to_s) },
     "to_role" => ->(value) { OrganizationMembership.roles.key?(value.to_s) },
     "membership_id" => ->(value) { value.is_a?(Integer) && value.positive? },
+    "product_key" => ->(value) { value.to_s.match?(Product::KEY_PATTERN) },
+    "product_role_key" => ->(value) { value.to_s.match?(ProductRole::KEY_PATTERN) },
     "source" => ->(value) { value == "organization_invitation" },
     "public_id" => ->(value) { value.to_s.match?(UUID_PATTERN) }
   }.freeze

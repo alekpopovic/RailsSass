@@ -1,0 +1,168 @@
+<% content_for :title, "#{@product.name} members · #{Current.organization.name}" %>
+
+<section class="py-10" aria-labelledby="product-members-title">
+  <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-wide text-indigo-600">Product access</p>
+      <h1 id="product-members-title" class="mt-2 text-3xl font-bold tracking-tight text-slate-950">
+        <%= @product.name %> members
+      </h1>
+      <p class="mt-2 max-w-2xl text-sm text-slate-600">
+        Assign organization members to this product and grant reviewed system roles.
+        Organization roles never grant product data access by themselves.
+      </p>
+    </div>
+
+    <%= link_to "Back to organization members",
+      organization_members_path(organization_slug: Current.organization.slug),
+      class: "inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+  </div>
+
+  <% if @product_membership&.errors&.any? %>
+    <div class="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert" aria-labelledby="product-members-errors-title">
+      <h2 id="product-members-errors-title" class="font-semibold">Product member could not be added</h2>
+      <ul class="mt-2 list-disc space-y-1 pl-5">
+        <% @product_membership.errors.full_messages.each do |message| %>
+          <li><%= message %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <section class="mt-8 rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="add-product-member-title">
+    <h2 id="add-product-member-title" class="text-lg font-semibold text-slate-950">Add product member</h2>
+
+    <% if !@product.active? %>
+      <p class="mt-3 text-sm text-slate-600">This product is inactive. Existing assignments can be revoked, but new assignments are unavailable.</p>
+    <% elsif @available_memberships.any? %>
+      <%= form_with url: organization_product_members_path(
+          organization_slug: Current.organization.slug,
+          product_key: @product.key
+        ), scope: :product_membership, class: "mt-4 flex flex-col gap-3 sm:flex-row sm:items-end" do |form| %>
+        <div class="min-w-0 flex-1">
+          <%= form.label :organization_membership_id, "Organization member", class: "block text-sm font-semibold text-slate-800" %>
+          <%= form.select :organization_membership_id,
+            @available_memberships.map { |membership| [ "#{membership.user.name} (#{membership.role.humanize})", membership.id ] },
+            { prompt: "Select a member" },
+            required: true,
+            class: "mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+        </div>
+        <%= form.submit "Add member",
+          class: "cursor-pointer rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+      <% end %>
+    <% else %>
+      <p class="mt-3 text-sm text-slate-600">Every active organization member is already assigned to this product.</p>
+    <% end %>
+  </section>
+
+  <section class="mt-8" aria-labelledby="assigned-product-members-title">
+    <h2 id="assigned-product-members-title" class="text-lg font-semibold text-slate-950">Assigned members</h2>
+
+    <% if @product_memberships.any? %>
+      <ul class="mt-4 grid gap-4" role="list">
+        <% @product_memberships.each do |product_membership| %>
+          <% role_assignments = product_membership.product_membership_roles.to_a %>
+          <% assigned_roles = role_assignments.map(&:product_role).sort_by { |role| [role.name, role.id] } %>
+          <% assigned_role_ids = role_assignments.map(&:product_role_id) %>
+          <% available_roles = @system_roles.reject { |role| assigned_role_ids.include?(role.id) } %>
+          <li class="rounded-xl border border-slate-200 bg-white p-5">
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div class="min-w-0">
+                <p class="truncate font-semibold text-slate-950"><%= product_membership.organization_membership.user.name %></p>
+                <p class="truncate text-sm text-slate-600"><%= product_membership.organization_membership.user.email_address %></p>
+                <p class="mt-2 text-xs font-semibold uppercase tracking-wide <%= product_membership.active? ? "text-emerald-700" : "text-amber-700" %>">
+                  <%= product_membership.status.humanize %>
+                </p>
+              </div>
+
+              <div class="flex flex-wrap gap-2">
+                <% if policy(product_membership).suspend? %>
+                  <%= button_to "Suspend",
+                    suspend_organization_product_member_path(
+                      organization_slug: Current.organization.slug,
+                      product_key: @product.key,
+                      id: product_membership.id
+                    ), method: :patch,
+                    form: { data: { turbo_confirm: "Suspend product access for this member?" } },
+                    class: "cursor-pointer rounded-lg border border-amber-300 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2" %>
+                <% elsif policy(product_membership).reactivate? %>
+                  <%= button_to "Reactivate",
+                    reactivate_organization_product_member_path(
+                      organization_slug: Current.organization.slug,
+                      product_key: @product.key,
+                      id: product_membership.id
+                    ), method: :patch,
+                    class: "cursor-pointer rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2" %>
+                <% end %>
+
+                <% if policy(product_membership).destroy? %>
+                  <%= button_to "Remove",
+                    organization_product_member_path(
+                      organization_slug: Current.organization.slug,
+                      product_key: @product.key,
+                      id: product_membership.id
+                    ), method: :delete,
+                    form: { data: { turbo_confirm: "Remove this product membership and all role assignments?" } },
+                    class: "cursor-pointer rounded-lg border border-red-300 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2" %>
+                <% end %>
+              </div>
+            </div>
+
+            <div class="mt-5 border-t border-slate-200 pt-4">
+              <h3 class="text-sm font-semibold text-slate-900">Assigned roles</h3>
+
+              <% if assigned_roles.any? %>
+                <ul class="mt-3 flex flex-wrap gap-2" aria-label="Roles for <%= product_membership.organization_membership.user.name %>">
+                  <% assigned_roles.each do |role| %>
+                    <li class="inline-flex items-center gap-2 rounded-full bg-slate-100 py-1 pl-3 pr-1 text-sm font-medium text-slate-800">
+                      <span><%= role.name %></span>
+                      <% if role.system? && policy(product_membership).unassign_role? %>
+                        <%= button_to "Remove #{role.name}",
+                          unassign_role_organization_product_member_path(
+                            organization_slug: Current.organization.slug,
+                            product_key: @product.key,
+                            id: product_membership.id
+                          ), method: :delete,
+                          params: { role_key: role.key },
+                          class: "cursor-pointer rounded-full px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500",
+                          title: "Unassign #{role.name}" %>
+                      <% end %>
+                    </li>
+                  <% end %>
+                </ul>
+              <% else %>
+                <p class="mt-2 text-sm text-slate-600">No product role is assigned. This member has no product permissions.</p>
+              <% end %>
+
+              <% if policy(product_membership).assign_role? && available_roles.any? %>
+                <%= form_with url: assign_role_organization_product_member_path(
+                    organization_slug: Current.organization.slug,
+                    product_key: @product.key,
+                    id: product_membership.id
+                  ), method: :post, class: "mt-4 flex flex-col gap-3 sm:flex-row sm:items-end" do |form| %>
+                  <div class="min-w-0 flex-1">
+                    <%= form.label :role_key,
+                      "Add role for #{product_membership.organization_membership.user.name}",
+                      class: "block text-sm font-semibold text-slate-800" %>
+                    <%= form.select :role_key,
+                      available_roles.map { |role| [ role.name, role.key ] },
+                      { prompt: "Select a system role" },
+                      required: true,
+                      class: "mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" %>
+                  </div>
+                  <%= form.submit "Assign role",
+                    class: "cursor-pointer rounded-lg border border-indigo-300 px-4 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+                <% end %>
+              <% end %>
+            </div>
+          </li>
+        <% end %>
+      </ul>
+    <% else %>
+      <div class="mt-4 rounded-xl border border-dashed border-slate-300 bg-white px-5 py-8 text-center">
+        <p class="font-semibold text-slate-900">No product members yet</p>
+        <p class="mt-1 text-sm text-slate-600">Add an organization member above, then assign a reviewed product role.</p>
+      </div>
+    <% end %>
+  </section>
+</section>

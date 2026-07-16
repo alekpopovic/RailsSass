@@ -1,5 +1,6 @@
 class Access::ProductMemberships::AssignRole < Access::ProductMemberships::Base
-  def initialize(product_membership_id:, product_role_id:)
+  def initialize(product_membership_id:, product_role_id:, actor: nil)
+    initialize_actor(actor)
     @product_membership_id = product_membership_id
     @product_role_id = product_role_id
   end
@@ -13,14 +14,25 @@ class Access::ProductMemberships::AssignRole < Access::ProductMemberships::Base
         product_membership.organization_membership_id
       )
       locked_active_product!(product_membership.product_id)
+      authorize_actor_for_product!(organization, product_membership.product_id)
       product_role = locked_assignable_role!(organization, product_membership)
 
-      product_membership.product_membership_roles.lock.find_by(product_role_id: product_role.id) ||
-        product_membership.product_membership_roles.create!(
+      assignment = product_membership.product_membership_roles.lock.find_by(
+        product_role_id: product_role.id
+      )
+      next assignment if assignment
+
+      assignment = product_membership.product_membership_roles.create!(
           organization: organization,
           product_id: product_membership.product_id,
           product_role: product_role
         )
+      record_audit_event!(
+        action: "product.membership.role_assigned",
+        subject: product_membership,
+        metadata: audit_metadata(product_membership, product_role: product_role)
+      )
+      assignment
     end
   end
 

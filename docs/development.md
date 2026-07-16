@@ -192,44 +192,54 @@ Development and test may load the synthetic local catalog repeatedly:
 
 ```bash
 bin/rails db:seed
+RAILS_ENV=test bin/rails db:seed
 ```
 
+Test `db:prepare` uses `seeds: false`, so quality-gate database preparation is
+deterministic and does not grant catalog or RBAC state implicitly. Run the
+explicit test seed command only when manually exercising seeded test data;
+automated tests create the exact catalog and access graph they require.
+
 The task converges products `core`, `analytics`, and `crm` plus plans `starter`
-and `professional` by stable key. For both Analytics and CRM it also converges
-the active system roles `viewer`, `contributor`, and `product_admin` with this
-synthetic permission map:
+and `professional` by stable key. Analytics also receives the flag features
+`dashboards`, `custom_reports`, and `csv_export` plus the numeric
+`report_limit`. For both Analytics and CRM the task converges the active system
+roles `viewer`, `contributor`, and `product_admin` with this synthetic
+permission map:
 
 | Product | Viewer | Contributor | Product Admin |
 | --- | --- | --- | --- |
-| Analytics | `reports.view` | `reports.view`, `reports.manage` | `reports.view`, `reports.manage`, `settings.manage` |
+| Analytics | `analytics.dashboard.read`, `analytics.report.read` | Viewer permissions plus `analytics.report.create`, `analytics.export.run` | All five Analytics permissions, including `analytics.report.manage` |
 | CRM | `contacts.view` | `contacts.view`, `contacts.manage` | `contacts.view`, `contacts.manage`, `settings.manage` |
 
 Repeated execution repairs mutable display metadata and restores missing
-reviewed mappings while preserving stable identities. It is a no-op outside
-development/test and does not create Core roles, organization-specific roles,
-product memberships, entitlements, prices, Lemon identifiers, subscriptions, or
+reviewed mappings while preserving stable identities and refusing to change an
+existing feature's kind. It is a no-op outside development/test and does not
+create Core roles, organization-specific roles, plan-product rows,
+entitlements, prices, Lemon identifiers, subscriptions, product memberships, or
 tenant access grants.
 
 ## Runtime product access
 
-Product policies use the same central decision as presentation predicates:
+Analytics controllers, policies, commands, and presentation predicates resolve
+security semantics from the same action registry:
 
 ```ruby
-decision = Access::Gate.new(
-  context: AuthorizationContext.current,
-  product_key: "analytics",
-  permission_key: "reports.view",
-  feature_key: "exports"
-).call
+decision = Products::Analytics::ActionRegistry.decision(
+  :report_create,
+  context: AuthorizationContext.current
+)
 ```
 
-The gate is read-only, uses local database state, and returns an immutable
-`Access::Decision` with a stable reason code and entitlement metadata. It never
-calls Lemon Squeezy. `ApplicationPolicy` and `ApplicationPolicy::Scope` expose
-protected helpers for concrete product policies; controllers must still call
-Pundit's `authorize`/`policy_scope`. Product-member administration is separate:
-`ProductMembershipPolicy` permits active owner/admin actors only when the
-effective plan includes the product, while billing/member actors deny.
+The registry invokes the read-only common gate with fixed product, permission,
+feature, and capacity semantics. It uses local database state and never calls
+Lemon Squeezy. Controllers still call Pundit's `authorize`/`policy_scope`, and
+`Products::Analytics::CreateReport` repeats the decision under an organization
+lock before measuring `Current.organization.analytics_reports` and inserting a
+row. Product-member administration is separate: `ProductMembershipPolicy`
+permits active owner/admin actors only when the effective plan includes the
+product, while billing/member actors deny; the command revalidates that actor
+authority inside its transaction.
 
 The primary PostgreSQL database uses `db/structure.sql` so a clean schema load
 preserves database functions and deferred constraint triggers. Generate it only

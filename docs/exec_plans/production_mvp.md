@@ -21,8 +21,9 @@ Deliver the Rails modular-monolith SaaS MVP defined by:
 This plan is intentionally split into small, sequential PRs. Each PR must leave
 `main` deployable, add tests for every behavior it introduces, and avoid relying
 on a later PR to make an insecure endpoint safe.
-
-No application code or migration is part of this planning change.
+It is also the living checkpoint record for slices already implemented in the
+repository; later work must re-audit those checkpoints rather than assuming the
+original plan was followed perfectly.
 
 ## 2. Locked decisions
 
@@ -78,6 +79,10 @@ Implementation PRs may not silently change these decisions:
 - The common Access gate is pure entitlement+RBAC; product policies own record
   rules and product commands own atomic capacity/mutation via server action
   contracts.
+- The Analytics reference contract uses stable feature keys `dashboards`,
+  `custom_reports`, `csv_export`, and `report_limit`, and the five exact action
+  mappings documented in the authorization model. One report creation consumes
+  one organization-wide `report_limit` unit.
 
 A change to one of these requires an ADR/document update before or in the same
 PR as implementation.
@@ -111,9 +116,12 @@ Observed on 2026-07-16:
   including transactional assignment commands and constrained synthetic local
   seeds. The central ordered `Access::Gate`, live permission checker, immutable
   decision result, shared Pundit helpers, and product-membership management
-  policy also exist. Product assignment HTTP/UI, a concrete product-domain
-  action/capacity slice, billing synchronization, and production hardening
-  remain unimplemented.
+  policy also exist. The customer shell now provides dashboard, product and
+  pricing catalogs, member/product assignment, local-only billing overview,
+  organization settings, and profile pages. The Analytics reference slice adds
+  tenant-owned reports, exact feature/permission action mappings, atomic
+  report-limit enforcement, and CSV export. Billing synchronization, checkout,
+  portal actions, and production hardening remain unimplemented.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
 
@@ -129,7 +137,7 @@ value in code.
 | --- | --- | --- |
 | Whether `RailsSass`/`rails_sass` naming is intentional or should be `SaaS`/product-specific | PR-00 | Preserve current identifiers until explicitly decided |
 | Initial production product, feature, permission, and role keys | PR-07 | Keep the reviewed Analytics/CRM seed synthetic and local-only until production inputs are approved |
-| Numeric feature units and authoritative usage queries | PR-15 | No production numeric feature enabled |
+| Numeric feature units and authoritative usage queries | PR-15 | Analytics report creation consumes one unit and counts tenant-owned reports; other production units remain unapproved |
 | Initial plan-product rows and feature entitlement values | PR-08 | Synthetic development/test fixtures until product approval |
 | Test/live Lemon variant mappings | PR-11/PR-16 | Test mappings only outside production |
 | Production host, registry, PostgreSQL, backup target, and alert destination | PR-20 | No deploy |
@@ -645,9 +653,10 @@ Scope:
 
 - Add `ProductMembership` and `ProductMembershipRole`.
 - Add tenant-scoped transactional add/remove/assign-role/suspend/reactivate
-  services without actor authorization; they are internal until PR-10B.
+  services as the structural command boundary; PR-10B adds the customer actor
+  authorization path without changing their tenant-scoping contract.
 - Allow existing assignments to remain dormant without a current plan
-  entitlement rather than deleting them on downgrade. The later management UI
+  entitlement rather than deleting them on downgrade. The management UI
   does not expose or mutate them until the product is entitled again.
 - Product suspension preserves role joins, while removal deletes the assignment.
 - A role-less product membership grants no action.
@@ -674,7 +683,7 @@ Tests:
 Acceptance: RBAC assignment data is safe but does not yet imply runtime product
 access.
 
-### PR-10B: Authorize and expose product-assignment management — policy checkpoint implemented
+### PR-10B: Authorize and expose product-assignment management — implemented checkpoint
 
 Depends on: PR-10A.
 
@@ -684,21 +693,28 @@ server-authorized tenant UI.
 Scope:
 
 - The `ProductMembershipPolicy` owner/admin + product-entitlement decision and
-  tenant-rooted scope are implemented; add tenant controllers that reload all
-  assignment targets through `Current.organization` and system/catalog
-  allowlists.
+  tenant-rooted scope are implemented. The tenant controller reloads every
+  assignment target through `Current.organization` and every assignable role
+  through the selected product's active system-role allowlist.
 - Owner/admin may manage assignments; billing/member may not. No organization
   role bypasses product runtime permission checks.
-- Add focused accessible Hotwire UI with suspended-state messaging; dormant
+- The customer UI supports add/remove, suspend/reactivate, and role
+  assign/unassign flows with explicit empty/suspended states. Dormant
   assignments remain inaccessible while the product is not entitled.
+- Each customer mutation passes the actor to a transactional command that
+  revalidates live owner/admin authority and product entitlement under the
+  organization lock and writes bounded audit evidence.
 - Keep organization-specific custom-role creation/editing outside the MVP.
 
-Tests: complete organization-role policy table, two-tenant IDOR requests,
-UI-hidden direct mutation denial, and keyboard/narrow-viewport system flows.
+Tests: organization-role policy table, actor/audit command checks, two-tenant
+IDOR requests, submitted-role allowlisting, and direct mutation denial for
+billing/member actors.
 
-Acceptance: the policy layer is implemented, but the management surface remains
-incomplete until controller/request/UI tests land. Assignment management never
-grants product-data access; that uses the full Access gate.
+Acceptance: the server-authorized management surface and request coverage are
+implemented. Assignment management never grants product-data access; that uses
+the full Access gate. Broad keyboard/narrow-viewport evidence remains part of
+the shared customer-shell UX hardening checkpoint rather than this security
+boundary.
 
 #### Implemented Billing foundation checkpoint
 
@@ -921,9 +937,12 @@ Tests:
 Acceptance: enable test-mode provider webhook only after automated suite is
 green; complete dashboard resend/simulation contract test with sanitized output.
 
-### PR-15: Add central product authorization and a thin vertical slice — common gate implemented
+### PR-15: Add central product authorization and a thin vertical slice — implemented checkpoint
 
 Depends on: PR-08, PR-10B, PR-12, PR-14B, and chosen initial product contract.
+The implemented application checkpoint uses synthetic/local catalog and
+subscription projection state; it does not waive the still-unimplemented
+verified Billing projection or approved production catalog inputs.
 
 **Goal:** enforce the complete entitlement AND permission decision on a real
 server-side action.
@@ -934,24 +953,33 @@ Scope:
   `Access::PermissionChecker` are implemented with structured reason codes.
 - The gate composes the existing `Entitlements::Result`; it does not duplicate
   paid-status, free-fallback, catalog typing, or cache logic inside Access.
-- Add server-owned action registry mapping product action to permission,
-  required feature, and consumption contract; clients cannot supply/omit those
-  semantics.
+- `Products::Analytics::ActionRegistry` maps the five reviewed actions to exact
+  Analytics permissions/features. `report_create` additionally requires the
+  `report_limit` entitlement and derives a delta of one; clients cannot
+  supply/omit those semantics.
 - Keep the common gate read-only: compose active tenant membership, the effective
   local plan (accessible paid subscription or active free fallback),
   product/feature entitlement/typed limit, product membership, and permission
   only.
-- Add product-owned Pundit record rules and a minimal product route/action
-  demonstrating base, boolean-feature, and numeric-capacity behavior.
-- Implement a product command that revalidates the common grant and atomically
-  enforces its authoritative usage plus server-calculated delta with mutation;
-  do not add a generic metering ledger.
+- `AnalyticsReport` is owned by `organization_id`, addressed externally by
+  `public_id`, loaded through `Current.organization.analytics_reports`, and
+  protected by the product-owned report policy/scope.
+- Analytics dashboard and report index/create/show/CSV export routes demonstrate
+  boolean-feature, product permission, tenant ownership, and numeric capacity
+  composition. CSV output uses fixed columns and neutralizes spreadsheet formula
+  prefixes.
+- `Products::Analytics::CreateReport` revalidates the common grant while holding
+  the organization lock and atomically compares the authoritative tenant report
+  count plus its server-owned delta with finite/unlimited capacity; no generic
+  metering ledger is added.
 - `ApplicationPolicy` and `Scope` expose the same gate for UI predicates and
-  request authorization; the first concrete product-domain policy/action still
-  needs to use it.
+  request authorization; the concrete Analytics policy and controllers use it.
 
-Migrations: only the selected product vertical-slice tenant table/counter, with
-organization FK, composite ownership, uniqueness, and capacity constraints.
+Migration: `20260716060000_create_analytics_reports.rb` adds only the
+tenant-owned report table, with organization foreign key, database-generated
+unique public UUID, normalized/length checks, and the tenant list index. The
+rows themselves are the authoritative usage set, so there is no counter or
+generic capacity table.
 
 Tests:
 
@@ -965,9 +993,24 @@ Tests:
 - two-tenant guessed IDs and direct POST;
 - zero Lemon Squeezy calls during every decision.
 
-Acceptance: the common gate truth table is implemented and provider-offline.
-The PR remains incomplete until a concrete tenant product action, request/IDOR
-tests, action registry, and atomic capacity command prove end-to-end use.
+Acceptance checkpoint: the common gate, action registry, tenant record policy,
+atomic report command, CSV exporter, and customer routes are implemented.
+Focused request/service/policy evidence proves distinct entitlement and
+permission denials, create/show/export behavior, exhausted capacity, and
+two-tenant not-found behavior. Chromium system evidence covers the allowed
+vertical slice, required-plan locked card, distinct missing-permission state,
+direct-route denial, and guessed cross-tenant report ID.
+
+Verification evidence recorded on 2026-07-16; both commands ran in Docker and
+the system command used Chromium with CI flags:
+
+```text
+bin/rails test test/requests/analytics_customer_product_test.rb test/requests/customer_shell_test.rb test/requests/product_memberships_test.rb test/services/products/analytics test/policies/product_membership_policy_test.rb
+42 runs, 410 assertions, 0 failures, 0 errors, 0 skips
+
+bin/rails test test/system/product_access_test.rb
+4 runs, 23 assertions, 0 failures, 0 errors, 0 skips
+```
 
 ### PR-16: Add server-authorized checkout and pending return
 
@@ -1224,7 +1267,7 @@ manual evidence and an owner.
 | Job | Current setup/reset, retries, duplicate/reordered event projection, sweeper recovery, quarantine |
 | Provider contract | Sanitized official-style payloads, exact HMAC, DTO mapping, fixed-origin HTTP, test/live separation |
 | Concurrency | Last owner, pending checkout uniqueness, subscription projection locks, final numeric unit |
-| System | Organization switch, invitation, product assignment, checkout pending-to-active, billing status |
+| System | Organization switch, invitation, customer shell, product assignment, Analytics entitlement/permission/isolation, checkout pending-to-active, billing status |
 | Security/quality | RuboCop, Brakeman, dependency/import audits, redaction, CSP/headers/rate/body limits |
 | Operations | DB prepare/migrate/restore, eager load, image build/boot, worker recovery, deploy/rollback |
 
@@ -1254,8 +1297,9 @@ focused command, such as a concurrency or provider contract test, but may not
 silently omit a failing standard check. If a check cannot run, report the exact
 blocker; do not report it as passing.
 
-Current planning-time results are recorded in section 3 and are not green
-baseline evidence.
+Focused results recorded in a detailed checkpoint are evidence only for the
+commands shown and do not substitute for the full `bin/ci` baseline. Record
+full-gate results separately whenever they are actually run.
 
 ## 10. Production MVP acceptance matrix
 
@@ -1268,8 +1312,8 @@ baseline evidence.
 | A5 | Role matrix and concurrent last-owner invariant are exact | PR-04/06 policy+concurrency tests |
 | A6 | Catalog keys are stable; plan-product, flag/finite/unlimited entitlements, free-plan uniqueness, and prices are database-constrained | PR-07–08 DB/service tests |
 | A7 | Cross-product roles/permissions/assignments are impossible | PR-09/10A DB plus PR-10B request tests |
-| A8 | Owner/admin have no product bypass; all entitlement+RBAC factors are required | PR-15 truth table |
-| A9 | Flag, finite/unlimited limits, and concurrent final-unit consumption are correct | PR-15 service/concurrency tests |
+| A8 | Owner/admin have no product bypass; all entitlement+RBAC factors are required | PR-15 gate and Analytics request/system truth table |
+| A9 | Flag, finite/unlimited limits, and concurrent final-unit consumption are correct | PR-15 Analytics service/concurrency tests |
 | A10 | Every paid billing status/time boundary and active-free fallback matches the one canonical matrix | PR-12/14B table tests |
 | A11 | Redirect/API/portal success never changes access | PR-16–17 request/integration tests |
 | A12 | Forged/mutated/replayed/reordered/mismatched webhooks cannot over-grant | PR-13–14B tests/drills |

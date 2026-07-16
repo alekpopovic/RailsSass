@@ -22,4 +22,13 @@ class ApplicationConfigurationTest < ActiveSupport::TestCase
     assert_equal :ruby, schema_formats.fetch("queue")
     assert_equal :ruby, schema_formats.fetch("cable")
   end
+
+  test "does not auto-seed the test database during database prepare" do
+    test_database = ActiveRecord::Base.configurations.configs_for(
+      env_name: "test",
+      name: "primary"
+    )
+
+    assert_not test_database.seeds?
+  end
 end

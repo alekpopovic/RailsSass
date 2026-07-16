@@ -4,10 +4,13 @@ require "timeout"
 class Access::SeedSystemProductRbacConcurrencyTest < ActiveSupport::TestCase
   ROLE_KEYS = %w[contributor product_admin viewer].freeze
   PERMISSION_KEYS = %w[
+    analytics.dashboard.read
+    analytics.export.run
+    analytics.report.create
+    analytics.report.manage
+    analytics.report.read
     contacts.manage
     contacts.view
-    reports.manage
-    reports.view
     settings.manage
   ].freeze
 
@@ -61,11 +64,11 @@ class Access::SeedSystemProductRbacConcurrencyTest < ActiveSupport::TestCase
 
     assert_equal [ true, true ], outcomes
     assert_equal 6, seeded_roles.count
-    assert_equal 6, seeded_permissions.count
-    assert_equal 12, seeded_role_permissions.count
+    assert_equal 8, seeded_permissions.count
+    assert_equal 17, seeded_role_permissions.count
     assert_equal 6, seeded_roles.distinct.count(:id)
-    assert_equal 6, seeded_permissions.distinct.count(:id)
-    assert_equal 12, seeded_role_permissions.distinct.count(:id)
+    assert_equal 8, seeded_permissions.distinct.count(:id)
+    assert_equal 17, seeded_role_permissions.distinct.count(:id)
   ensure
     threads&.each do |thread|
       next if thread.join(1)

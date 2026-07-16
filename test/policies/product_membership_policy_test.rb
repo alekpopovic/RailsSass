@@ -95,6 +95,7 @@ class ProductMembershipPolicyTest < ActiveSupport::TestCase
     assert active_policy.show?
     assert active_policy.update?
     assert active_policy.assign_role?
+    assert active_policy.unassign_role?
     assert active_policy.suspend?
     assert_not active_policy.reactivate?
     assert active_policy.destroy?
@@ -107,6 +108,7 @@ class ProductMembershipPolicyTest < ActiveSupport::TestCase
     assert suspended_policy.show?
     assert suspended_policy.update?
     assert_not suspended_policy.assign_role?
+    assert suspended_policy.unassign_role?
     assert_not suspended_policy.suspend?
     assert suspended_policy.reactivate?
     assert suspended_policy.destroy?
@@ -128,6 +130,17 @@ class ProductMembershipPolicyTest < ActiveSupport::TestCase
     assert policy.create?
     assert policy.new?
     assert_not policy.show?
+  end
+
+  test "product-scoped index requires entitlement for the requested product" do
+    scoped_record = @organization.product_memberships.new(product: @product)
+
+    assert ProductMembershipPolicy.new(@context, scoped_record).index?
+
+    unentitled_product = create_test_product(key: "product_policy_index_crm")
+    unentitled_record = @organization.product_memberships.new(product: unentitled_product)
+
+    assert_not ProductMembershipPolicy.new(@context, unentitled_record).index?
   end
 
   test "create rejects foreign and suspended target memberships" do
@@ -325,7 +338,7 @@ class ProductMembershipPolicyTest < ActiveSupport::TestCase
     def assert_management_actions(context, allowed:)
       policy = policy_for(context)
 
-      %i[show? update? assign_role? suspend? destroy?].each do |query|
+      %i[show? update? assign_role? unassign_role? suspend? destroy?].each do |query|
         assert_equal allowed, policy.public_send(query), "expected #{query} to be #{allowed}"
       end
     end

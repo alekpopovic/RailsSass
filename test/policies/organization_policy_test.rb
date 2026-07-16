@@ -16,10 +16,22 @@ class OrganizationPolicyTest < ActiveSupport::TestCase
 
   test "role matrix grants only the organization capabilities assigned to each role" do
     expectations = {
-      owner: { dashboard: true, members: true, settings: true, billing: true },
-      admin: { dashboard: true, members: true, settings: true, billing: false },
-      billing: { dashboard: true, members: false, settings: false, billing: true },
-      member: { dashboard: true, members: false, settings: false, billing: false }
+      owner: {
+        dashboard: true, products: true, pricing: true, members: true,
+        settings: true, update: true, billing: true
+      },
+      admin: {
+        dashboard: true, products: true, pricing: true, members: true,
+        settings: true, update: true, billing: false
+      },
+      billing: {
+        dashboard: true, products: true, pricing: true, members: false,
+        settings: false, update: false, billing: true
+      },
+      member: {
+        dashboard: true, products: true, pricing: true, members: false,
+        settings: false, update: false, billing: false
+      }
     }
 
     expectations.each_with_index do |(role, permissions), index|

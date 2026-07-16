@@ -1,0 +1,38 @@
+<% if report.errors.any? %>
+  <div role="alert" class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+    <p class="font-semibold">Please review the report details.</p>
+    <ul class="mt-2 list-disc space-y-1 pl-5">
+      <% report.errors.full_messages.each do |message| %>
+        <li><%= message %></li>
+      <% end %>
+    </ul>
+  </div>
+<% end %>
+
+<%= form_with model: report,
+  url: organization_analytics_reports_path(organization_slug: Current.organization.slug),
+  class: "mt-6 space-y-5" do |form| %>
+  <div>
+    <%= form.label :name, class: "block text-sm font-semibold text-slate-800" %>
+    <%= form.text_field :name,
+      required: true,
+      maxlength: 100,
+      autofocus: true,
+      class: "mt-2 w-full rounded-lg border-slate-300 focus:border-indigo-500 focus:ring-indigo-500" %>
+  </div>
+
+  <div>
+    <%= form.label :description, class: "block text-sm font-semibold text-slate-800" %>
+    <%= form.text_area :description,
+      rows: 5,
+      maxlength: 2000,
+      class: "mt-2 w-full rounded-lg border-slate-300 focus:border-indigo-500 focus:ring-indigo-500" %>
+  </div>
+
+  <div class="flex flex-wrap gap-3">
+    <%= form.submit "Create report", class: "cursor-pointer rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+    <%= link_to "Cancel",
+      organization_analytics_reports_path(organization_slug: Current.organization.slug),
+      class: "rounded-lg border border-slate-300 px-4 py-2.5 font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" %>
+  </div>
+<% end %>

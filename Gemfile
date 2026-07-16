@@ -18,6 +18,8 @@ gem "stimulus-rails"
 gem "tailwindcss-rails"
 # Build JSON APIs with ease [https://github.com/rails/jbuilder]
 gem "jbuilder"
+# CSV is a bundled gem rather than a Ruby default gem on supported Ruby releases.
+gem "csv"
 
 # Authorization policies [https://github.com/varvet/pundit]
 gem "pundit", "~> 2.5"

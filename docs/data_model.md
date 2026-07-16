@@ -10,9 +10,10 @@ defines ownership, names, relationships, indexes, foreign keys, and database
 constraints. Account/session, organization, invitation/audit, and local catalog
 migrations exist. A constrained Billing persistence foundation, read-only
 Entitlements resolver, product-RBAC persistence/services, and the central
-Access/Pundit decision layer also exist, but provider mapping, locator, verified
-projection, product-domain policy/UI work, and capacity commands remain planned
-in the documented execution order.
+Access/Pundit decision layer also exist. The first product-owned table,
+`analytics_reports`, and its policy/action/capacity slice are implemented;
+provider mapping, locator, verified projection, and broader product modules
+remain planned in the documented execution order.
 
 Behavioral interpretation is defined in
 [Authorization Model](authorization_model.md) and
@@ -94,6 +95,7 @@ erDiagram
   ORGANIZATION ||--o{ BILLING_CHECKOUT_ATTEMPT : owns
   BILLING_SUBSCRIPTION ||--o{ BILLING_PLAN_CHANGE : receives
   ORGANIZATION ||--o{ BILLING_PROVIDER_LOCATOR : discovered_by
+  ORGANIZATION ||--o{ ANALYTICS_REPORT : owns
 ```
 
 ## 5. Accounts and tenancy
@@ -539,7 +541,7 @@ Composite foreign keys:
 - `organization_id` to `organizations` for explicit tenant ownership.
 
 Unique `(product_membership_id, product_role_id)`. Multiple roles are allowed;
-their active-role permission union is evaluated by the future Access decision.
+their active-role permission union is evaluated by the live Access decision.
 A database trigger permits a system role for any tenant but permits an
 organization-specific role only when its `organization_id` equals the product
 membership's organization. This conditional null/global rule cannot be safely
@@ -554,17 +556,20 @@ Admin). The reviewed synthetic mappings are:
 
 | Product | Permission keys | Viewer | Contributor | Product Admin |
 | --- | --- | --- | --- | --- |
-| `analytics` | `reports.view`, `reports.manage`, `settings.manage` | `reports.view` | Viewer + `reports.manage` | Contributor + `settings.manage` |
+| `analytics` | `analytics.dashboard.read`, `analytics.report.read`, `analytics.report.create`, `analytics.report.manage`, `analytics.export.run` | dashboard + report read | Viewer + report create + export | all five permissions |
 | `crm` | `contacts.view`, `contacts.manage`, `settings.manage` | `contacts.view` | Viewer + `contacts.manage` | Contributor + `settings.manage` |
 
-The seed converges these definitions by stable product/role/permission keys. It
-does not seed Core roles, organization-specific roles, product memberships, or
-tenant access grants, and it is a no-op outside development/test.
+The local catalog seed also converges Analytics flag features `dashboards`,
+`custom_reports`, and `csv_export`, plus the limit feature `report_limit`, while
+refusing to change a persisted feature kind. The seeds do not create Core
+roles, organization-specific roles, product memberships, plan-product rows,
+feature entitlement values, prices, subscriptions, or tenant access grants,
+and they are a no-op outside development/test.
 
 ### 7.7 Product-assignment commands
 
-`Access::ProductMemberships::{Add,Remove,AssignRole,Suspend,Reactivate}` own the
-transaction boundaries for assignment changes. They require an active
+`Access::ProductMemberships::{Add,Remove,AssignRole,UnassignRole,Suspend,Reactivate}`
+own the transaction boundaries for assignment changes. They require an active
 `Current.organization`, reload every tenant-owned target through that
 organization, and resolve products/system roles through explicit active catalog
 allowlists. Add and reactivate require an active parent organization membership;
@@ -573,12 +578,31 @@ same-organization role. Repeated add/assignment/suspend/reactivate calls are
 idempotent where the requested state already exists; remove deletes the product
 membership and its role joins.
 
-These commands deliberately have no actor/Pundit decision and are not a
-controller boundary. `ProductMembershipPolicy` now provides the owner/admin plus
-product-entitlement decision for the future request/UI surface; controllers
-must still call it before invoking a command. Billing/member actors deny, and
-the full product-data `Access::Gate` remains separate from assignment
-management.
+The customer controller first applies `ProductMembershipPolicy` and passes
+`Current.user` as actor. The command then repeats live authenticated
+owner/admin and product-entitlement checks under the organization lock and
+writes an allowlisted tenant audit event in the same transaction. Direct
+internal callers may omit the actor only where a separately authorized system
+workflow owns the boundary. Billing/member actors deny, and the full
+product-data `Access::Gate` remains separate from assignment management.
+
+### 7.8 `AnalyticsReport` / `analytics_reports`
+
+- `organization_id`: not-null tenant foreign key with `ON DELETE RESTRICT`;
+- `public_id`: database-generated immutable UUID, not null and globally unique;
+- `name`: normalized non-blank string, maximum 100 characters;
+- `description`: normalized non-null text defaulting to empty, maximum 2,000
+  characters;
+- non-null timestamps.
+
+The tenant list lookup index is `(organization_id, created_at, id)`. Database
+checks enforce trimmed name/description and their length bounds. Every lookup,
+count, create, show, and export begins at
+`Current.organization.analytics_reports`; a public UUID from another tenant
+therefore behaves as not found. Organization deletion is restricted while a
+report exists. Reports are the authoritative organization-wide usage set for
+the finite/unlimited `report_limit`; no duplicate counter or generic usage
+ledger is introduced.
 
 ## 8. Billing
 
@@ -1047,6 +1071,7 @@ entitlement boolean; `-1` and null are never implicit unlimited sentinels.
 | User | Disable; hard deletion requires a separate privacy workflow |
 | Organization | Retain; organization archive and hard deletion are outside the MVP |
 | Membership | Soft-suspend; service deletes product memberships/role joins and the global access locator atomically once those records exist |
+| Analytics report | Retain as tenant-owned product data; no customer delete action is exposed in the reference slice |
 | Invitation | Revoke/expire; retain minimal audit metadata for a bounded period |
 | Platform audit event | Append-only global catalog evidence; no ordinary application update/delete path |
 | Product/feature/role/permission | Platform admins deactivate products/features through audited commands; roles follow their reviewed lifecycle; stable identities are never renamed and no internal UI hard-deletes them |
