@@ -14,10 +14,13 @@ subscription predicate is in
 [Billing Model](billing_model.md#8-subscription-access-matrix).
 
 The read-only `Entitlements::Resolver` now implements local subscription status,
-effective-plan selection, and typed catalog entitlement results. The application
-still has no production subscription writer: only the future verified-webhook
-projection may create or change paid local state. Product RBAC and the complete
-`Access::Decision` composition remain separate later milestones.
+effective-plan selection, and typed catalog entitlement results. Product-RBAC
+persistence and tenant-scoped transactional assignment commands also exist.
+They are not yet a public authorization surface: Pundit/controller integration,
+customer-facing UI, and the complete `Access::Decision` composition are the
+next Access milestone. The application still has no production subscription
+writer; only the future verified-webhook projection may create or change paid
+local state.
 
 ## 2. Security invariants
 
@@ -32,11 +35,13 @@ projection may create or change paid local state. Product RBAC and the complete
 7. Owner/admin/billing/member never bypass product RBAC or entitlements.
 8. A product membership without a role grants no permission.
 9. A permission without a product membership grants nothing.
-10. Missing or disabled entitlement rows and exhausted finite capacity deny the
+10. A suspended product membership or inactive product role grants nothing;
+    product suspension retains role assignments for explicit reactivation.
+11. Missing or disabled entitlement rows and exhausted finite capacity deny the
     applicable action. Unknown/blocked billing state can never grant a paid
     plan; only the explicit active free fallback remains available.
-11. UI hiding is never a security boundary.
-12. Authorization makes no provider network call and uses no checkout redirect
+12. UI hiding is never a security boundary.
+13. Authorization makes no provider network call and uses no checkout redirect
     parameter.
 
 ## 3. Current context
@@ -163,8 +168,10 @@ applicable step succeeds:
    b. enabled is true
    c. a flag carries no capacity, or a limit has one valid finite/unlimited
       capacity representation
-7. ProductMembership exists for current organization membership and product
-8. union of assigned ProductRoles includes the required ProductPermission
+7. an active ProductMembership exists for the current active organization
+   membership and product
+8. union of assigned active ProductRoles, limited to system roles or roles
+   owned by Current.organization, includes the required ProductPermission
 ```
 
 Any false, null, unknown, malformed, or exceptional result denies. The
@@ -173,6 +180,15 @@ Entitlements layer returns an immutable `Entitlements::Result` containing
 finite/unlimited capacity when applicable. `Access::Decision` later composes
 that result with organization and product RBAC. Neither layer measures usage or
 mutates product data.
+
+The persistence layer enforces the same tenant/product shape before this
+runtime gate exists: composite foreign keys reject cross-product joins, and a
+database trigger permits an organization-specific role only for a product
+membership from that organization. System roles have null organization scope.
+Inactive roles cannot receive new assignments and will be ignored by the
+runtime permission union. A product-level suspension preserves its role joins;
+removing the product membership or suspending its parent organization
+membership deletes the assignment set.
 
 Final server authorization composes three owned layers:
 

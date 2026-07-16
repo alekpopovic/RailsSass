@@ -13,10 +13,12 @@ The repository contains the Rails application foundation, PostgreSQL-backed CI,
 email/password authentication, organization onboarding, locator-backed path
 tenancy, audited organization invitations/member administration, and the
 constrained local product/plan catalog. It also contains a non-authoritative
-Billing persistence foundation and a fixed-origin Lemon API client. This
-document describes both those established boundaries and the remaining target
-architecture; checkout, signed webhook ingress/projection, product access, and
-deployment hardening remain incremental milestones.
+Billing persistence foundation, a fixed-origin Lemon API client, the local
+Entitlements read side, and product-RBAC persistence with transactional
+assignment commands. This document describes both those established boundaries
+and the remaining target architecture; checkout, signed webhook
+ingress/projection, product authorization/UI, and deployment hardening remain
+incremental milestones.
 
 Related contracts:
 
@@ -116,6 +118,14 @@ The arrows mean "is used by." Product modules do not query billing tables
 directly; they ask the Access Control gate. Entitlements does not grant product
 permissions, and Billing does not grant permissions.
 
+Access Control already owns the constrained product membership, role,
+permission, and assignment persistence plus tenant-scoped transactional
+commands. Those commands deliberately contain no Pundit actor authorization in
+this persistence milestone. The server-authorized controller/UI surface and
+the pure `Access::Decision` runtime composition are the next Access milestone.
+System roles are global reviewed definitions; the nullable organization scope
+is schema support for future custom roles, not an MVP custom-role builder.
+
 ## 5. Code organization
 
 Keep conventional top-level Active Record aggregate names where they improve
@@ -123,7 +133,7 @@ Rails clarity (`User`, `Organization`, `Plan`, `ProductMembership`). Namespace
 orchestration and provider-specific code by owning module.
 
 Implemented and planned layout (provider mapping, locator, webhook delivery,
-jobs, full Access composition, and product RBAC remain planned):
+jobs, Pundit/UI integration, and full Access composition remain planned):
 
 ```text
 app/
@@ -173,7 +183,14 @@ app/
       resolver.rb
       result.rb
       subscription_access_policy.rb
-    access/decision.rb
+    access/
+      product_memberships/add.rb
+      product_memberships/remove.rb
+      product_memberships/assign_role.rb
+      product_memberships/suspend.rb
+      product_memberships/reactivate.rb
+      seed_system_product_rbac.rb
+      decision.rb
     billing/...
       lemon_squeezy/client.rb
       lemon_squeezy/errors.rb
@@ -277,8 +294,8 @@ AND active organization membership
 AND effective local plan (accessible paid subscription or active free fallback)
 AND plan product entitlement
 AND optional enabled flag or finite/unlimited feature entitlement
-AND product membership
-AND product-role permission
+AND active product membership
+AND permission from an active system or same-organization product role
 ```
 
 `Entitlements::Resolver` evaluates the time-sensitive paid-status policy on

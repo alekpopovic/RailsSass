@@ -1,8 +1,10 @@
 require "test_helper"
 require_relative "../../../support/organization_test_helper"
+require_relative "../../../support/product_rbac_test_helper"
 
 class Organizations::Memberships::RemoveTest < ActiveSupport::TestCase
   include OrganizationTestHelper
+  include ProductRbacTestHelper
 
   setup do
     @owner = create_test_user(email_address: "remove-owner@example.test")
@@ -24,22 +26,37 @@ class Organizations::Memberships::RemoveTest < ActiveSupport::TestCase
       joined_at: 2.days.ago
     )
     locator = create_locator_for(membership)
+    product = create_test_product
+    product_membership = create_test_product_membership(
+      organization_membership: membership,
+      product: product
+    )
+    assignment = create_test_product_membership_role(
+      product_membership: product_membership,
+      product_role: create_test_product_role(product: product)
+    )
     joined_at = membership.joined_at
     establish_tenant_context(user: @owner, organization: @organization, membership: @owner_membership)
 
     assert_difference -> { OrganizationAccessLocator.count }, -1 do
-      assert_no_difference -> { OrganizationMembership.count } do
-        membership = Organizations::Memberships::Remove.new(
-          actor: @owner,
-          membership_id: membership.id
-        ).call
+      assert_difference -> { ProductMembership.count }, -1 do
+        assert_difference -> { ProductMembershipRole.count }, -1 do
+          assert_no_difference -> { OrganizationMembership.count } do
+            membership = Organizations::Memberships::Remove.new(
+              actor: @owner,
+              membership_id: membership.id
+            ).call
 
-        assert_predicate membership, :suspended?
-        assert_equal joined_at, membership.joined_at
+            assert_predicate membership, :suspended?
+            assert_equal joined_at, membership.joined_at
+          end
+        end
       end
     end
 
     assert_not OrganizationAccessLocator.exists?(locator.id)
+    assert_not ProductMembership.exists?(product_membership.id)
+    assert_not ProductMembershipRole.exists?(assignment.id)
   end
 
   test "last active owner cannot leave or be suspended" do
@@ -85,6 +102,10 @@ class Organizations::Memberships::RemoveTest < ActiveSupport::TestCase
       role: :member
     )
     locator = create_locator_for(membership)
+    product_membership = create_test_product_membership(
+      organization_membership: membership,
+      product: create_test_product
+    )
     establish_tenant_context(user: @owner, organization: @organization, membership: @owner_membership)
     service = Organizations::Memberships::Remove.new(
       actor: @owner,
@@ -98,6 +119,7 @@ class Organizations::Memberships::RemoveTest < ActiveSupport::TestCase
 
     assert_predicate membership.reload, :active?
     assert OrganizationAccessLocator.exists?(locator.id)
+    assert ProductMembership.exists?(product_membership.id)
   end
 
   test "admin can remove member or admin but cannot remove owner or billing" do

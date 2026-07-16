@@ -26,6 +26,9 @@ class OrganizationMembership < ApplicationRecord
     foreign_key: :requested_by_membership_id,
     dependent: :restrict_with_exception,
     inverse_of: :requested_by_membership
+  has_many :product_memberships,
+    dependent: :restrict_with_exception,
+    inverse_of: :organization_membership
 
   enum :role, {
     owner: "owner",

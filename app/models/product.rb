@@ -14,6 +14,21 @@ class Product < ApplicationRecord
   has_many :plan_feature_entitlements,
     dependent: :restrict_with_exception,
     inverse_of: :product
+  has_many :product_permissions,
+    dependent: :restrict_with_exception,
+    inverse_of: :product
+  has_many :product_roles,
+    dependent: :restrict_with_exception,
+    inverse_of: :product
+  has_many :product_role_permissions,
+    dependent: :restrict_with_exception,
+    inverse_of: :product
+  has_many :product_memberships,
+    dependent: :restrict_with_exception,
+    inverse_of: :product
+  has_many :product_membership_roles,
+    dependent: :restrict_with_exception,
+    inverse_of: :product
 
   normalizes :key, with: ->(key) { key.to_s.strip.downcase }
   normalizes :name, :description, with: ->(value) { value.to_s.strip }

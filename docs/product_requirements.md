@@ -26,8 +26,9 @@ catalog also exist. Billing now has constrained local persistence/history
 primitives and an offline-tested Lemon API adapter, but no checkout/webhook
 endpoint, provider mapping/locator, or verified projection. A read-only local
 Entitlements resolver now covers paid status, free fallback, and catalog typing;
-full product RBAC/access, billing workflows, and deployment hardening remain
-separate execution-plan milestones.
+product-RBAC persistence and transactional assignment commands also exist.
+Pundit/UI integration, the complete runtime Access decision, billing workflows,
+and deployment hardening remain separate execution-plan milestones.
 
 Each milestone must inspect and test existing behavior rather than assume an
 earlier prompt was implemented perfectly.
@@ -86,9 +87,11 @@ either command successfully; admins remain limited to member/admin memberships.
 
 ### 4.3 Product roles
 
-Product roles are system-defined per product. A product membership can have
-multiple product roles; its effective permission set is their union. The MVP
-has no explicit deny permission and no tenant-defined custom roles.
+The MVP uses reviewed system roles per product. A product membership can have
+multiple product roles; its effective permission set is the union from active
+roles only. The schema can scope a role to one organization, but a
+customer-facing custom-role builder is not part of the MVP. There is no
+explicit deny permission.
 
 ## 5. Immutable product invariants
 
@@ -103,7 +106,9 @@ has no explicit deny permission and no tenant-defined custom roles.
 4. Organization role and product RBAC are independent.
 5. Product access requires an effective local plan (accessible paid
    subscription or active free fallback), plan product entitlement, product
-   membership, and product permission.
+   membership, and product permission. The organization membership and product
+   membership must be active, and only active system or same-organization roles
+   contribute permissions.
 6. A feature-specific action additionally requires the enabled typed feature
    entitlement. A consuming finite-limit action additionally requires capacity;
    explicit unlimited still requires every other access factor.
@@ -181,10 +186,13 @@ has no explicit deny permission and no tenant-defined custom roles.
 
 - Owner/admin can add an active organization member to an entitled or
   non-entitled product and assign one or more system product roles.
+- Product-level suspension preserves assigned roles but grants no access until
+  an explicit reactivation; removal deletes the product assignment and joins.
 - Assignments may remain dormant after a downgrade or subscription loss; they
   do not grant access until the entitlement gate is true again.
-- Dormancy does not apply to membership removal: soft suspension destroys the
-  member's product assignments.
+- Dormancy does not apply to organization-membership removal: its soft
+  suspension destroys every product assignment, and later reactivation does not
+  restore them.
 - Product policies use one central decision service for the shared
   entitlement-and-permission gate, then apply record-specific rules.
 - Cross-organization record identifiers never expose or mutate another
@@ -307,8 +315,9 @@ has no explicit deny permission and no tenant-defined custom roles.
   Squeezy, or multiple simultaneous paid subscriptions per organization. The
   only non-subscription grant is the single system-managed active free-plan
   fallback.
-- Tenant-defined products, plans, roles, permissions, or arbitrary policy
-  scripting.
+- Tenant-defined products, plans, permissions, arbitrary policy scripting, or a
+  customer-facing custom-role builder. Nullable organization role scope is
+  forward-compatible schema support, not an MVP management surface.
 - Explicit deny permissions, resource-level ACL sharing, or organization role
   bypasses for product access.
 - SSO/SAML, SCIM, social login, MFA, passkeys, or enterprise identity lifecycle.
@@ -377,7 +386,9 @@ dependent implementation PR:
 
 - Product name and whether the existing `RailsSass`/`rails_sass` identifiers
   are intentional or a `SaaS` naming correction is required.
-- Initial product, feature, role, and permission keys.
+- Initial production product, feature, role, and permission keys. The local
+  Analytics/CRM role and permission seed is synthetic development/test data,
+  not a production catalog decision.
 - Unit and authoritative usage query for every limit feature.
 - Initial plans, plan-product rows, feature entitlement values, local price
   display data, and the Lemon Squeezy test/live variant map.

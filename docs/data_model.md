@@ -8,10 +8,11 @@ Last updated: 2026-07-16
 This document is the canonical relational model for the production MVP. It
 defines ownership, names, relationships, indexes, foreign keys, and database
 constraints. Account/session, organization, invitation/audit, and local catalog
-migrations exist. A constrained Billing persistence foundation and read-only
-Entitlements resolver also exist, but provider mapping, locator, verified
-projection, full Access/RBAC composition, and product-domain work remain planned
-in the documented execution order.
+migrations exist. A constrained Billing persistence foundation, read-only
+Entitlements resolver, and product-RBAC persistence/services also exist, but
+provider mapping, locator, verified projection, Pundit/UI integration, the full
+`Access::Decision` composition, and product-domain work remain planned in the
+documented execution order.
 
 Behavioral interpretation is defined in
 [Authorization Model](authorization_model.md) and
@@ -47,8 +48,8 @@ Behavioral interpretation is defined in
 | Ownership | Tables | Query rule |
 | --- | --- | --- |
 | Global account | `users`, `sessions` | Through authenticated account/session |
-| Tenant-owned | organizations' memberships, invitations, product assignments, billing customers, checkout attempts, subscriptions, plan changes, product-domain records | Through `Current.organization` after bootstrap |
-| Global system catalog | products, features, plans, plan products, feature entitlements, plan prices, product roles/permissions | Read through explicit catalog services; writes are deployment-controlled |
+| Tenant-owned | organizations' memberships, invitations, product assignments, organization-specific product roles, billing customers, checkout attempts, subscriptions, plan changes, product-domain records | Through `Current.organization` after bootstrap |
+| Global system catalog | products, features, plans, plan products, feature entitlements, plan prices, system product roles, and product permissions | Read through explicit catalog/Access services; writes are deployment-controlled |
 | Global locator infrastructure | `organization_access_locators`, `billing_provider_locators` | Discovery only; never sufficient authorization; immediately reload tenant records through `Current.organization` |
 | Provider ingress ledger | `billing_webhook_events` | No ordinary user query; verified system resolver, then tenant reload when associated |
 
@@ -66,6 +67,7 @@ erDiagram
   ORGANIZATION ||--o{ ORGANIZATION_MEMBERSHIP : contains
   ORGANIZATION_MEMBERSHIP ||--o| ORGANIZATION_ACCESS_LOCATOR : locates
   ORGANIZATION_MEMBERSHIP ||--o{ PRODUCT_MEMBERSHIP : receives
+  ORGANIZATION o|--o{ PRODUCT_ROLE : scopes
   PRODUCT ||--o{ PRODUCT_MEMBERSHIP : scopes
   PRODUCT_MEMBERSHIP ||--o{ PRODUCT_MEMBERSHIP_ROLE : has
   PRODUCT_ROLE ||--o{ PRODUCT_MEMBERSHIP_ROLE : assigned
@@ -411,26 +413,38 @@ every subscription/history row that references the old identity.
 ### 7.1 `ProductRole` / `product_roles`
 
 - `product_id`: not-null foreign key.
+- `organization_id`: nullable tenant foreign key; null identifies a global
+  system role.
 - `key`: stable within product.
 - `name`: display name.
-- `state`: `active` or `retired`.
+- `system`: non-null boolean.
+- `active`: non-null boolean, default true.
 
-Unique `(product_id, key)` and unique supporting tuple `(id, product_id)`.
-Roles are system-defined in the MVP. Retirement blocks new assignments but
-existing assignments continue until an explicit assignment migration; it is not
-an implicit permission revocation mechanism.
+The database requires `system = true` exactly when `organization_id IS NULL`.
+Separate partial unique indexes enforce one system key per product and one key
+per product/organization for organization-specific roles; PostgreSQL null
+semantics must not permit duplicate system keys. Unique `(id, product_id)`
+supports cross-product joins. Product, organization, key, and system scope are
+immutable identities.
+
+The MVP seeds reviewed system roles only. The schema can represent an
+organization-specific role, but no customer-facing custom-role builder or
+arbitrary policy editor is in scope. Inactive roles remain referenced for
+history, cannot receive new assignments, and are ignored by the future runtime
+authorization union. Referenced roles are deactivated, never deleted.
 
 ### 7.2 `ProductPermission` / `product_permissions`
 
 - `product_id`: not-null foreign key.
 - `key`: stable action capability within product, such as `projects.create`.
 - `name`: display name.
-- `state`: `active` or `retired`.
+- `description`: normalized display description, defaulting to an empty string.
 
-Unique `(product_id, key)`, unique supporting tuple `(id, product_id)`, and an
-allowed-state check. Permissions are positive grants; there is no explicit deny
-row. Retirement blocks new role mappings but existing reviewed role mappings
-continue until an explicit role-version/mapping transition.
+Unique `(product_id, key)` and unique supporting tuple `(id, product_id)`.
+Permissions are stable positive capabilities; there is no explicit deny row or
+permission lifecycle flag in this model. A referenced permission is
+delete-restricted. Changing reviewed role mappings is an explicit catalog data
+operation, not a display-name lookup or tenant request parameter.
 
 ### 7.3 `ProductRolePermission` / `product_role_permissions`
 
@@ -443,24 +457,34 @@ Composite foreign keys:
   `product_permissions(id, product_id)`.
 
 Unique `(product_role_id, product_permission_id)`. Including `product_id` in
-both composite relationships prevents cross-product grants.
+both composite relationships prevents cross-product grants. The join is a
+reviewed positive grant and is delete-restricted through its parents.
 
 ### 7.4 `ProductMembership` / `product_memberships`
 
 - `organization_id`: not-null tenant foreign key.
 - `organization_membership_id`: not null.
 - `product_id`: not-null foreign key.
+- `status`: `active` or `suspended`, default `active`.
+- `organization_membership_status`: internal integrity copy fixed to `active`;
+  it is not user-editable product state.
 
 Constraints and indexes:
 
-- composite foreign key `(organization_membership_id, organization_id)` to
-  `organization_memberships(id, organization_id)`;
-- unique `(organization_id, organization_membership_id, product_id)`;
+- composite foreign key `(organization_membership_id, organization_id,
+  organization_membership_status)` to
+  `organization_memberships(id, organization_id, status)`;
+- check `organization_membership_status = 'active'`;
+- unique `(organization_membership_id, product_id)`;
 - unique supporting tuple `(id, organization_id, product_id)`;
-- index `(organization_id, product_id)`.
+- lookup index `(organization_id, product_id, status)`.
 
-Do not duplicate `user_id`. A product membership can exist while its plan
-entitlement is absent; it is then dormant and grants nothing.
+Do not duplicate `user_id`. The copied parent status lets PostgreSQL prevent a
+product assignment from being created for a suspended organization membership
+and prevents that parent from being suspended until the command deletes its
+product assignments. Product-level suspension preserves role joins but grants
+nothing until explicit reactivation. A product membership can exist while its
+plan entitlement is absent; it is then dormant and grants nothing.
 
 ### 7.5 `ProductMembershipRole` / `product_membership_roles`
 
@@ -475,8 +499,44 @@ Composite foreign keys:
 - `organization_id` to `organizations` for explicit tenant ownership.
 
 Unique `(product_membership_id, product_role_id)`. Multiple roles are allowed;
-their permission union is evaluated at runtime. A role-less membership grants
-no product action.
+their active-role permission union is evaluated by the future Access decision.
+A database trigger permits a system role for any tenant but permits an
+organization-specific role only when its `organization_id` equals the product
+membership's organization. This conditional null/global rule cannot be safely
+represented by an ordinary composite foreign key alone. A role-less or
+suspended product membership grants no product action.
+
+### 7.6 Synthetic local RBAC catalog
+
+Development and test seed three active system roles for both Analytics and CRM:
+`viewer` (Viewer), `contributor` (Contributor), and `product_admin` (Product
+Admin). The reviewed synthetic mappings are:
+
+| Product | Permission keys | Viewer | Contributor | Product Admin |
+| --- | --- | --- | --- | --- |
+| `analytics` | `reports.view`, `reports.manage`, `settings.manage` | `reports.view` | Viewer + `reports.manage` | Contributor + `settings.manage` |
+| `crm` | `contacts.view`, `contacts.manage`, `settings.manage` | `contacts.view` | Viewer + `contacts.manage` | Contributor + `settings.manage` |
+
+The seed converges these definitions by stable product/role/permission keys. It
+does not seed Core roles, organization-specific roles, product memberships, or
+tenant access grants, and it is a no-op outside development/test.
+
+### 7.7 Product-assignment commands
+
+`Access::ProductMemberships::{Add,Remove,AssignRole,Suspend,Reactivate}` own the
+transaction boundaries for assignment changes. They require an active
+`Current.organization`, reload every tenant-owned target through that
+organization, and resolve products/system roles through explicit active catalog
+allowlists. Add and reactivate require an active parent organization membership;
+assign-role also requires an active product membership and an active system or
+same-organization role. Repeated add/assignment/suspend/reactivate calls are
+idempotent where the requested state already exists; remove deletes the product
+membership and its role joins.
+
+These commands deliberately have no actor/Pundit decision in this persistence
+milestone and are not a controller boundary. The next Access milestone adds the
+owner/admin policy and request/UI surface without weakening their tenant-scoped
+queries.
 
 ## 8. Billing
 
@@ -927,7 +987,7 @@ entitlement boolean; `-1` and null are never implicit unlimited sentinels.
 | Organization | Retain; organization archive and hard deletion are outside the MVP |
 | Membership | Soft-suspend; service deletes product memberships/role joins and the global access locator atomically once those records exist |
 | Invitation | Revoke/expire; retain minimal audit metadata for a bounded period |
-| Product/feature/role/permission | Deactivate; restrict deletion when referenced |
+| Product/feature/role/permission | Deactivate products/features/roles; permissions have stable reviewed definitions; restrict deletion whenever referenced |
 | Plan/product/feature entitlement/price | Deactivate or update through deployment-controlled catalog changes; restrict deletion when referenced |
 | Billing customer/checkout attempt/subscription/plan change/webhook | Retain per billing/security retention policy; archive subscription history and never cascade from ordinary UI operations |
 
@@ -979,6 +1039,10 @@ columns as non-null from the start.
   environment/test-mode mismatch.
 - Composite foreign keys reject cross-organization product membership and
   cross-product permission/role/feature joins.
+- The database rejects assignment of an organization-specific product role to
+  a product membership from another organization, while allowing system roles.
+- A suspended organization membership cannot retain a product assignment;
+  product-level suspension retains its role joins without granting access.
 - An entitlement cannot reference a feature unless its plan also grants that
   feature's product.
 - One checkout attempt cannot activate two subscriptions, and an organization
@@ -988,6 +1052,7 @@ columns as non-null from the start.
 - Sequential, concurrent, and direct database membership transitions cannot
   remove the last active owner; the account-disable follow-up separately
   prevents disabling the last access-eligible owner across organizations.
-- Suspend/reactivate never restores prior product assignments.
+- Organization-membership suspension/reactivation never restores prior product
+  assignments; product-membership suspension/reactivation preserves role joins.
 - Global access/provider locators can select only a candidate tenant; stale or
   mismatched locators fail the tenant reload and authorize nothing.

@@ -67,6 +67,49 @@ $$;
 
 
 --
+-- Name: enforce_product_membership_role_scope(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.enforce_product_membership_role_scope() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+DECLARE
+  role_organization_id bigint;
+  role_active boolean;
+BEGIN
+  SELECT organization_id, active
+  INTO role_organization_id, role_active
+  FROM public.product_roles
+  WHERE id = NEW.product_role_id
+    AND product_id = NEW.product_id
+  FOR SHARE;
+
+  IF NOT FOUND THEN
+    RETURN NEW;
+  END IF;
+
+  IF role_active = FALSE THEN
+    RAISE EXCEPTION 'inactive product role cannot be assigned'
+      USING ERRCODE = '23514',
+        CONSTRAINT = 'product_membership_roles_role_active',
+        TABLE = 'product_membership_roles';
+  END IF;
+
+  IF role_organization_id IS NOT NULL
+    AND role_organization_id IS DISTINCT FROM NEW.organization_id THEN
+    RAISE EXCEPTION 'organization product role belongs to another organization'
+      USING ERRCODE = '23514',
+        CONSTRAINT = 'product_membership_roles_role_organization_matches',
+        TABLE = 'product_membership_roles';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+--
 -- Name: prevent_audit_event_mutation(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -126,6 +169,30 @@ BEGIN
       USING ERRCODE = '23514',
         CONSTRAINT = 'plan_prices_plan_identity_immutable',
         TABLE = 'plan_prices';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: protect_product_role_identity(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.protect_product_role_identity() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+BEGIN
+  IF NEW.product_id IS DISTINCT FROM OLD.product_id
+    OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
+    OR NEW.key IS DISTINCT FROM OLD.key
+    OR NEW.system IS DISTINCT FROM OLD.system THEN
+    RAISE EXCEPTION 'product role identity is immutable'
+      USING ERRCODE = '23514',
+        CONSTRAINT = 'product_roles_identity_immutable',
+        TABLE = 'product_roles';
   END IF;
 
   RETURN NEW;
@@ -812,6 +879,186 @@ ALTER SEQUENCE public.product_features_id_seq OWNED BY public.product_features.i
 
 
 --
+-- Name: product_membership_roles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_membership_roles (
+    id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    product_membership_id bigint NOT NULL,
+    product_role_id bigint NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL
+);
+
+
+--
+-- Name: product_membership_roles_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.product_membership_roles_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: product_membership_roles_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.product_membership_roles_id_seq OWNED BY public.product_membership_roles.id;
+
+
+--
+-- Name: product_memberships; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_memberships (
+    id bigint NOT NULL,
+    organization_id bigint NOT NULL,
+    organization_membership_id bigint NOT NULL,
+    organization_membership_status character varying(16) DEFAULT 'active'::character varying NOT NULL,
+    product_id bigint NOT NULL,
+    status character varying(16) DEFAULT 'active'::character varying NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT product_memberships_parent_membership_active CHECK (((organization_membership_status)::text = 'active'::text)),
+    CONSTRAINT product_memberships_status_allowed CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying])::text[])))
+);
+
+
+--
+-- Name: product_memberships_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.product_memberships_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: product_memberships_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.product_memberships_id_seq OWNED BY public.product_memberships.id;
+
+
+--
+-- Name: product_permissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_permissions (
+    id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    key character varying(100) NOT NULL,
+    name character varying(100) NOT NULL,
+    description text DEFAULT ''::text NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT product_permissions_description_normalized CHECK (((description = btrim(description)) AND (char_length(description) <= 2000))),
+    CONSTRAINT product_permissions_key_format CHECK ((((key)::text ~ '^[a-z][a-z0-9]*(_[a-z0-9]+)*([.][a-z][a-z0-9]*(_[a-z0-9]+)*)+$'::text) AND ((char_length((key)::text) >= 3) AND (char_length((key)::text) <= 100)))),
+    CONSTRAINT product_permissions_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100))))
+);
+
+
+--
+-- Name: product_permissions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.product_permissions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: product_permissions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.product_permissions_id_seq OWNED BY public.product_permissions.id;
+
+
+--
+-- Name: product_role_permissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_role_permissions (
+    id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    product_role_id bigint NOT NULL,
+    product_permission_id bigint NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL
+);
+
+
+--
+-- Name: product_role_permissions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.product_role_permissions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: product_role_permissions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.product_role_permissions_id_seq OWNED BY public.product_role_permissions.id;
+
+
+--
+-- Name: product_roles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_roles (
+    id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    organization_id bigint,
+    key character varying(63) NOT NULL,
+    name character varying(100) NOT NULL,
+    system boolean DEFAULT true NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT product_roles_key_format CHECK ((((key)::text ~ '^[a-z][a-z0-9]*(_[a-z0-9]+)*$'::text) AND ((char_length((key)::text) >= 1) AND (char_length((key)::text) <= 63)))),
+    CONSTRAINT product_roles_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100)))),
+    CONSTRAINT product_roles_system_scope_consistent CHECK ((((system = true) AND (organization_id IS NULL)) OR ((system = false) AND (organization_id IS NOT NULL))))
+);
+
+
+--
+-- Name: product_roles_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.product_roles_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: product_roles_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.product_roles_id_seq OWNED BY public.product_roles.id;
+
+
+--
 -- Name: products; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1041,6 +1288,41 @@ ALTER TABLE ONLY public.product_features ALTER COLUMN id SET DEFAULT nextval('pu
 
 
 --
+-- Name: product_membership_roles id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_membership_roles ALTER COLUMN id SET DEFAULT nextval('public.product_membership_roles_id_seq'::regclass);
+
+
+--
+-- Name: product_memberships id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_memberships ALTER COLUMN id SET DEFAULT nextval('public.product_memberships_id_seq'::regclass);
+
+
+--
+-- Name: product_permissions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_permissions ALTER COLUMN id SET DEFAULT nextval('public.product_permissions_id_seq'::regclass);
+
+
+--
+-- Name: product_role_permissions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_role_permissions ALTER COLUMN id SET DEFAULT nextval('public.product_role_permissions_id_seq'::regclass);
+
+
+--
+-- Name: product_roles id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_roles ALTER COLUMN id SET DEFAULT nextval('public.product_roles_id_seq'::regclass);
+
+
+--
 -- Name: products id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1195,6 +1477,46 @@ ALTER TABLE ONLY public.plans
 
 ALTER TABLE ONLY public.product_features
     ADD CONSTRAINT product_features_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_membership_roles product_membership_roles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_membership_roles
+    ADD CONSTRAINT product_membership_roles_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_memberships product_memberships_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_memberships
+    ADD CONSTRAINT product_memberships_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_permissions product_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_permissions
+    ADD CONSTRAINT product_permissions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_role_permissions product_role_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_role_permissions
+    ADD CONSTRAINT product_role_permissions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: product_roles product_roles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_roles
+    ADD CONSTRAINT product_roles_pkey PRIMARY KEY (id);
 
 
 --
@@ -1573,6 +1895,13 @@ CREATE UNIQUE INDEX index_org_memberships_on_id_and_organization_id ON public.or
 
 
 --
+-- Name: index_org_memberships_on_id_org_and_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_org_memberships_on_id_org_and_status ON public.organization_memberships USING btree (id, organization_id, status);
+
+
+--
 -- Name: index_org_memberships_on_id_user_id_organization_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1783,6 +2112,188 @@ CREATE UNIQUE INDEX index_product_features_on_product_id_and_key ON public.produ
 
 
 --
+-- Name: index_product_membership_roles_on_membership_and_role; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_membership_roles_on_membership_and_role ON public.product_membership_roles USING btree (product_membership_id, product_role_id);
+
+
+--
+-- Name: index_product_membership_roles_on_membership_org_product; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_membership_roles_on_membership_org_product ON public.product_membership_roles USING btree (product_membership_id, organization_id, product_id);
+
+
+--
+-- Name: index_product_membership_roles_on_org_and_product; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_membership_roles_on_org_and_product ON public.product_membership_roles USING btree (organization_id, product_id);
+
+
+--
+-- Name: index_product_membership_roles_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_membership_roles_on_organization_id ON public.product_membership_roles USING btree (organization_id);
+
+
+--
+-- Name: index_product_membership_roles_on_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_membership_roles_on_product_id ON public.product_membership_roles USING btree (product_id);
+
+
+--
+-- Name: index_product_membership_roles_on_role_and_product; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_membership_roles_on_role_and_product ON public.product_membership_roles USING btree (product_role_id, product_id);
+
+
+--
+-- Name: index_product_memberships_on_active_org_membership; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_memberships_on_active_org_membership ON public.product_memberships USING btree (organization_membership_id, organization_id, organization_membership_status);
+
+
+--
+-- Name: index_product_memberships_on_id_org_and_product; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_memberships_on_id_org_and_product ON public.product_memberships USING btree (id, organization_id, product_id);
+
+
+--
+-- Name: index_product_memberships_on_membership_and_product; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_memberships_on_membership_and_product ON public.product_memberships USING btree (organization_membership_id, product_id);
+
+
+--
+-- Name: index_product_memberships_on_org_product_and_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_memberships_on_org_product_and_status ON public.product_memberships USING btree (organization_id, product_id, status);
+
+
+--
+-- Name: index_product_memberships_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_memberships_on_organization_id ON public.product_memberships USING btree (organization_id);
+
+
+--
+-- Name: index_product_memberships_on_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_memberships_on_product_id ON public.product_memberships USING btree (product_id);
+
+
+--
+-- Name: index_product_permissions_on_id_and_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_permissions_on_id_and_product_id ON public.product_permissions USING btree (id, product_id);
+
+
+--
+-- Name: index_product_permissions_on_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_permissions_on_product_id ON public.product_permissions USING btree (product_id);
+
+
+--
+-- Name: index_product_permissions_on_product_id_and_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_permissions_on_product_id_and_key ON public.product_permissions USING btree (product_id, key);
+
+
+--
+-- Name: index_product_role_permissions_on_permission_and_product; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_role_permissions_on_permission_and_product ON public.product_role_permissions USING btree (product_permission_id, product_id);
+
+
+--
+-- Name: index_product_role_permissions_on_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_role_permissions_on_product_id ON public.product_role_permissions USING btree (product_id);
+
+
+--
+-- Name: index_product_role_permissions_on_role_and_permission; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_role_permissions_on_role_and_permission ON public.product_role_permissions USING btree (product_role_id, product_permission_id);
+
+
+--
+-- Name: index_product_role_permissions_on_role_and_product; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_role_permissions_on_role_and_product ON public.product_role_permissions USING btree (product_role_id, product_id);
+
+
+--
+-- Name: index_product_roles_on_id_and_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_roles_on_id_and_product_id ON public.product_roles USING btree (id, product_id);
+
+
+--
+-- Name: index_product_roles_on_org_product_and_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_roles_on_org_product_and_active ON public.product_roles USING btree (organization_id, product_id, active);
+
+
+--
+-- Name: index_product_roles_on_organization_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_roles_on_organization_id ON public.product_roles USING btree (organization_id);
+
+
+--
+-- Name: index_product_roles_on_organization_product_and_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_roles_on_organization_product_and_key ON public.product_roles USING btree (organization_id, product_id, key) WHERE (organization_id IS NOT NULL);
+
+
+--
+-- Name: index_product_roles_on_product_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_roles_on_product_id ON public.product_roles USING btree (product_id);
+
+
+--
+-- Name: index_product_roles_on_product_id_and_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_product_roles_on_product_id_and_active ON public.product_roles USING btree (product_id, active);
+
+
+--
+-- Name: index_product_roles_on_system_product_and_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_product_roles_on_system_product_and_key ON public.product_roles USING btree (product_id, key) WHERE (organization_id IS NULL);
+
+
+--
 -- Name: index_products_on_active; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1864,6 +2375,20 @@ CREATE CONSTRAINT TRIGGER organization_must_have_active_owner AFTER INSERT ON pu
 --
 
 CREATE TRIGGER plan_prices_plan_identity_is_immutable BEFORE UPDATE OF plan_id ON public.plan_prices FOR EACH ROW EXECUTE FUNCTION public.protect_plan_price_plan_identity();
+
+
+--
+-- Name: product_membership_roles product_membership_roles_scope_is_valid; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER product_membership_roles_scope_is_valid BEFORE INSERT OR UPDATE OF organization_id, product_id, product_role_id ON public.product_membership_roles FOR EACH ROW EXECUTE FUNCTION public.enforce_product_membership_role_scope();
+
+
+--
+-- Name: product_roles product_roles_identity_is_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER product_roles_identity_is_immutable BEFORE UPDATE OF product_id, organization_id, key, system ON public.product_roles FOR EACH ROW EXECUTE FUNCTION public.protect_product_role_identity();
 
 
 --
@@ -1955,6 +2480,54 @@ ALTER TABLE ONLY public.plan_feature_entitlements
 
 
 --
+-- Name: product_membership_roles fk_product_membership_roles_membership_scope; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_membership_roles
+    ADD CONSTRAINT fk_product_membership_roles_membership_scope FOREIGN KEY (product_membership_id, organization_id, product_id) REFERENCES public.product_memberships(id, organization_id, product_id) ON DELETE CASCADE;
+
+
+--
+-- Name: product_membership_roles fk_product_membership_roles_role_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_membership_roles
+    ADD CONSTRAINT fk_product_membership_roles_role_product FOREIGN KEY (product_role_id, product_id) REFERENCES public.product_roles(id, product_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: product_memberships fk_product_memberships_active_organization_membership; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_memberships
+    ADD CONSTRAINT fk_product_memberships_active_organization_membership FOREIGN KEY (organization_membership_id, organization_id, organization_membership_status) REFERENCES public.organization_memberships(id, organization_id, status) ON DELETE RESTRICT;
+
+
+--
+-- Name: product_role_permissions fk_product_role_permissions_permission_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_role_permissions
+    ADD CONSTRAINT fk_product_role_permissions_permission_product FOREIGN KEY (product_permission_id, product_id) REFERENCES public.product_permissions(id, product_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: product_role_permissions fk_product_role_permissions_role_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_role_permissions
+    ADD CONSTRAINT fk_product_role_permissions_role_product FOREIGN KEY (product_role_id, product_id) REFERENCES public.product_roles(id, product_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: product_role_permissions fk_rails_0557fef164; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_role_permissions
+    ADD CONSTRAINT fk_rails_0557fef164 FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: plan_products fk_rails_19f4567acb; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1992,6 +2565,14 @@ ALTER TABLE ONLY public.audit_events
 
 ALTER TABLE ONLY public.organization_invitations
     ADD CONSTRAINT fk_rails_3046f3efef FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: product_memberships fk_rails_3409fb7b87; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_memberships
+    ADD CONSTRAINT fk_rails_3409fb7b87 FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
 
 
 --
@@ -2075,6 +2656,14 @@ ALTER TABLE ONLY public.billing_webhook_events
 
 
 --
+-- Name: product_roles fk_rails_82bd80c9b1; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_roles
+    ADD CONSTRAINT fk_rails_82bd80c9b1 FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: product_features fk_rails_9019f50ede; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2088,6 +2677,14 @@ ALTER TABLE ONLY public.product_features
 
 ALTER TABLE ONLY public.organization_access_locators
     ADD CONSTRAINT fk_rails_903c442217 FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: product_membership_roles fk_rails_ae303566d8; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_membership_roles
+    ADD CONSTRAINT fk_rails_ae303566d8 FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
 
 
 --
@@ -2115,11 +2712,27 @@ ALTER TABLE ONLY public.billing_subscriptions
 
 
 --
+-- Name: product_roles fk_rails_cce658936e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_roles
+    ADD CONSTRAINT fk_rails_cce658936e FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: billing_checkout_attempts fk_rails_ce0ba24f13; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.billing_checkout_attempts
     ADD CONSTRAINT fk_rails_ce0ba24f13 FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: product_permissions fk_rails_d7e4cf7e2f; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_permissions
+    ADD CONSTRAINT fk_rails_d7e4cf7e2f FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
 
 
 --
@@ -2147,12 +2760,29 @@ ALTER TABLE ONLY public.billing_subscriptions
 
 
 --
+-- Name: product_memberships fk_rails_f0c84e845b; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_memberships
+    ADD CONSTRAINT fk_rails_f0c84e845b FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: product_membership_roles fk_rails_f682672ff7; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_membership_roles
+    ADD CONSTRAINT fk_rails_f682672ff7 FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20260716040000'),
 ('20260716030100'),
 ('20260716030000'),
 ('20260716020000'),

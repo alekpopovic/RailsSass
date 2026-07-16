@@ -1,7 +1,7 @@
 # Security Model
 
 Status: Proposed
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 ## 1. Purpose
 
@@ -68,7 +68,7 @@ plaintext tokens are never stored.
 | Tenant IDOR | Member of A guesses B's slug or record ID | Account locator selects candidate only; authoritative membership and records reload through `Current.organization`; Pundit scope/policy; composite tenant FKs | Cross-tenant request/model tests for every controller family |
 | Stale tenant context | Reused thread/job retains prior organization | Establish context explicitly; reset in `ensure`; fail closed without context | Sequential request/job tests including exceptions |
 | Organization privilege escalation | Admin grants owner/billing, concurrent removal leaves no owner, user disable or reactivation orphans/resurrects access, or UI-hidden POST succeeds | Exact role matrix; organization-row locking in `Organizations::Memberships::ChangeRole`/`Remove`/`Reactivate`; soft suspension removes locators/product assignments once present; server authorization; cross-organization account-disable guard added with locator/bootstrap | Table-driven service/policy, reactivation, direct request, and concurrency tests |
-| Product privilege escalation | Owner assumes implicit product access or cross-product role is attached | Entitlement AND product membership AND permission; no role bypass; composite product FKs | Central truth table and invalid database-write tests |
+| Product privilege escalation | Owner assumes implicit access; a cross-product or cross-tenant custom role is attached; suspended membership or inactive role remains effective | Entitlement AND active organization/product membership AND permission from an active correctly scoped role; no role bypass; composite tenant/product FKs plus same-tenant custom-role trigger | Constraint/trigger tests now; central authorization truth table and direct-request denial tests with the next Access surface |
 | Numeric-limit race/bypass | Two concurrent creates consume the final unit, or client omits feature/delta | Server-owned action registry; product command revalidates common grant and locks/conditionally mutates usage in one transaction | Parameter-tamper plus concurrency test proving at most one commit |
 | Webhook forgery/tampering | Attacker posts active status or modifies one byte | HMAC-SHA256 exact raw body, constant-time compare, credential separation | Official-style fixture, mutation, bad/missing signature tests |
 | Webhook replay | Valid body is resent many times or an unsigned event header is changed | Signed-body event name is authoritative; fingerprint provider/configured-environment/exact-body only; unique index plus idempotent projection | Duplicate/resend/mutated-header tests and metric |
@@ -172,6 +172,18 @@ The normative decision flow is in
   server-owned test/live environment and configured-store mapping; the price
   row itself never proves payment or subscription eligibility.
 - Do not use organization role as a product permission shortcut.
+- Product-RBAC persistence commands are currently internal and transactional;
+  they are not an authorization boundary and must not be exposed by a
+  controller until the next Pundit policy/request milestone. Every tenant row
+  is re-resolved through `Current.organization` inside the command.
+- Permit global system roles across tenants, but permit a nullable
+  organization-scoped role only for a product membership from that same
+  organization. Enforce this conditional rule in PostgreSQL as well as the
+  model/service layer.
+- Ignore inactive roles and suspended product memberships in the future
+  permission union. Product suspension preserves role joins; organization
+  membership suspension deletes every product assignment before changing the
+  parent status, so reactivation cannot silently resurrect access.
 - Cache only the primitive entitlement catalog snapshot across requests. Key it
   by plan/subscription/catalog record versions; re-evaluate subscription time
   boundaries and all tenant/RBAC/record decisions on every request.

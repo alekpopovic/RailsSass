@@ -155,9 +155,20 @@ bin/rails db:seed
 ```
 
 The task converges products `core`, `analytics`, and `crm` plus plans `starter`
-and `professional` by stable key. It is a no-op outside development/test and
-does not create entitlements, prices, Lemon identifiers, subscriptions, or
-tenant grants.
+and `professional` by stable key. For both Analytics and CRM it also converges
+the active system roles `viewer`, `contributor`, and `product_admin` with this
+synthetic permission map:
+
+| Product | Viewer | Contributor | Product Admin |
+| --- | --- | --- | --- |
+| Analytics | `reports.view` | `reports.view`, `reports.manage` | `reports.view`, `reports.manage`, `settings.manage` |
+| CRM | `contacts.view` | `contacts.view`, `contacts.manage` | `contacts.view`, `contacts.manage`, `settings.manage` |
+
+Repeated execution repairs mutable display metadata and restores missing
+reviewed mappings while preserving stable identities. It is a no-op outside
+development/test and does not create Core roles, organization-specific roles,
+product memberships, entitlements, prices, Lemon identifiers, subscriptions, or
+tenant access grants.
 
 The primary PostgreSQL database uses `db/structure.sql` so a clean schema load
 preserves database functions and deferred constraint triggers. Generate it only

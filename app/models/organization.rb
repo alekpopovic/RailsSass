@@ -33,6 +33,15 @@ class Organization < ApplicationRecord
     class_name: "Billing::WebhookEvent",
     dependent: :restrict_with_exception,
     inverse_of: :organization
+  has_many :product_roles,
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
+  has_many :product_memberships,
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
+  has_many :product_membership_roles,
+    dependent: :restrict_with_exception,
+    inverse_of: :organization
   has_many :users, through: :organization_memberships
 
   enum :status, { active: "active", suspended: "suspended" },

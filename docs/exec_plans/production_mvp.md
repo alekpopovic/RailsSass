@@ -61,8 +61,9 @@ Implementation PRs may not silently change these decisions:
 - Only verified-webhook-rooted processing mutates local subscription state.
 - Canonical subscription matrix is defined only in
   [Billing Model](../billing_model.md#8-subscription-access-matrix).
-- Global catalog/roles/permissions are system-managed; tenant-custom catalog and
-  roles are out of scope.
+- Global catalog/roles/permissions are system-managed. Nullable
+  organization-role scope is supported relationally, but tenant-custom catalog
+  and a customer-facing custom-role builder are out of scope.
 - The common Access gate is pure entitlement+RBAC; product policies own record
   rules and product commands own atomic capacity/mutation via server action
   contracts.
@@ -93,8 +94,10 @@ Observed on 2026-07-16:
   It has no checkout/webhook controller, mapping/locator, verified projection,
   or writer. A read-only Entitlements status/catalog resolver now uses current
   local subscriptions and the active free fallback without provider I/O.
-- Product RBAC/full Access composition, billing synchronization, and production
-  hardening remain unimplemented milestones.
+- Product-role/permission and tenant product-assignment persistence now exist,
+  including transactional assignment commands and constrained synthetic local
+  seeds. Their Pundit/HTTP/UI surface and the full runtime Access composition,
+  billing synchronization, and production hardening remain unimplemented.
 - Kamal uses placeholder hosts/registry and does not yet supply the database
   configuration expected by production.
 
@@ -109,7 +112,7 @@ value in code.
 | Input | Required before | Safe default for planning |
 | --- | --- | --- |
 | Whether `RailsSass`/`rails_sass` naming is intentional or should be `SaaS`/product-specific | PR-00 | Preserve current identifiers until explicitly decided |
-| Initial product, feature, permission, and role keys | PR-07 | Synthetic test fixtures only |
+| Initial production product, feature, permission, and role keys | PR-07 | Keep the reviewed Analytics/CRM seed synthetic and local-only until production inputs are approved |
 | Numeric feature units and authoritative usage queries | PR-15 | No production numeric feature enabled |
 | Initial plan-product rows and feature entitlement values | PR-08 | Synthetic development/test fixtures until product approval |
 | Test/live Lemon variant mappings | PR-11/PR-16 | Test mappings only outside production |
@@ -548,7 +551,7 @@ Tests:
 Acceptance: given a plan and product/feature, Catalog returns one
 deterministic local answer without tenant/provider input.
 
-### PR-09: Add system product roles and permissions
+### PR-09: Add product roles and permissions — implemented checkpoint
 
 Depends on: PR-07.
 
@@ -557,55 +560,86 @@ Depends on: PR-07.
 Scope:
 
 - Add `ProductRole`, `ProductPermission`, and `ProductRolePermission`.
-- Add idempotent system catalog task for reviewed roles/permissions.
-- Implement role permission union query; no explicit deny or tenant custom role.
-- Add active/retired lifecycle. Retirement blocks new role mappings/assignments
-  but existing reviewed mappings continue until explicit migration.
+- Support global system roles and nullable organization-scoped roles while
+  keeping a customer-facing custom-role builder out of the MVP.
+- Add an idempotent development/test seed for reviewed Analytics/CRM
+  roles/permissions; it creates no tenant assignments.
+- Use positive permissions only. Inactive roles reject new assignments and are
+  ignored by the future runtime permission union; permissions have stable
+  definitions and no independent lifecycle flag.
 
-Migrations: product FKs, snake-case role and dot-separated permission key checks,
-per-product uniqueness/state checks, composite supporting keys,
-role-permission composite FKs, duplicate checks.
+Migrations: product and optional organization FKs, snake-case role and
+dot-separated permission key checks, system/scope consistency, partial scoped
+role uniqueness, composite supporting keys, role-permission composite FKs, and
+duplicate checks.
 
-Tests: reject cross-product/duplicate joins and verify union semantics, retired
-role assignment rules, and same key in different products cannot cross-grant.
+Tests: reject cross-product/duplicate joins, enforce system/scope consistency,
+verify the exact idempotent local mapping, and prove the same key in different
+products cannot cross-grant.
 
 Acceptance: product permission catalog is deterministic and independent of
 organization roles.
 
-### PR-10: Add tenant product memberships and role assignments
+### PR-10A: Add tenant product-membership persistence — implemented checkpoint
 
 Depends on: PR-06 and PR-09.
 
-**Goal:** let owner/admin assign active organization members to products safely.
+**Goal:** make tenant product assignments structurally safe before exposing an
+authorized management surface.
 
 Scope:
 
 - Add `ProductMembership` and `ProductMembershipRole`.
-- Add tenant-scoped assignment services, policies, and focused Hotwire UI.
-- Make assignment controls keyboard-operable and responsive, with semantic
-  dormant/denied state messaging.
+- Add tenant-scoped transactional add/remove/assign-role/suspend/reactivate
+  services without actor authorization; they are internal until PR-10B.
 - Allow assignments to exist without a current plan entitlement; label them
-  dormant rather than deleting on downgrade.
+  dormant in the later UI rather than deleting on downgrade.
+- Product suspension preserves role joins, while removal deletes the assignment.
 - A role-less product membership grants no action.
 - Extend the PR-04 membership-suspension transaction to delete that
-  membership's product memberships/role joins and audit it; reactivation never
-  resurrects product access.
+  membership's product memberships/role joins. The existing audited
+  `organization.membership.suspended` event is the evidence for the atomic
+  cleanup; reactivation never resurrects product access.
 
-Migrations: explicit organization FKs, membership/product FKs, composite
-cross-tenant/product FKs, unique assignment indexes.
+Migrations: explicit organization FKs, an active parent-membership integrity
+copy/composite FK, membership/product FKs, composite cross-tenant/product FKs,
+unique assignment indexes, and a database trigger that accepts global system
+roles but rejects a custom role from another organization.
 
 Tests:
 
-- owner/admin allowed; billing/member denied;
-- cross-tenant member ID and cross-product role rejected by request and DB;
+- cross-tenant member ID and cross-product/custom-role assignment rejected by
+  service and DB;
 - duplicate assignments fail;
-- suspended organization membership grants nothing;
-- suspend then re-invite/reactivate requires explicit product reassignment;
-- UI-hidden direct POST remains denied;
-- keyboard/narrow-viewport assignment and dormant-state system flow.
+- suspended organization membership cannot retain assignments;
+- product suspension preserves roles and requires explicit reactivation;
+- organization-membership suspension followed by re-invite/reactivation
+  requires explicit product reassignment;
 
 Acceptance: RBAC assignment data is safe but does not yet imply runtime product
 access.
+
+### PR-10B: Authorize and expose product-assignment management
+
+Depends on: PR-10A.
+
+**Goal:** allow owner/admin to manage product assignments through a complete
+server-authorized tenant UI.
+
+Scope:
+
+- Add Pundit policies and tenant controllers that reload all assignment targets
+  through `Current.organization` and system/catalog allowlists.
+- Owner/admin may manage assignments; billing/member may not. No organization
+  role bypasses product runtime permission checks.
+- Add focused accessible Hotwire UI with dormant/suspended state messaging.
+- Keep organization-specific custom-role creation/editing outside the MVP.
+
+Tests: complete organization-role policy table, two-tenant IDOR requests,
+UI-hidden direct mutation denial, and keyboard/narrow-viewport system flows.
+
+Acceptance: the management surface is authorized on the server; it still does
+not grant product actions until the full Access decision is implemented.
 
 #### Implemented Billing foundation checkpoint
 
@@ -830,7 +864,7 @@ green; complete dashboard resend/simulation contract test with sanitized output.
 
 ### PR-15: Add central product authorization and a thin vertical slice
 
-Depends on: PR-08, PR-10, PR-12, PR-14B, and chosen initial product contract.
+Depends on: PR-08, PR-10B, PR-12, PR-14B, and chosen initial product contract.
 
 **Goal:** enforce the complete entitlement AND permission decision on a real
 server-side action.
@@ -942,7 +976,7 @@ verified `subscription_updated` webhook.
 
 ### PR-18A: Complete audit coverage, redaction, and retention
 
-Depends on: PR-06, PR-10, PR-14B, and PR-15–17.
+Depends on: PR-06, PR-10B, PR-14B, and PR-15–17.
 
 **Goal:** finish the concrete PostgreSQL audit contract without mixing network/
 header work.
@@ -1169,7 +1203,7 @@ baseline evidence.
 | A4 | Non-member slug and guessed cross-tenant IDs expose/mutate nothing | PR-05 plus every tenant PR |
 | A5 | Role matrix and concurrent last-owner invariant are exact | PR-04/06 policy+concurrency tests |
 | A6 | Catalog keys are stable; plan-product, flag/finite/unlimited entitlements, free-plan uniqueness, and prices are database-constrained | PR-07–08 DB/service tests |
-| A7 | Cross-product roles/permissions/assignments are impossible | PR-09–10 DB/request tests |
+| A7 | Cross-product roles/permissions/assignments are impossible | PR-09/10A DB plus PR-10B request tests |
 | A8 | Owner/admin have no product bypass; all entitlement+RBAC factors are required | PR-15 truth table |
 | A9 | Flag, finite/unlimited limits, and concurrent final-unit consumption are correct | PR-15 service/concurrency tests |
 | A10 | Every paid billing status/time boundary and active-free fallback matches the one canonical matrix | PR-12/14B table tests |
