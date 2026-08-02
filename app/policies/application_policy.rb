@@ -38,6 +38,10 @@ class ApplicationPolicy
   end
 
   protected
+    def authenticated_context?
+      context.respond_to?(:authenticated?) && context.authenticated?
+    end
+
     def product_access_decision(product_key:, permission_key:, feature_key: nil, now: Time.current)
       Access::Gate.new(
         context: context,
@@ -75,6 +79,10 @@ class ApplicationPolicy
     end
 
     protected
+      def authenticated_context?
+        context.respond_to?(:authenticated?) && context.authenticated?
+      end
+
       def product_access_decision(product_key:, permission_key:, feature_key: nil, now: Time.current)
         Access::Gate.new(
           context: context,

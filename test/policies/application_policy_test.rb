@@ -56,6 +56,15 @@ class ApplicationPolicyTest < ActiveSupport::TestCase
     assert_includes members_after_actions, :verify_policy_scoped
   end
 
+  test "authenticated account controllers verify their Pundit decisions" do
+    active_session_after_actions = after_action_filters(ActiveSessionsController)
+    organization_after_actions = after_action_filters(OrganizationsController)
+
+    assert_includes active_session_after_actions, :verify_authorized
+    assert_includes active_session_after_actions, :verify_policy_scoped
+    assert_includes organization_after_actions, :verify_authorized
+  end
+
   test "extracts all tenant authorization inputs from the Pundit context" do
     user = Object.new
     organization = Object.new

@@ -376,9 +376,15 @@ class AdminInterfaceTest < ActionDispatch::IntegrationTest
 
     entitlement = create_test_entitlement(
       plan_product: @plan_product,
-      product_feature: @feature,
-      settings: { "api_key" => "ENTITLEMENT_SECRET_SENTINEL" }
+      product_feature: @feature
     )
+    # Simulate a legacy row written before sensitive settings were rejected;
+    # the admin UI must still never render its value.
+    PlanFeatureEntitlement.where(id: entitlement.id).update_all(
+      settings: { "api_key" => "ENTITLEMENT_SECRET_SENTINEL" },
+      updated_at: Time.current
+    )
+    entitlement.reload
     get admin_edit_plan_feature_entitlement_path(
       plan_key: @plan.key,
       product_key: @product.key,

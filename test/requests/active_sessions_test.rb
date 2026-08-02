@@ -63,4 +63,22 @@ class ActiveSessionsRequestTest < ActionDispatch::IntegrationTest
     assert Session.exists?(current_session.id)
     assert Session.exists?(other_session.id)
   end
+
+  test "session revocation rejects a request without a CSRF token" do
+    user = create_test_user
+    current_session = sign_in_as(user)
+    other_session, = Session.issue_for!(user, ip_address: "127.0.0.2", user_agent: "CSRF browser")
+    original_setting = ActionController::Base.allow_forgery_protection
+    ActionController::Base.allow_forgery_protection = true
+
+    assert_no_difference -> { Session.count } do
+      delete active_session_path(other_session)
+    end
+
+    assert_response :unprocessable_content
+    assert Session.exists?(current_session.id)
+    assert Session.exists?(other_session.id)
+  ensure
+    ActionController::Base.allow_forgery_protection = original_setting
+  end
 end

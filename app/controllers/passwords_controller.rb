@@ -3,11 +3,12 @@ class PasswordsController < ApplicationController
   INVALID_TOKEN_MESSAGE = "This password reset link is invalid or has expired."
 
   allow_unauthenticated_access
-  before_action :set_user_by_token, only: %i[ edit update ]
   rate_limit to: 5, within: 15.minutes, only: :create, name: "password-reset-request",
     with: -> { redirect_to new_password_path, alert: "Please wait before trying again." }
   rate_limit to: 10, within: 15.minutes, only: :update, name: "password-reset-update",
     with: -> { redirect_to new_password_path, alert: INVALID_TOKEN_MESSAGE }
+  prepend_before_action :set_sensitive_response_headers, only: %i[edit update]
+  before_action :set_user_by_token, only: :edit
 
   def new
   end
@@ -25,10 +26,17 @@ class PasswordsController < ApplicationController
 
   def update
     @token = params[:token]
+    result = Accounts::ResetPassword.new(
+      raw_token: @token,
+      attributes: password_params
+    ).call
 
-    if update_password_and_revoke_sessions
+    if result.updated?
       redirect_to new_session_path, notice: "Your password has been reset."
+    elsif result.invalid_token?
+      redirect_to new_password_path, alert: INVALID_TOKEN_MESSAGE
     else
+      @user = result.user
       render :edit, status: :unprocessable_entity
     end
   end
@@ -43,12 +51,8 @@ class PasswordsController < ApplicationController
       params.expect(user: %i[ password password_confirmation ])
     end
 
-    def update_password_and_revoke_sessions
-      User.transaction do
-        next false unless @user.update(password_params)
-
-        @user.sessions.delete_all
-        true
-      end
+    def set_sensitive_response_headers
+      response.headers["Cache-Control"] = "no-store"
+      response.headers["Referrer-Policy"] = "no-referrer"
     end
 end

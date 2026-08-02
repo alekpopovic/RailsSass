@@ -4,6 +4,7 @@ class User < ApplicationRecord
   EMAIL_MAX_LENGTH = 254
   NAME_MAX_LENGTH = 100
   MINIMUM_PASSWORD_LENGTH = 12
+  AUTHENTICATION_TOKEN_MAX_BYTES = 2_048
   EMAIL_VERIFICATION_TOKEN_LIFETIME = 24.hours
 
   has_secure_password reset_token: { expires_in: 15.minutes }
@@ -57,8 +58,28 @@ class User < ApplicationRecord
       email_address.to_s.strip.downcase
     end
 
+    def find_by_password_reset_token(token)
+      bounded_token = bounded_authentication_token(token)
+      find_by_token_for(:password_reset, bounded_token) if bounded_token
+    end
+
+    def find_by_password_reset_token!(token)
+      bounded_token = bounded_authentication_token(token)
+      raise ActiveSupport::MessageVerifier::InvalidSignature unless bounded_token
+
+      find_by_token_for!(:password_reset, bounded_token)
+    end
+
     def find_by_email_verification_token(token)
-      find_by_token_for(:email_verification, token)
+      bounded_token = bounded_authentication_token(token)
+      find_by_token_for(:email_verification, bounded_token) if bounded_token
+    end
+
+    def bounded_authentication_token(token)
+      normalized = token.to_s
+      return if normalized.blank? || normalized.bytesize > AUTHENTICATION_TOKEN_MAX_BYTES
+
+      normalized
     end
   end
 

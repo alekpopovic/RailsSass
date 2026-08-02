@@ -293,6 +293,20 @@ class Billing::Checkouts::CreateTest < ActiveSupport::TestCase
     assert_not_requested :any, %r{api\.lemonsqueezy\.com}
   end
 
+  test "a revoked Current session cannot create checkout state or call the provider" do
+    Session.where(id: Current.session.id).delete_all
+
+    assert_no_difference [
+      -> { @organization.billing_checkout_attempts.count },
+      -> { @organization.billing_provider_locators.count },
+      -> { @organization.audit_events.count }
+    ] do
+      assert_raises(Pundit::NotAuthorizedError) { create_checkout }
+    end
+
+    assert_not_requested :any, %r{api\.lemonsqueezy\.com}
+  end
+
   test "a current non-expired subscription blocks a second subscription checkout" do
     create_billing_subscription(organization: @organization)
 

@@ -390,7 +390,8 @@ broader destructive catalog graph editing remains deployment-controlled.
 - `enabled`: non-null master grant switch, default false.
 - `limit_value`: nullable bigint.
 - `unlimited`: non-null boolean, default false.
-- `settings`: non-null JSONB object, default `{}`.
+- `settings`: non-null JSONB object, default `{}`, bounded to 64 KiB and depth
+  20 with recursively normalized sensitive-key rejection.
 
 Foreign keys:
 
@@ -401,7 +402,7 @@ Foreign keys:
 Constraints and indexes:
 
 - unique `(plan_product_id, product_feature_id)`;
-- `settings` must be a JSON object;
+- `settings` must be a JSON object no larger than 64 KiB in PostgreSQL;
 - for `flag`, `limit_value` is null and `unlimited` is false; `enabled` is the
   boolean entitlement value;
 - for `limit`, exactly one capacity representation is required regardless of
@@ -1000,9 +1001,11 @@ idempotency indexes, and enqueue-recovery index. It is not an ordinary tenant
 resource and receipt alone is not a subscription writer.
 
 Future hardening may add only normalized fields proven necessary, such as a
-recorded verification-key version for bounded secret rotation. Such changes
-remain additive, indexed, and constrained; they do not replace the existing
-receipt or locator identities.
+non-secret verification-key identifier if operational telemetry needs durable
+per-event attribution. Current bounded rotation emits a redacted previous-key
+marker without persisting the signature or key identity. Such changes remain
+additive, indexed, and constrained; they do not replace the existing receipt or
+locator identities.
 
 Rows that predate the projection marker have `ingress_version = NULL`. They
 cannot acquire provider authority from timestamps or digest shape. A fresh

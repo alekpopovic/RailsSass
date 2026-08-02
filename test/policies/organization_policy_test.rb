@@ -14,6 +14,10 @@ class OrganizationPolicyTest < ActiveSupport::TestCase
     @user = create_test_user(email_address: "policy-suspended-member@example.test")
   end
 
+  teardown do
+    Current.reset
+  end
+
   test "role matrix grants only the organization capabilities assigned to each role" do
     expectations = {
       owner: {
@@ -103,16 +107,29 @@ class OrganizationPolicyTest < ActiveSupport::TestCase
     assert_empty OrganizationMembershipPolicy::Scope.new(member_context, scope).resolve
   end
 
+  test "organization and membership policies require a live database session" do
+    context = context_for(@founder_membership)
+    session_record = Current.session
+    Session.where(id: session_record.id).delete_all
+
+    assert_not OrganizationPolicy.new(context, @organization).dashboard?
+    assert_empty OrganizationMembershipPolicy::Scope.new(
+      context,
+      OrganizationMembership.all
+    ).resolve
+  end
+
   private
     def policy_for(membership, record = @organization)
       OrganizationPolicy.new(context_for(membership), record)
     end
 
     def context_for(membership)
-      AuthorizationContext.new(
+      establish_tenant_context(
         user: membership.user,
         organization: membership.organization,
         membership: membership
       )
+      AuthorizationContext.current
     end
 end

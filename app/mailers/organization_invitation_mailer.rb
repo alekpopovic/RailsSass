@@ -12,18 +12,6 @@ class OrganizationInvitationMailer < ApplicationMailer
       end
     end
 
-    # Rails' default delivery notification contains the complete encoded mail.
-    # Keep observability without publishing the invitation link to subscribers.
-    def deliver_mail(mail)
-      ActiveSupport::Notifications.instrument("deliver.action_mailer") do |payload|
-        payload[:mail] = "[FILTERED]"
-        payload[:mailer] = name
-        payload[:message_id] = mail.message_id
-        payload[:perform_deliveries] = mail.perform_deliveries
-        yield
-      end
-    end
-
     private
       def validate_delivery!(invitation, raw_token)
         valid = invitation&.persisted? && raw_token.present? &&

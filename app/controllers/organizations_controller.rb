@@ -1,9 +1,13 @@
 class OrganizationsController < ApplicationController
+  after_action :verify_authorized
+
   def new
     @organization = Organization.new
+    authorize @organization, :new?
   end
 
   def create
+    authorize Organization, :create?
     @organization = Organizations::Create.new(
       user: Current.user,
       name: organization_params[:name],

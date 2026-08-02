@@ -1,5 +1,11 @@
 require "active_support/core_ext/integer/time"
 
+production_host = ENV.fetch("APP_HOST").to_s.strip.downcase
+production_host_pattern = /\A(?=.{1,253}\z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/i
+unless production_host_pattern.match?(production_host)
+  raise ArgumentError, "APP_HOST must be one DNS hostname or IPv4 address without a scheme, port, or path"
+end
+
 Rails.application.configure do
   # Settings specified here will take precedence over those in config/application.rb.
 
@@ -24,14 +30,19 @@ Rails.application.configure do
   # Store uploaded files on the local file system (see config/storage.yml for options).
   config.active_storage.service = :local
 
-  # Assume all access to the app is happening through a SSL-terminating reverse proxy.
-  # config.assume_ssl = true
+  # The production container is reachable only through the trusted TLS
+  # terminator. Treat forwarded requests as HTTPS and make Rails enforce the
+  # canonical secure scheme, cookies, and HSTS policy.
+  config.assume_ssl = true
 
   # Force all access to the app over SSL, use Strict-Transport-Security, and use secure cookies.
-  # config.force_ssl = true
+  config.force_ssl = true
 
   # Skip http-to-https redirect for the default health check endpoint.
-  # config.ssl_options = { redirect: { exclude: ->(request) { request.path == "/up" } } }
+  config.ssl_options = {
+    hsts: { expires: 1.year, subdomains: true, preload: false },
+    redirect: { exclude: ->(request) { request.path == "/up" } }
+  }
 
   # Log to STDOUT with the current request id as a default log tag.
   config.log_tags = [ :request_id ]
@@ -59,7 +70,7 @@ Rails.application.configure do
 
   # Set host to be used by links generated in mailer templates.
   config.action_mailer.default_url_options = {
-    host: ENV.fetch("APP_HOST", "example.com"),
+    host: production_host,
     protocol: "https"
   }
 
@@ -82,12 +93,8 @@ Rails.application.configure do
   # Only use :id for inspections in production.
   config.active_record.attributes_for_inspect = [ :id ]
 
-  # Enable DNS rebinding protection and other `Host` header attacks.
-  # config.hosts = [
-  #   "example.com",     # Allow requests from example.com
-  #   /.*\.example\.com/ # Allow requests from subdomains like `www.example.com`
-  # ]
-  #
-  # Skip DNS rebinding protection for the default health check endpoint.
-  # config.host_authorization = { exclude: ->(request) { request.path == "/up" } }
+  # Accept exactly the canonical production host. The load balancer may probe
+  # `/up` by IP, but every application and webhook route remains host-checked.
+  config.hosts = [ production_host ]
+  config.host_authorization = { exclude: ->(request) { request.path == "/up" } }
 end

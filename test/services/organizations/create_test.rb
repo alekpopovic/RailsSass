@@ -123,6 +123,25 @@ class Organizations::CreateTest < ActiveSupport::TestCase
     end
   end
 
+  test "a revoked Current session cannot create an organization" do
+    Session.where(id: @session.id).delete_all
+
+    assert_no_difference [
+      -> { Organization.count },
+      -> { OrganizationMembership.count },
+      -> { OrganizationAccessLocator.count },
+      -> { AuditEvent.count }
+    ] do
+      assert_raises(Pundit::NotAuthorizedError) do
+        Organizations::Create.new(
+          user: @user,
+          name: "Revoked Session Organization",
+          slug: "revoked-session-organization"
+        ).call
+      end
+    end
+  end
+
   test "platform system role does not replace the organization owner role" do
     platform_admin = create_test_user(
       email_address: "platform-creator@example.test"

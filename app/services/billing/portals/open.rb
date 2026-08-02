@@ -66,7 +66,8 @@ module Billing
           authorized = Current.organization.active? &&
             authoritative_user&.authentication_allowed? &&
             membership&.active? &&
-            membership.role.in?(%w[owner billing])
+            membership.role.in?(%w[owner billing]) &&
+            AuthorizationContext.current.authenticated?
           raise_not_authorized! unless authorized
 
           Current.membership = membership

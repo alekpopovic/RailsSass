@@ -55,6 +55,8 @@ class PasswordsTest < ActionDispatch::IntegrationTest
 
     get edit_password_path(token: token)
     assert_response :success
+    assert_equal "no-store", response.headers["Cache-Control"]
+    assert_equal "no-referrer", response.headers["Referrer-Policy"]
     assert user.reload.authenticate(OLD_PASSWORD)
 
     patch password_path, params: {
@@ -110,6 +112,8 @@ class PasswordsTest < ActionDispatch::IntegrationTest
     }
 
     assert_response :unprocessable_content
+    assert_equal "no-store", response.headers["Cache-Control"]
+    assert_equal "no-referrer", response.headers["Referrer-Policy"]
     assert_equal password_digest, user.reload.password_digest
     assert Session.exists?(session_record.id)
     assert_equal user, User.find_by_password_reset_token(token)
@@ -131,6 +135,60 @@ class PasswordsTest < ActionDispatch::IntegrationTest
     assert_redirected_to new_session_path
     assert_predicate user.reload, :user?
     assert user.authenticate(NEW_PASSWORD)
+  end
+
+  test "reset update rate limiting runs before token lookup" do
+    user = create_user
+    token = user.password_reset_token
+    user.update!(disabled_at: Time.current)
+    params = {
+      token: token,
+      user: { password: NEW_PASSWORD, password_confirmation: NEW_PASSWORD }
+    }
+
+    10.times do
+      patch password_path, params: params
+      assert_redirected_to new_password_path
+    end
+
+    user_queries = []
+    subscription = ActiveSupport::Notifications.subscribe("sql.active_record") do |*, payload|
+      user_queries << payload[:sql] if payload[:sql].include?('FROM "users"')
+    end
+    patch password_path, params: params
+
+    assert_redirected_to new_password_path
+    assert_equal PasswordsController::INVALID_TOKEN_MESSAGE, flash[:alert]
+    assert_equal "no-store", response.headers["Cache-Control"]
+    assert_equal "no-referrer", response.headers["Referrer-Policy"]
+    assert_empty user_queries
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
+
+  test "reset request and update reject missing CSRF tokens" do
+    user = create_user
+    token = user.password_reset_token
+    session_record, = Session.issue_for!(user, ip_address: nil, user_agent: "Password CSRF test")
+    password_digest = user.password_digest
+    original_setting = ActionController::Base.allow_forgery_protection
+    ActionController::Base.allow_forgery_protection = true
+
+    assert_no_enqueued_emails do
+      post password_path, params: { email_address: user.email_address }
+    end
+    assert_response :unprocessable_content
+
+    patch password_path, params: {
+      token: token,
+      user: { password: NEW_PASSWORD, password_confirmation: NEW_PASSWORD }
+    }
+
+    assert_response :unprocessable_content
+    assert_equal password_digest, user.reload.password_digest
+    assert Session.exists?(session_record.id)
+  ensure
+    ActionController::Base.allow_forgery_protection = original_setting
   end
 
   private

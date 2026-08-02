@@ -52,6 +52,8 @@ class EmailVerificationsTest < ActionDispatch::IntegrationTest
     get edit_email_verification_path(token: token)
 
     assert_response :success
+    assert_equal "no-store", response.headers["Cache-Control"]
+    assert_equal "no-referrer", response.headers["Referrer-Policy"]
     assert_nil user.reload.email_verified_at
     assert_select "form[action=?]", email_verification_path
 
@@ -106,6 +108,50 @@ class EmailVerificationsTest < ActionDispatch::IntegrationTest
     }
 
     assert_redirected_to new_organization_path
+  end
+
+  test "verification update rate limiting runs before token lookup" do
+    user = create_user
+    token = user.email_verification_token
+    user.update!(disabled_at: Time.current)
+
+    10.times do
+      patch email_verification_path, params: { token: token }
+      assert_redirected_to new_session_path
+    end
+
+    user_queries = []
+    subscription = ActiveSupport::Notifications.subscribe("sql.active_record") do |*, payload|
+      user_queries << payload[:sql] if payload[:sql].include?('FROM "users"')
+    end
+    patch email_verification_path, params: { token: token }
+
+    assert_redirected_to new_session_path
+    assert_equal EmailVerificationsController::INVALID_TOKEN_MESSAGE, flash[:alert]
+    assert_equal "no-store", response.headers["Cache-Control"]
+    assert_equal "no-referrer", response.headers["Referrer-Policy"]
+    assert_empty user_queries
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
+
+  test "verification request and update reject missing CSRF tokens" do
+    user = create_user
+    token = user.email_verification_token
+    original_setting = ActionController::Base.allow_forgery_protection
+    ActionController::Base.allow_forgery_protection = true
+
+    assert_no_enqueued_emails do
+      post email_verification_path, params: { email_address: user.email_address }
+    end
+    assert_response :unprocessable_content
+
+    patch email_verification_path, params: { token: token }
+
+    assert_response :unprocessable_content
+    assert_nil user.reload.email_verified_at
+  ensure
+    ActionController::Base.allow_forgery_protection = original_setting
   end
 
   private

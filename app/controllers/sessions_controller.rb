@@ -9,14 +9,16 @@ class SessionsController < ApplicationController
   end
 
   def create
-    user = User.authenticate_by(
+    authentication = Accounts::Authenticate.new(
       email_address: User.normalize_email(params[:email_address]),
-      password: params[:password]
-    )
+      password: params[:password],
+      ip_address: request.remote_ip,
+      user_agent: request.user_agent
+    ).call
 
-    if user&.authentication_allowed?
+    if authentication.authenticated?
       destination = after_authentication_path
-      start_new_session_for(user)
+      start_new_session_with(authentication.session, authentication.raw_token)
       redirect_to destination, allow_other_host: false
     else
       redirect_to new_session_path, alert: INVALID_CREDENTIALS_MESSAGE
@@ -24,6 +26,8 @@ class SessionsController < ApplicationController
   end
 
   def destroy
+    # Deliberate Pundit exception: this action can terminate only the
+    # authenticated Current.session and has no caller-selected record.
     terminate_session
     redirect_to new_session_path, status: :see_other, notice: "You have been signed out."
   end

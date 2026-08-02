@@ -24,13 +24,16 @@ class Access::ProductMemberships::ConcurrencyTest < ActiveSupport::TestCase
       role: :member
     )
     @product = create_access_test_product(key: "rbac_concurrency_#{suffix}")
+    create_access_test_product_entitlement
     @role = create_access_test_role(product: @product)
     @owner_session, = Session.issue_for!(
       @owner,
       ip_address: nil,
       user_agent: "Product RBAC concurrency test"
     )
+    Current.session = @owner_session
     Current.organization = @organization
+    Current.membership = @owner_membership
   end
 
   teardown do
@@ -47,6 +50,8 @@ class Access::ProductMemberships::ConcurrencyTest < ActiveSupport::TestCase
         @organization.delete
       end
     end
+    PlanProduct.where(id: @plan_product&.id).delete_all
+    Plan.where(id: @plan&.id).delete_all if @owns_access_test_plan
     ProductRole.where(id: @role&.id).delete_all
     Product.where(id: @product&.id).delete_all
     User.where(id: [ @owner&.id, @member&.id ].compact).delete_all
@@ -58,7 +63,8 @@ class Access::ProductMemberships::ConcurrencyTest < ActiveSupport::TestCase
     outcomes = run_concurrently(2) do
       Access::ProductMemberships::Add.new(
         organization_membership_id: @organization_membership.id,
-        product_id: @product.id
+        product_id: @product.id,
+        actor: Current.user
       ).call
     end
 
@@ -73,13 +79,15 @@ class Access::ProductMemberships::ConcurrencyTest < ActiveSupport::TestCase
   test "concurrent role assignments converge to one join" do
     product_membership = Access::ProductMemberships::Add.new(
       organization_membership_id: @organization_membership.id,
-      product_id: @product.id
+      product_id: @product.id,
+      actor: @owner
     ).call
 
     outcomes = run_concurrently(2) do
       Access::ProductMemberships::AssignRole.new(
         product_membership_id: product_membership.id,
-        product_role_id: @role.id
+        product_role_id: @role.id,
+        actor: Current.user
       ).call
     end
 
@@ -97,11 +105,14 @@ class Access::ProductMemberships::ConcurrencyTest < ActiveSupport::TestCase
     add_thread = Thread.new do
       ActiveRecord::Base.connection_pool.with_connection do
         Current.organization = Organization.find(@organization.id)
+        Current.session = Session.includes(:user).find(@owner_session.id)
+        Current.membership = Current.organization.organization_memberships.find(@owner_membership.id)
         ready << true
         start.pop
         results << Access::ProductMemberships::Add.new(
           organization_membership_id: @organization_membership.id,
-          product_id: @product.id
+          product_id: @product.id,
+          actor: Current.user
         ).call
       rescue => error
         results << error
@@ -159,7 +170,9 @@ class Access::ProductMemberships::ConcurrencyTest < ActiveSupport::TestCase
       threads = count.times.map do
         Thread.new do
           ActiveRecord::Base.connection_pool.with_connection do
+            Current.session = Session.includes(:user).find(@owner_session.id)
             Current.organization = Organization.find(@organization.id)
+            Current.membership = Current.organization.organization_memberships.find(@owner_membership.id)
             ready << true
             start.pop
             results << yield

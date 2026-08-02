@@ -132,6 +132,29 @@ class Organizations::Memberships::ChangeRoleTest < ActiveSupport::TestCase
     assert_predicate target.reload, :member?
   end
 
+  test "a revoked Current session cannot change a membership" do
+    target_user = create_test_user(email_address: "revoked-session-target@example.test")
+    target = create_test_membership(
+      organization: @organization,
+      user: target_user,
+      role: :member
+    )
+    establish_tenant_context(
+      user: @owner,
+      organization: @organization,
+      membership: @owner_membership
+    )
+    Session.where(id: Current.session.id).delete_all
+
+    assert_no_difference -> { @organization.audit_events.count } do
+      assert_raises(Pundit::NotAuthorizedError) do
+        change_role(actor: @owner, membership: target, role: :admin)
+      end
+    end
+
+    assert_predicate target.reload, :member?
+  end
+
   test "the last active owner cannot be demoted" do
     establish_tenant_context(user: @owner, organization: @organization, membership: @owner_membership)
 

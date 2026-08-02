@@ -24,6 +24,7 @@ class OrganizationInvitationTest < ActiveSupport::TestCase
 
     assert_equal Digest::SHA256.hexdigest(raw_token), OrganizationInvitation.digest_token(raw_token)
     assert_nil OrganizationInvitation.digest_token("")
+    assert_nil OrganizationInvitation.digest_token("x" * (OrganizationInvitation::RAW_TOKEN_MAX_BYTES + 1))
     assert_not_includes OrganizationInvitation.column_names, "token"
   end
 

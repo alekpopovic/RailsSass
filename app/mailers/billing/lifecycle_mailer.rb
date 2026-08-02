@@ -10,20 +10,6 @@ module Billing
 
     before_action :load_delivery
 
-    class << self
-      # Do not expose the encoded message or recipient address to delivery
-      # instrumentation subscribers.
-      def deliver_mail(mail)
-        ActiveSupport::Notifications.instrument("deliver.action_mailer") do |payload|
-          payload[:mail] = "[FILTERED]"
-          payload[:mailer] = name
-          payload[:message_id] = mail.message_id
-          payload[:perform_deliveries] = mail.perform_deliveries
-          yield
-        end
-      end
-    end
-
     Billing::LifecycleDelivery::KINDS.each do |delivery_kind|
       define_method(delivery_kind) do
         deliver_lifecycle_message(delivery_kind)

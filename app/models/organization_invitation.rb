@@ -2,6 +2,7 @@ require "digest"
 
 class OrganizationInvitation < ApplicationRecord
   EMAIL_MAX_LENGTH = 254
+  RAW_TOKEN_MAX_BYTES = 2_048
   TOKEN_DIGEST_LENGTH = 64
   TOKEN_DIGEST_PATTERN = /\A[0-9a-f]{64}\z/
 
@@ -51,9 +52,10 @@ class OrganizationInvitation < ApplicationRecord
 
   class << self
     def digest_token(raw_token)
-      return if raw_token.blank?
+      normalized = raw_token.to_s
+      return if normalized.blank? || normalized.bytesize > RAW_TOKEN_MAX_BYTES
 
-      Digest::SHA256.hexdigest(raw_token)
+      Digest::SHA256.hexdigest(normalized)
     end
   end
 

@@ -88,6 +88,16 @@ class AuditEventPolicyTest < ActiveSupport::TestCase
     end
   end
 
+  test "policy and scope deny a revoked database session" do
+    with_current_context(@owner_membership) do
+      context = context_for(@owner_membership)
+      Session.where(id: Current.session.id).delete_all
+
+      assert_not AuditEventPolicy.new(context, AuditEvent).index?
+      assert_empty AuditEventPolicy::Scope.new(context, AuditEvent.all).resolve
+    end
+  end
+
   private
     def membership_for(role, status: :active)
       user = create_test_user(

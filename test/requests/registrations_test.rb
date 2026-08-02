@@ -123,6 +123,28 @@ class RegistrationsRequestTest < ActionDispatch::IntegrationTest
     assert_equal "Please wait before trying again.", flash[:alert]
   end
 
+  test "registration rejects a request without a CSRF token when forgery protection is enabled" do
+    original_setting = ActionController::Base.allow_forgery_protection
+    ActionController::Base.allow_forgery_protection = true
+
+    assert_no_difference -> { User.count } do
+      assert_no_enqueued_emails do
+        post registration_path, params: {
+          user: {
+            name: "CSRF Registration User",
+            email_address: "csrf-registration@example.test",
+            password: TEST_PASSWORD,
+            password_confirmation: TEST_PASSWORD
+          }
+        }
+      end
+    end
+
+    assert_response :unprocessable_content
+  ensure
+    ActionController::Base.allow_forgery_protection = original_setting
+  end
+
   private
     def registration_response
       {

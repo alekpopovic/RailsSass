@@ -157,6 +157,22 @@ class Billing::PlanChanges::CreateTest < ActiveSupport::TestCase
     assert_empty @organization.billing_plan_changes
   end
 
+  test "a revoked Current session cannot create a command or call the provider" do
+    client = fake_client
+    Session.where(id: Current.session.id).delete_all
+
+    assert_no_difference [
+      -> { @organization.billing_plan_changes.count },
+      -> { @organization.audit_events.count }
+    ] do
+      assert_raises(Pundit::NotAuthorizedError) do
+        create_change(client: client)
+      end
+    end
+
+    assert_empty client.calls
+  end
+
   test "a same-target duplicate returns the open command without a second patch" do
     client = fake_client
     first = create_change(client: client)

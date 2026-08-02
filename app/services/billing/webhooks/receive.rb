@@ -36,6 +36,8 @@ module Billing
         signature:,
         content_type:,
         secret: Rails.configuration.x.billing.lemon_squeezy.webhook_secret,
+        previous_secret: Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret,
+        previous_secret_expires_at: Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret_expires_at,
         environment: Rails.configuration.x.billing.lemon_squeezy.environment,
         store_id: Rails.configuration.x.billing.lemon_squeezy.store_id,
         request_id: nil,
@@ -44,7 +46,11 @@ module Billing
         @body = body
         @signature = signature
         @content_type = content_type.to_s
-        @verifier = SignatureVerifier.new(secret: secret)
+        @verifier = SignatureVerifier.new(
+          secret: secret,
+          previous_secret: previous_secret,
+          previous_secret_expires_at: previous_secret_expires_at
+        )
         @environment = environment.to_s
         @store_id = store_id.to_s
         @request_id = safe_request_id(request_id)
@@ -55,7 +61,14 @@ module Billing
         raw_body = read_raw_body
         return result(413) if raw_body.bytesize > MAX_BODY_BYTES
         return result(503) unless @verifier.configured?
-        return result(401) unless @verifier.valid?(raw_body: raw_body, signature: @signature)
+        verification_slot = @verifier.verify(
+          raw_body: raw_body,
+          signature: @signature,
+          now: @now
+        )
+        return result(401) unless verification_slot
+
+        log_previous_secret_accepted if verification_slot == :previous
         return result(415) unless json_content_type?
 
         parsed_payload = parse_payload(raw_body)
@@ -84,6 +97,12 @@ module Billing
       private
         def result(status)
           Result.new(status: status, event: nil, duplicate: false, enqueue_failed: false)
+        end
+
+        def log_previous_secret_accepted
+          Rails.logger.info(
+            "billing_webhook_previous_secret_accepted request_id=#{@request_id}"
+          )
         end
 
         def json_content_type?

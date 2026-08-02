@@ -17,7 +17,7 @@ class Access::ProductMemberships::Base
     end
 
     def authorize_actor_for_product!(organization, product_id)
-      return unless @actor
+      raise_not_authorized! unless @actor.is_a?(User) && @actor.persisted?
 
       actor_membership = organization.organization_memberships
         .where(user_id: @actor.id)
@@ -74,8 +74,6 @@ class Access::ProductMemberships::Base
     end
 
     def record_audit_event!(action:, subject:, metadata: {})
-      return unless @actor
-
       AuditEvents::Record.call(
         organization: Current.organization,
         actor_user: @actor,

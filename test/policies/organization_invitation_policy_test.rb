@@ -9,6 +9,10 @@ class OrganizationInvitationPolicyTest < ActiveSupport::TestCase
     @organization, @owner_membership = create_test_organization_with_owner(owner: @owner)
   end
 
+  teardown do
+    Current.reset
+  end
+
   test "management predicates enforce owner and admin invitation roles" do
     owner_expectations = { owner: true, admin: true, billing: true, member: true }
     assert_role_expectations(@owner_membership, owner_expectations)
@@ -48,22 +52,15 @@ class OrganizationInvitationPolicyTest < ActiveSupport::TestCase
     recipient = create_test_user(email_address: "invitation-policy-recipient@example.test")
     invitation = build_invitation(email_address: recipient.email_address, organization_role: :member)
     invitation.save!
-    context = AuthorizationContext.new(
-      user: recipient,
-      organization: @organization,
-      membership: nil
-    )
+    context = acceptance_context_for(recipient)
 
     assert OrganizationInvitationPolicy.new(context, invitation).accept?
 
     wrong_user = create_test_user(email_address: "invitation-policy-wrong@example.test")
-    wrong_context = AuthorizationContext.new(
-      user: wrong_user,
-      organization: @organization,
-      membership: nil
-    )
+    wrong_context = acceptance_context_for(wrong_user)
     assert_not OrganizationInvitationPolicy.new(wrong_context, invitation).accept?
 
+    context = acceptance_context_for(recipient)
     OrganizationInvitation.where(id: invitation.id).update_all(
       status: "revoked",
       revoked_at: Time.current
@@ -94,6 +91,28 @@ class OrganizationInvitationPolicyTest < ActiveSupport::TestCase
     assert_equal %w[admin member], resolved.order(:organization_role).pluck(:organization_role)
   end
 
+  test "management and acceptance require a live database session" do
+    management_context = context_for(@owner_membership)
+    invitation = build_invitation(
+      email_address: "invitation-policy-revoked@example.test",
+      organization_role: :member
+    )
+    Session.where(id: Current.session.id).delete_all
+
+    assert_not OrganizationInvitationPolicy.new(management_context, invitation).create?
+    assert_empty OrganizationInvitationPolicy::Scope.new(
+      management_context,
+      OrganizationInvitation.all
+    ).resolve
+
+    recipient = create_test_user(email_address: invitation.email_address)
+    invitation.save!
+    acceptance_context = acceptance_context_for(recipient)
+    Session.where(id: Current.session.id).delete_all
+
+    assert_not OrganizationInvitationPolicy.new(acceptance_context, invitation).accept?
+  end
+
   private
     def assert_role_expectations(membership, expectations)
       expectations.each do |role, expected|
@@ -118,10 +137,18 @@ class OrganizationInvitationPolicyTest < ActiveSupport::TestCase
     end
 
     def context_for(membership)
-      AuthorizationContext.new(
+      establish_tenant_context(
         user: membership.user,
         organization: @organization,
         membership: membership
       )
+      AuthorizationContext.current
+    end
+
+    def acceptance_context_for(user)
+      Current.session, = Session.issue_for!(user, ip_address: nil, user_agent: "Invitation policy test")
+      Current.organization = @organization
+      Current.membership = nil
+      AuthorizationContext.current
     end
 end

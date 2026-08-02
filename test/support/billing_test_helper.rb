@@ -113,6 +113,7 @@ module BillingTestHelper
 
   def create_billing_webhook_event(**overrides)
     now = Time.current
+    receipt_time = [ now, overrides[:processed_at] ].compact.min
     Billing::WebhookEvent.create!({
       provider: "lemon_squeezy",
       environment: "test",
@@ -120,8 +121,8 @@ module BillingTestHelper
       status: "received",
       test_mode: true,
       ingress_version: Billing::WebhookEvent::CURRENT_INGRESS_VERSION,
-      received_at: now,
-      verified_at: now,
+      received_at: receipt_time,
+      verified_at: receipt_time,
       snapshot: {}
     }.merge(overrides))
   end

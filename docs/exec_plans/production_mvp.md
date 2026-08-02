@@ -870,14 +870,15 @@ Scope:
 - Add global `POST /webhooks/lemon_squeezy` with only action-specific CSRF
   exemption.
 - Implement exact raw-body HMAC verifier with constant-time comparison. The
-  current-key path is implemented; bounded previous-key rotation remains a
-  production-hardening follow-up.
+  current-key path and one strict, observable, maximum-seven-day previous-key
+  rotation window are implemented.
 - Enforce a 256 KiB application body limit and validate content type. Use signed
   `meta.event_name` as authority, ignore the unsigned header for classification,
   and validate the created/updated/expired subscription-resource allowlist plus
   payment success/failed/recovered subscription-invoice triggers, resource type,
-  store, and environment/test mode. Edge rate limiting remains a deployment
-  hardening item.
+  store, and environment/test mode. Application ingress now enforces a shared
+  300/minute effective-IP limit before body processing; complementary edge
+  capacity and trusted forwarding remain deployment requirements.
 - Verify the allowlisted checkout custom token after HMAC; persist only its nonce
   digest and bounded verified correlation claims, never the raw token or nonce.
 - Fingerprint only provider + configured environment + exact raw body; exclude
@@ -897,8 +898,9 @@ Implemented tests: valid real HMAC, byte/signature mutation, missing signature,
 signed malformed JSON, size/content-type bounds, unsupported event, duplicate,
 subscription/payment resource classification, verified-context sanitization,
 enqueue failure+sweeper recovery, requested ledger constraints, and log
-redaction. Previous-key rotation, deployment 429 behavior, and full provider
-contract fixtures remain production-hardening evidence.
+redaction, bounded current/previous-key rotation, duplicate old/new signatures,
+and application `429` behavior. Full provider contract fixtures and edge-limit
+drills remain production-hardening evidence.
 
 Acceptance: no subscription row can be changed by this PR; ingress receipt and
 queue handoff alone never unlock access.

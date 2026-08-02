@@ -429,9 +429,12 @@ The endpoint performs these bounded steps:
    request-body limit.
 2. Read exact raw bytes once.
 3. Require a valid 64-character hex `X-Signature`.
-4. Calculate HMAC-SHA256 with the configured current signing secret and compare
-   in constant time. Bounded previous-key rotation plus recorded key version is
-   a deployment-hardening follow-up; no unbounded key list is accepted.
+4. Calculate HMAC-SHA256 with the configured current signing secret and, during
+   rotation, one distinct previous secret with an absolute expiry no more than
+   seven days after process boot. Evaluate every eligible comparison before
+   selecting a match. Production rejects partial, stale, malformed, duplicate,
+   or excessive-overlap rotation configuration; previous-key use emits only a
+   redacted request marker. No unbounded key list is accepted.
 5. Parse JSON only after a valid signature.
 6. Read signed-body `meta.event_name` as the only event-name authority. The
    unsigned `X-Event-Name` header is ignored for classification, so a missing or
@@ -800,7 +803,8 @@ this accepted operational risk without creating a second mutation authority.
   mismatch persist minimal ignored/quarantined receipts and return 200 without
   projection.
 - The configured current secret works and missing configuration fails closed;
-  bounded previous-key rotation remains a production-hardening follow-up.
+  a distinct previous secret works only before its strict bounded expiry, and
+  current/previous signatures over the same body remain one receipt.
 - Duplicate delivery returns 200 and stores/processes once.
 - Database failure returns 503; durable receipt with enqueue failure is recovered
   by the sweeper.

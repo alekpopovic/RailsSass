@@ -94,6 +94,23 @@ class UserTest < ActiveSupport::TestCase
     end
   end
 
+  test "account token decoders reject oversized input before querying" do
+    oversized_token = "x" * (User::AUTHENTICATION_TOKEN_MAX_BYTES + 1)
+    user_queries = []
+    subscription = ActiveSupport::Notifications.subscribe("sql.active_record") do |*, payload|
+      user_queries << payload[:sql] if payload[:sql].include?('FROM "users"')
+    end
+
+    assert_nil User.find_by_password_reset_token(oversized_token)
+    assert_nil User.find_by_email_verification_token(oversized_token)
+    assert_raises(ActiveSupport::MessageVerifier::InvalidSignature) do
+      User.find_by_password_reset_token!(oversized_token)
+    end
+    assert_empty user_queries
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
+
   test "password reset token cannot be reused after the password changes" do
     user = create_user!
     token = user.password_reset_token

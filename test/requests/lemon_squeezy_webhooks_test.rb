@@ -8,13 +8,19 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
   include BillingTestHelper
 
   SECRET = "synthetic-webhook-secret"
+  PREVIOUS_SECRET = "synthetic-previous-webhook-secret"
   CUSTOMER_SENTINEL = "private-customer@example.test"
 
   setup do
     @original_secret = Rails.configuration.x.billing.lemon_squeezy.webhook_secret
+    @original_previous_secret = Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret
+    @original_previous_secret_expires_at =
+      Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret_expires_at
     @original_environment = Rails.configuration.x.billing.lemon_squeezy.environment
     @original_store_id = Rails.configuration.x.billing.lemon_squeezy.store_id
     Rails.configuration.x.billing.lemon_squeezy.webhook_secret = SECRET
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret = nil
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret_expires_at = nil
     Rails.configuration.x.billing.lemon_squeezy.environment = "test"
     Rails.configuration.x.billing.lemon_squeezy.store_id = "61001"
     clear_enqueued_jobs
@@ -23,6 +29,9 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
 
   teardown do
     Rails.configuration.x.billing.lemon_squeezy.webhook_secret = @original_secret
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret = @original_previous_secret
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret_expires_at =
+      @original_previous_secret_expires_at
     Rails.configuration.x.billing.lemon_squeezy.environment = @original_environment
     Rails.configuration.x.billing.lemon_squeezy.store_id = @original_store_id
     clear_enqueued_jobs
@@ -73,6 +82,36 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
     assert_equal "create", route.fetch(:action)
   end
 
+  test "ingress rate limit returns a bounded retry delay before webhook processing" do
+    cache_key = [
+      "rate-limit",
+      "webhooks/lemon_squeezy",
+      Webhooks::LemonSqueezyController::RATE_LIMIT_NAME,
+      "127.0.0.1"
+    ].join(":")
+    Rails.cache.write(
+      cache_key,
+      Webhooks::LemonSqueezyController::RATE_LIMIT,
+      expires_in: Webhooks::LemonSqueezyController::RATE_LIMIT_WINDOW
+    )
+
+    original_call = Billing::Webhooks::Receive.method(:call)
+    Billing::Webhooks::Receive.define_singleton_method(:call) do |**|
+      raise "webhook processing must not run after the ingress limit"
+    end
+
+    begin
+      post_raw("not-read", signature: nil)
+    ensure
+      Billing::Webhooks::Receive.define_singleton_method(:call, original_call)
+    end
+
+    assert_response :too_many_requests
+    assert_equal Webhooks::LemonSqueezyController::RATE_LIMIT_WINDOW.to_i.to_s,
+      response.headers.fetch("Retry-After")
+    assert_empty response.body
+  end
+
   test "invalid signature is rejected before malformed JSON is parsed" do
     malformed_body = %({"customer_email":"#{CUSTOMER_SENTINEL}")
 
@@ -120,6 +159,77 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
     end
 
     assert_equal 1, Billing::WebhookEvent.where(body_sha256: Digest::SHA256.hexdigest(body)).count
+  end
+
+  test "an unexpired previous signing secret is accepted but stops working at expiry" do
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret = PREVIOUS_SECRET
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret_expires_at = 1.hour.from_now
+    accepted_body = valid_body
+
+    assert_difference -> { Billing::WebhookEvent.count }, 1 do
+      assert_enqueued_jobs 1 do
+        post_signed(accepted_body, secret: PREVIOUS_SECRET)
+      end
+    end
+    assert_response :ok
+
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret_expires_at = Time.current
+    expired_body = subscription_body("subscription_created", status: "active")
+
+    assert_no_difference -> { Billing::WebhookEvent.count } do
+      assert_no_enqueued_jobs do
+        post_signed(expired_body, secret: PREVIOUS_SECRET)
+      end
+    end
+    assert_response :unauthorized
+  end
+
+  test "the same body signed with previous and current secrets creates one receipt" do
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret = PREVIOUS_SECRET
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret_expires_at = 1.hour.from_now
+    body = valid_body
+
+    assert_difference -> { Billing::WebhookEvent.count }, 1 do
+      assert_enqueued_jobs 1 do
+        post_signed(body, secret: PREVIOUS_SECRET)
+        assert_response :ok
+        post_signed(body, secret: SECRET)
+        assert_response :ok
+      end
+    end
+
+    assert_equal 1, Billing::WebhookEvent.where(body_sha256: Digest::SHA256.hexdigest(body)).count
+  end
+
+  test "previous-secret acceptance emits only a bounded rotation marker" do
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret = PREVIOUS_SECRET
+    Rails.configuration.x.billing.lemon_squeezy.webhook_previous_secret_expires_at = 1.hour.from_now
+    output = StringIO.new
+    logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(output))
+    original_loggers = capture_loggers
+    assign_loggers(logger)
+
+    current_body = subscription_body("subscription_created", status: "active")
+    post_signed(current_body)
+    assert_response :ok
+    assert_not_includes output.string, "billing_webhook_previous_secret_accepted"
+
+    output.truncate(0)
+    output.rewind
+    previous_body = valid_body
+    previous_signature = signature_for(previous_body, secret: PREVIOUS_SECRET)
+    post_raw(previous_body, signature: previous_signature)
+    assert_response :ok
+
+    logs = output.string
+    assert_includes logs, "billing_webhook_previous_secret_accepted request_id="
+    assert_not_includes logs, previous_body
+    assert_not_includes logs, CUSTOMER_SENTINEL
+    assert_not_includes logs, SECRET
+    assert_not_includes logs, PREVIOUS_SECRET
+    assert_not_includes logs, previous_signature
+  ensure
+    restore_loggers(original_loggers) if original_loggers
   end
 
   test "a valid signed resend re-screens and grants provenance to an exact legacy receipt" do
@@ -532,8 +642,8 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
       )
     end
 
-    def post_signed(body)
-      post_raw(body, signature: signature_for(body))
+    def post_signed(body, secret: SECRET)
+      post_raw(body, signature: signature_for(body, secret: secret))
     end
 
     def post_raw(body, signature:, content_type: "application/json")
@@ -542,8 +652,8 @@ class LemonSqueezyWebhooksTest < ActionDispatch::IntegrationTest
       post lemon_squeezy_webhook_path, params: body, headers: headers
     end
 
-    def signature_for(body)
-      OpenSSL::HMAC.hexdigest("SHA256", SECRET, body)
+    def signature_for(body, secret: SECRET)
+      OpenSSL::HMAC.hexdigest("SHA256", secret, body)
     end
 
     def capture_loggers

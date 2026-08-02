@@ -9,6 +9,11 @@ class Platform::ConfigureProviderPriceMappingTest < ActiveSupport::TestCase
       email_address: "mapping-admin-#{SecureRandom.hex(4)}@example.test"
     )
     @administrator.update!(system_role: :platform_admin)
+    Current.session, = Session.issue_for!(
+      @administrator,
+      ip_address: nil,
+      user_agent: "Provider mapping test"
+    )
     @plan = create_test_plan(name: "Mapped Professional")
     @plan_price = create_test_plan_price(
       plan: @plan,
@@ -16,6 +21,10 @@ class Platform::ConfigureProviderPriceMappingTest < ActiveSupport::TestCase
       lemon_product_id: "420002",
       lemon_variant_id: "430003"
     )
+  end
+
+  teardown do
+    Current.reset
   end
 
   test "platform admin creates an audited immutable environment mapping" do
@@ -83,6 +92,40 @@ class Platform::ConfigureProviderPriceMappingTest < ActiveSupport::TestCase
       ).call
     end
     assert_includes error.record.errors[:base], "requires an active paid plan and active price"
+  end
+
+  test "another platform administrator cannot act for the live Current user" do
+    other_administrator = create_test_user(
+      email_address: "mapping-other-admin-#{SecureRandom.hex(4)}@example.test"
+    )
+    other_administrator.update!(system_role: :platform_admin)
+
+    assert_no_difference [
+      -> { Billing::ProviderPriceMapping.count },
+      -> { Platform::AuditEvent.count }
+    ] do
+      assert_raises(Pundit::NotAuthorizedError) do
+        described_class.new(
+          actor: other_administrator,
+          plan_price: @plan_price,
+          environment: "test"
+        ).call
+      end
+    end
+  end
+
+  test "a revoked Current session cannot configure a provider mapping" do
+    revoked_session = Current.session
+    Session.where(id: revoked_session.id).delete_all
+
+    assert_no_difference [
+      -> { Billing::ProviderPriceMapping.count },
+      -> { Platform::AuditEvent.count }
+    ] do
+      assert_raises(Pundit::NotAuthorizedError) { configure }
+    end
+
+    assert_predicate revoked_session, :persisted?
   end
 
   private

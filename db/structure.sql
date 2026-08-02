@@ -345,14 +345,14 @@ CREATE TABLE public.billing_checkout_attempts (
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT billing_checkout_attempts_completed_after_creation CHECK (((completed_at IS NULL) OR (completed_at >= created_at))),
-    CONSTRAINT billing_checkout_attempts_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_checkout_attempts_environment_allowed CHECK (((environment)::text = ANY (ARRAY[('test'::character varying)::text, ('live'::character varying)::text]))),
     CONSTRAINT billing_checkout_attempts_environment_test_mode_consistent CHECK (((((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
     CONSTRAINT billing_checkout_attempts_expiry_after_creation CHECK ((expires_at > created_at)),
     CONSTRAINT billing_checkout_attempts_failure_code_normalized CHECK (((failure_code IS NULL) OR (((failure_code)::text = btrim((failure_code)::text)) AND ((failure_code)::text ~ '^[a-z][a-z0-9_]*$'::text) AND ((char_length((failure_code)::text) >= 1) AND (char_length((failure_code)::text) <= 64))))),
-    CONSTRAINT billing_checkout_attempts_lifecycle CHECK (((((status)::text = ANY ((ARRAY['creating'::character varying, 'creation_unknown'::character varying])::text[])) AND (completed_at IS NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'ready'::text) AND (provider_checkout_id IS NOT NULL) AND (completed_at IS NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'completed'::text) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NOT NULL) AND (failure_code IS NULL)) OR (((status)::text = ANY ((ARRAY['expired'::character varying, 'superseded'::character varying])::text[])) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'failed'::text) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NOT NULL)))),
+    CONSTRAINT billing_checkout_attempts_lifecycle CHECK (((((status)::text = ANY (ARRAY[('creating'::character varying)::text, ('creation_unknown'::character varying)::text])) AND (completed_at IS NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'ready'::text) AND (provider_checkout_id IS NOT NULL) AND (completed_at IS NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'completed'::text) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NOT NULL) AND (failure_code IS NULL)) OR (((status)::text = ANY (ARRAY[('expired'::character varying)::text, ('superseded'::character varying)::text])) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'failed'::text) AND (completed_at IS NOT NULL) AND (token_consumed_at IS NULL) AND (failure_code IS NOT NULL)))),
     CONSTRAINT billing_checkout_attempts_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
     CONSTRAINT billing_checkout_attempts_provider_id_normalized CHECK (((provider_checkout_id IS NULL) OR (((provider_checkout_id)::text = btrim((provider_checkout_id)::text)) AND ((provider_checkout_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_checkout_id)::text) >= 1) AND (char_length((provider_checkout_id)::text) <= 128))))),
-    CONSTRAINT billing_checkout_attempts_status_allowed CHECK (((status)::text = ANY ((ARRAY['creating'::character varying, 'ready'::character varying, 'creation_unknown'::character varying, 'completed'::character varying, 'expired'::character varying, 'superseded'::character varying, 'failed'::character varying])::text[]))),
+    CONSTRAINT billing_checkout_attempts_status_allowed CHECK (((status)::text = ANY (ARRAY[('creating'::character varying)::text, ('ready'::character varying)::text, ('creation_unknown'::character varying)::text, ('completed'::character varying)::text, ('expired'::character varying)::text, ('superseded'::character varying)::text, ('failed'::character varying)::text]))),
     CONSTRAINT billing_checkout_attempts_token_consumed_at_valid CHECK (((token_consumed_at IS NULL) OR ((token_consumed_at >= created_at) AND (token_consumed_at <= completed_at)))),
     CONSTRAINT billing_checkout_attempts_token_digest_format CHECK (((token_digest)::text ~ '^[0-9a-f]{64}$'::text))
 );
@@ -391,7 +391,7 @@ CREATE TABLE public.billing_customers (
     provider_updated_at timestamp(6) without time zone,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT billing_customers_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_customers_environment_allowed CHECK (((environment)::text = ANY (ARRAY[('test'::character varying)::text, ('live'::character varying)::text]))),
     CONSTRAINT billing_customers_environment_test_mode_consistent CHECK (((((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
     CONSTRAINT billing_customers_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
     CONSTRAINT billing_customers_provider_customer_id_normalized CHECK ((((provider_customer_id)::text = btrim((provider_customer_id)::text)) AND ((provider_customer_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_customer_id)::text) >= 1) AND (char_length((provider_customer_id)::text) <= 128))))
@@ -443,9 +443,9 @@ CREATE TABLE public.billing_lifecycle_deliveries (
     CONSTRAINT billing_lifecycle_deliveries_delivered_after_claim CHECK (((delivered_at IS NULL) OR (delivered_at >= claimed_at))),
     CONSTRAINT billing_lifecycle_deliveries_enqueued_after_creation CHECK (((enqueued_at IS NULL) OR (enqueued_at >= created_at))),
     CONSTRAINT billing_lifecycle_deliveries_failure_code_normalized CHECK (((failure_code IS NULL) OR (((failure_code)::text = btrim((failure_code)::text)) AND ((failure_code)::text ~ '^[a-z][a-z0-9_]*$'::text) AND ((char_length((failure_code)::text) >= 1) AND (char_length((failure_code)::text) <= 64))))),
-    CONSTRAINT billing_lifecycle_deliveries_kind_allowed CHECK (((kind)::text = ANY ((ARRAY['subscription_activated'::character varying, 'payment_problem'::character varying, 'cancellation_scheduled'::character varying, 'subscription_expired'::character varying, 'plan_change_completed'::character varying])::text[]))),
-    CONSTRAINT billing_lifecycle_deliveries_lifecycle CHECK (((((status)::text = 'pending'::text) AND (claimed_at IS NULL) AND (delivered_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'processing'::text) AND (claimed_at IS NOT NULL) AND (delivered_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'delivered'::text) AND (claimed_at IS NOT NULL) AND (delivered_at IS NOT NULL) AND (failure_code IS NULL)) OR (((status)::text = ANY ((ARRAY['failed'::character varying, 'discarded'::character varying])::text[])) AND (claimed_at IS NOT NULL) AND (delivered_at IS NULL) AND (failure_code IS NOT NULL)))),
-    CONSTRAINT billing_lifecycle_deliveries_status_allowed CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'processing'::character varying, 'delivered'::character varying, 'failed'::character varying, 'discarded'::character varying])::text[])))
+    CONSTRAINT billing_lifecycle_deliveries_kind_allowed CHECK (((kind)::text = ANY (ARRAY[('subscription_activated'::character varying)::text, ('payment_problem'::character varying)::text, ('cancellation_scheduled'::character varying)::text, ('subscription_expired'::character varying)::text, ('plan_change_completed'::character varying)::text]))),
+    CONSTRAINT billing_lifecycle_deliveries_lifecycle CHECK (((((status)::text = 'pending'::text) AND (claimed_at IS NULL) AND (delivered_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'processing'::text) AND (claimed_at IS NOT NULL) AND (delivered_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = 'delivered'::text) AND (claimed_at IS NOT NULL) AND (delivered_at IS NOT NULL) AND (failure_code IS NULL)) OR (((status)::text = ANY (ARRAY[('failed'::character varying)::text, ('discarded'::character varying)::text])) AND (claimed_at IS NOT NULL) AND (delivered_at IS NULL) AND (failure_code IS NOT NULL)))),
+    CONSTRAINT billing_lifecycle_deliveries_status_allowed CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('processing'::character varying)::text, ('delivered'::character varying)::text, ('failed'::character varying)::text, ('discarded'::character varying)::text])))
 );
 
 
@@ -490,13 +490,13 @@ CREATE TABLE public.billing_plan_changes (
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT billing_plan_changes_completed_after_requested CHECK (((completed_at IS NULL) OR (completed_at >= requested_at))),
-    CONSTRAINT billing_plan_changes_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_plan_changes_environment_allowed CHECK (((environment)::text = ANY (ARRAY[('test'::character varying)::text, ('live'::character varying)::text]))),
     CONSTRAINT billing_plan_changes_environment_test_mode_consistent CHECK (((((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
     CONSTRAINT billing_plan_changes_failure_code_normalized CHECK (((failure_code IS NULL) OR (((failure_code)::text = btrim((failure_code)::text)) AND ((failure_code)::text ~ '^[a-z][a-z0-9_]*$'::text) AND ((char_length((failure_code)::text) >= 1) AND (char_length((failure_code)::text) <= 64))))),
-    CONSTRAINT billing_plan_changes_lifecycle CHECK (((((status)::text = ANY ((ARRAY['pending'::character varying, 'submitted'::character varying, 'creation_unknown'::character varying])::text[])) AND (completed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = ANY ((ARRAY['applied'::character varying, 'superseded'::character varying])::text[])) AND (completed_at IS NOT NULL) AND (failure_code IS NULL)) OR (((status)::text = 'failed'::text) AND (completed_at IS NOT NULL) AND (failure_code IS NOT NULL)))),
+    CONSTRAINT billing_plan_changes_lifecycle CHECK (((((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('submitted'::character varying)::text, ('creation_unknown'::character varying)::text])) AND (completed_at IS NULL) AND (failure_code IS NULL)) OR (((status)::text = ANY (ARRAY[('applied'::character varying)::text, ('superseded'::character varying)::text])) AND (completed_at IS NOT NULL) AND (failure_code IS NULL)) OR (((status)::text = 'failed'::text) AND (completed_at IS NOT NULL) AND (failure_code IS NOT NULL)))),
     CONSTRAINT billing_plan_changes_prices_differ CHECK ((from_plan_price_id <> to_plan_price_id)),
     CONSTRAINT billing_plan_changes_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
-    CONSTRAINT billing_plan_changes_status_allowed CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'submitted'::character varying, 'creation_unknown'::character varying, 'applied'::character varying, 'failed'::character varying, 'superseded'::character varying])::text[])))
+    CONSTRAINT billing_plan_changes_status_allowed CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('submitted'::character varying)::text, ('creation_unknown'::character varying)::text, ('applied'::character varying)::text, ('failed'::character varying)::text, ('superseded'::character varying)::text])))
 );
 
 
@@ -536,7 +536,7 @@ CREATE TABLE public.billing_provider_locators (
     updated_at timestamp(6) without time zone NOT NULL,
     provider_subscription_id character varying(128),
     billing_subscription_id bigint,
-    CONSTRAINT billing_provider_locators_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_provider_locators_environment_allowed CHECK (((environment)::text = ANY (ARRAY[('test'::character varying)::text, ('live'::character varying)::text]))),
     CONSTRAINT billing_provider_locators_lifecycle CHECK (((((status)::text = 'unresolved'::text) AND (resolved_at IS NULL) AND (provider_subscription_id IS NULL) AND (billing_subscription_id IS NULL)) OR (((status)::text = 'consumed'::text) AND (resolved_at IS NOT NULL) AND (provider_subscription_id IS NOT NULL)) OR (((status)::text = 'definitive_creation_failure'::text) AND (resolved_at IS NOT NULL) AND (provider_subscription_id IS NULL) AND (billing_subscription_id IS NULL)))),
     CONSTRAINT billing_provider_locators_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
     CONSTRAINT billing_provider_locators_subscription_id_normalized CHECK (((provider_subscription_id IS NULL) OR (((provider_subscription_id)::text = btrim((provider_subscription_id)::text)) AND ((provider_subscription_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_subscription_id)::text) >= 1) AND (char_length((provider_subscription_id)::text) <= 128))))),
@@ -578,7 +578,7 @@ CREATE TABLE public.billing_provider_price_mappings (
     active boolean DEFAULT true NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT billing_price_mappings_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_price_mappings_environment_allowed CHECK (((environment)::text = ANY (ARRAY[('test'::character varying)::text, ('live'::character varying)::text]))),
     CONSTRAINT billing_price_mappings_product_id_normalized CHECK ((((provider_product_id)::text = btrim((provider_product_id)::text)) AND ((provider_product_id)::text ~ '^[1-9][0-9]*$'::text) AND ((char_length((provider_product_id)::text) >= 1) AND (char_length((provider_product_id)::text) <= 64)))),
     CONSTRAINT billing_price_mappings_provider_allowed CHECK (((provider)::text = 'lemon_squeezy'::text)),
     CONSTRAINT billing_price_mappings_store_id_normalized CHECK ((((provider_store_id)::text = btrim((provider_store_id)::text)) AND ((provider_store_id)::text ~ '^[1-9][0-9]*$'::text) AND ((char_length((provider_store_id)::text) >= 1) AND (char_length((provider_store_id)::text) <= 64)))),
@@ -642,7 +642,7 @@ CREATE TABLE public.billing_subscriptions (
     CONSTRAINT billing_subscriptions_cancelled_end_required CHECK ((((status)::text <> 'cancelled'::text) OR (ends_at IS NOT NULL))),
     CONSTRAINT billing_subscriptions_card_display_consistent CHECK ((((card_brand IS NULL) AND (card_last_four IS NULL)) OR ((card_brand IS NOT NULL) AND ((card_brand)::text = btrim((card_brand)::text)) AND ((char_length((card_brand)::text) >= 1) AND (char_length((card_brand)::text) <= 32)) AND (card_last_four IS NOT NULL) AND ((card_last_four)::text ~ '^[0-9]{4}$'::text)))),
     CONSTRAINT billing_subscriptions_current_archive_consistent CHECK (((current AND (archived_at IS NULL)) OR ((NOT current) AND (archived_at IS NOT NULL)))),
-    CONSTRAINT billing_subscriptions_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_subscriptions_environment_allowed CHECK (((environment)::text = ANY (ARRAY[('test'::character varying)::text, ('live'::character varying)::text]))),
     CONSTRAINT billing_subscriptions_environment_test_mode_consistent CHECK (((((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
     CONSTRAINT billing_subscriptions_lock_version_non_negative CHECK ((lock_version >= 0)),
     CONSTRAINT billing_subscriptions_pause_object_bounded CHECK (((jsonb_typeof(pause) = 'object'::text) AND (pg_column_size(pause) <= 65536))),
@@ -651,8 +651,8 @@ CREATE TABLE public.billing_subscriptions (
     CONSTRAINT billing_subscriptions_provider_subscription_id_normalized CHECK ((((provider_subscription_id)::text = btrim((provider_subscription_id)::text)) AND ((provider_subscription_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_subscription_id)::text) >= 1) AND (char_length((provider_subscription_id)::text) <= 128)))),
     CONSTRAINT billing_subscriptions_raw_payload_object_bounded CHECK (((jsonb_typeof(raw_payload) = 'object'::text) AND (pg_column_size(raw_payload) <= 65536))),
     CONSTRAINT billing_subscriptions_seen_update_monotonic CHECK ((last_seen_provider_updated_at >= provider_updated_at)),
-    CONSTRAINT billing_subscriptions_status_allowed CHECK (((status)::text = ANY ((ARRAY['on_trial'::character varying, 'active'::character varying, 'paused'::character varying, 'past_due'::character varying, 'unpaid'::character varying, 'cancelled'::character varying, 'expired'::character varying, 'unknown'::character varying])::text[]))),
-    CONSTRAINT billing_subscriptions_sync_state_allowed CHECK (((sync_state)::text = ANY ((ARRAY['synced'::character varying, 'pending'::character varying, 'mapping_error'::character varying, 'invalid'::character varying])::text[]))),
+    CONSTRAINT billing_subscriptions_status_allowed CHECK (((status)::text = ANY (ARRAY[('on_trial'::character varying)::text, ('active'::character varying)::text, ('paused'::character varying)::text, ('past_due'::character varying)::text, ('unpaid'::character varying)::text, ('cancelled'::character varying)::text, ('expired'::character varying)::text, ('unknown'::character varying)::text]))),
+    CONSTRAINT billing_subscriptions_sync_state_allowed CHECK (((sync_state)::text = ANY (ARRAY[('synced'::character varying)::text, ('pending'::character varying)::text, ('mapping_error'::character varying)::text, ('invalid'::character varying)::text]))),
     CONSTRAINT billing_subscriptions_trial_end_required CHECK ((((status)::text <> 'on_trial'::text) OR (trial_ends_at IS NOT NULL)))
 );
 
@@ -715,7 +715,7 @@ CREATE TABLE public.billing_webhook_events (
     CONSTRAINT billing_webhook_events_attempts_compatibility CHECK (((attempts_count = attempt_count) AND (attempts_count >= 0))),
     CONSTRAINT billing_webhook_events_body_sha256_format CHECK (((body_sha256)::text ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT billing_webhook_events_enqueued_after_verified CHECK (((enqueued_at IS NULL) OR (enqueued_at >= verified_at))),
-    CONSTRAINT billing_webhook_events_environment_allowed CHECK (((environment)::text = ANY ((ARRAY['test'::character varying, 'live'::character varying])::text[]))),
+    CONSTRAINT billing_webhook_events_environment_allowed CHECK (((environment)::text = ANY (ARRAY[('test'::character varying)::text, ('live'::character varying)::text]))),
     CONSTRAINT billing_webhook_events_environment_test_mode_consistent CHECK (((test_mode IS NULL) OR (((environment)::text = 'test'::text) AND (test_mode = true)) OR (((environment)::text = 'live'::text) AND (test_mode = false)))),
     CONSTRAINT billing_webhook_events_error_class_normalized CHECK (((error_class IS NULL) OR (((error_class)::text = btrim((error_class)::text)) AND ((error_class)::text !~ '[[:cntrl:]]'::text) AND ((char_length((error_class)::text) >= 1) AND (char_length((error_class)::text) <= 255))))),
     CONSTRAINT billing_webhook_events_error_code_normalized CHECK (((error_code IS NULL) OR (((error_code)::text = btrim((error_code)::text)) AND ((error_code)::text ~ '^[a-z][a-z0-9_]*$'::text) AND ((char_length((error_code)::text) >= 1) AND (char_length((error_code)::text) <= 64))))),
@@ -725,7 +725,7 @@ CREATE TABLE public.billing_webhook_events (
     CONSTRAINT billing_webhook_events_failed_after_processing CHECK (((failed_at IS NULL) OR ((failed_at >= verified_at) AND ((processing_started_at IS NULL) OR (failed_at >= processing_started_at))))),
     CONSTRAINT billing_webhook_events_fingerprint_format CHECK (((fingerprint)::text ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT billing_webhook_events_ingress_version_allowed CHECK (((ingress_version IS NULL) OR (ingress_version = 1))),
-    CONSTRAINT billing_webhook_events_lifecycle CHECK (((((status)::text = ANY ((ARRAY['received'::character varying, 'processing'::character varying])::text[])) AND (processed_at IS NULL) AND (error_code IS NULL)) OR (((status)::text = ANY ((ARRAY['processed'::character varying, 'ignored'::character varying])::text[])) AND (processed_at IS NOT NULL) AND (error_code IS NULL)) OR (((status)::text = ANY ((ARRAY['quarantined'::character varying, 'failed'::character varying])::text[])) AND (processed_at IS NOT NULL) AND (error_code IS NOT NULL)))),
+    CONSTRAINT billing_webhook_events_lifecycle CHECK (((((status)::text = ANY (ARRAY[('received'::character varying)::text, ('processing'::character varying)::text])) AND (processed_at IS NULL) AND (error_code IS NULL)) OR (((status)::text = ANY (ARRAY[('processed'::character varying)::text, ('ignored'::character varying)::text])) AND (processed_at IS NOT NULL) AND (error_code IS NULL)) OR (((status)::text = ANY (ARRAY[('quarantined'::character varying)::text, ('failed'::character varying)::text])) AND (processed_at IS NOT NULL) AND (error_code IS NOT NULL)))),
     CONSTRAINT billing_webhook_events_payload_compatibility CHECK ((payload = snapshot)),
     CONSTRAINT billing_webhook_events_payload_object_bounded CHECK (((jsonb_typeof(payload) = 'object'::text) AND (pg_column_size(payload) <= 65536))),
     CONSTRAINT billing_webhook_events_processed_after_processing CHECK (((processed_at IS NULL) OR (processing_started_at IS NULL) OR (processed_at >= processing_started_at))),
@@ -737,7 +737,7 @@ CREATE TABLE public.billing_webhook_events (
     CONSTRAINT billing_webhook_events_resource_id_normalized CHECK (((provider_resource_id IS NULL) OR (((provider_resource_id)::text = btrim((provider_resource_id)::text)) AND ((provider_resource_id)::text !~ '[[:space:]]'::text) AND ((char_length((provider_resource_id)::text) >= 1) AND (char_length((provider_resource_id)::text) <= 128))))),
     CONSTRAINT billing_webhook_events_resource_type_normalized CHECK (((external_resource_type IS NULL) OR (((external_resource_type)::text = btrim((external_resource_type)::text)) AND ((external_resource_type)::text ~ '^[a-z][a-z0-9_-]*$'::text) AND ((char_length((external_resource_type)::text) >= 1) AND (char_length((external_resource_type)::text) <= 64))))),
     CONSTRAINT billing_webhook_events_snapshot_object_bounded CHECK (((jsonb_typeof(snapshot) = 'object'::text) AND (pg_column_size(snapshot) <= 65536))),
-    CONSTRAINT billing_webhook_events_status_allowed CHECK (((status)::text = ANY ((ARRAY['received'::character varying, 'processing'::character varying, 'processed'::character varying, 'ignored'::character varying, 'quarantined'::character varying, 'failed'::character varying])::text[]))),
+    CONSTRAINT billing_webhook_events_status_allowed CHECK (((status)::text = ANY (ARRAY[('received'::character varying)::text, ('processing'::character varying)::text, ('processed'::character varying)::text, ('ignored'::character varying)::text, ('quarantined'::character varying)::text, ('failed'::character varying)::text]))),
     CONSTRAINT billing_webhook_events_verified_after_received CHECK ((verified_at >= received_at))
 );
 
@@ -815,9 +815,9 @@ CREATE TABLE public.organization_invitations (
     CONSTRAINT organization_invitations_email_normalized CHECK ((((email_address)::text = lower(btrim((email_address)::text))) AND ((char_length((email_address)::text) >= 3) AND (char_length((email_address)::text) <= 254)))),
     CONSTRAINT organization_invitations_expiry_after_creation CHECK ((expires_at > created_at)),
     CONSTRAINT organization_invitations_revoked_at_valid CHECK (((revoked_at IS NULL) OR (revoked_at >= created_at))),
-    CONSTRAINT organization_invitations_role_allowed CHECK (((organization_role)::text = ANY ((ARRAY['owner'::character varying, 'admin'::character varying, 'billing'::character varying, 'member'::character varying])::text[]))),
-    CONSTRAINT organization_invitations_status_allowed CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'accepted'::character varying, 'revoked'::character varying, 'expired'::character varying])::text[]))),
-    CONSTRAINT organization_invitations_status_timestamps CHECK (((((status)::text = ANY ((ARRAY['pending'::character varying, 'expired'::character varying])::text[])) AND (accepted_at IS NULL) AND (revoked_at IS NULL)) OR (((status)::text = 'accepted'::text) AND (accepted_at IS NOT NULL) AND (revoked_at IS NULL)) OR (((status)::text = 'revoked'::text) AND (accepted_at IS NULL) AND (revoked_at IS NOT NULL)))),
+    CONSTRAINT organization_invitations_role_allowed CHECK (((organization_role)::text = ANY (ARRAY[('owner'::character varying)::text, ('admin'::character varying)::text, ('billing'::character varying)::text, ('member'::character varying)::text]))),
+    CONSTRAINT organization_invitations_status_allowed CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('accepted'::character varying)::text, ('revoked'::character varying)::text, ('expired'::character varying)::text]))),
+    CONSTRAINT organization_invitations_status_timestamps CHECK (((((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('expired'::character varying)::text])) AND (accepted_at IS NULL) AND (revoked_at IS NULL)) OR (((status)::text = 'accepted'::text) AND (accepted_at IS NOT NULL) AND (revoked_at IS NULL)) OR (((status)::text = 'revoked'::text) AND (accepted_at IS NULL) AND (revoked_at IS NOT NULL)))),
     CONSTRAINT organization_invitations_token_digest_format CHECK (((token_digest)::text ~ '^[0-9a-f]{64}$'::text))
 );
 
@@ -854,8 +854,8 @@ CREATE TABLE public.organization_memberships (
     joined_at timestamp(6) without time zone NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT organization_memberships_role_allowed CHECK (((role)::text = ANY ((ARRAY['owner'::character varying, 'admin'::character varying, 'billing'::character varying, 'member'::character varying])::text[]))),
-    CONSTRAINT organization_memberships_status_allowed CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying])::text[])))
+    CONSTRAINT organization_memberships_role_allowed CHECK (((role)::text = ANY (ARRAY[('owner'::character varying)::text, ('admin'::character varying)::text, ('billing'::character varying)::text, ('member'::character varying)::text]))),
+    CONSTRAINT organization_memberships_status_allowed CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('suspended'::character varying)::text])))
 );
 
 
@@ -892,7 +892,7 @@ CREATE TABLE public.organizations (
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT organizations_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100)))),
     CONSTRAINT organizations_slug_format CHECK ((((slug)::text ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text) AND ((char_length((slug)::text) >= 1) AND (char_length((slug)::text) <= 63)))),
-    CONSTRAINT organizations_status_allowed CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying])::text[])))
+    CONSTRAINT organizations_status_allowed CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('suspended'::character varying)::text])))
 );
 
 
@@ -931,8 +931,8 @@ CREATE TABLE public.plan_feature_entitlements (
     settings jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT plan_feature_entitlements_kind_allowed CHECK (((feature_kind)::text = ANY ((ARRAY['flag'::character varying, 'limit'::character varying])::text[]))),
-    CONSTRAINT plan_feature_entitlements_settings_object CHECK ((jsonb_typeof(settings) = 'object'::text)),
+    CONSTRAINT plan_feature_entitlements_kind_allowed CHECK (((feature_kind)::text = ANY (ARRAY[('flag'::character varying)::text, ('limit'::character varying)::text]))),
+    CONSTRAINT plan_feature_entitlements_settings_object_bounded CHECK (((jsonb_typeof(settings) = 'object'::text) AND (pg_column_size(settings) <= 65536))),
     CONSTRAINT plan_feature_entitlements_typed_value CHECK (((((feature_kind)::text = 'flag'::text) AND (limit_value IS NULL) AND (unlimited = false)) OR (((feature_kind)::text = 'limit'::text) AND (((unlimited = true) AND (limit_value IS NULL)) OR ((unlimited = false) AND (limit_value IS NOT NULL) AND (limit_value >= 0))))))
 );
 
@@ -973,7 +973,7 @@ CREATE TABLE public.plan_prices (
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT plan_prices_amount_non_negative CHECK ((amount_cents >= 0)),
-    CONSTRAINT plan_prices_billing_interval_allowed CHECK (((billing_interval)::text = ANY ((ARRAY['monthly'::character varying, 'yearly'::character varying])::text[]))),
+    CONSTRAINT plan_prices_billing_interval_allowed CHECK (((billing_interval)::text = ANY (ARRAY[('monthly'::character varying)::text, ('yearly'::character varying)::text]))),
     CONSTRAINT plan_prices_currency_format CHECK (((currency)::text ~ '^[A-Z]{3}$'::text)),
     CONSTRAINT plan_prices_lemon_mapping_complete CHECK ((((lemon_store_id IS NULL) AND (lemon_product_id IS NULL) AND (lemon_variant_id IS NULL)) OR ((lemon_store_id IS NOT NULL) AND ((lemon_store_id)::text = btrim((lemon_store_id)::text)) AND ((lemon_store_id)::text !~ '[[:space:]]'::text) AND ((char_length((lemon_store_id)::text) >= 1) AND (char_length((lemon_store_id)::text) <= 64)) AND (lemon_product_id IS NOT NULL) AND ((lemon_product_id)::text = btrim((lemon_product_id)::text)) AND ((lemon_product_id)::text !~ '[[:space:]]'::text) AND ((char_length((lemon_product_id)::text) >= 1) AND (char_length((lemon_product_id)::text) <= 64)) AND (lemon_variant_id IS NOT NULL) AND ((lemon_variant_id)::text = btrim((lemon_variant_id)::text)) AND ((lemon_variant_id)::text !~ '[[:space:]]'::text) AND ((char_length((lemon_variant_id)::text) >= 1) AND (char_length((lemon_variant_id)::text) <= 64)))))
 );
@@ -1084,11 +1084,11 @@ CREATE TABLE public.platform_audit_events (
     change_set jsonb DEFAULT '{}'::jsonb NOT NULL,
     occurred_at timestamp(6) without time zone NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT platform_audit_events_action_allowed CHECK (((action)::text = ANY ((ARRAY['catalog.created'::character varying, 'catalog.updated'::character varying, 'catalog.deactivated'::character varying])::text[]))),
+    CONSTRAINT platform_audit_events_action_allowed CHECK (((action)::text = ANY (ARRAY[('catalog.created'::character varying)::text, ('catalog.updated'::character varying)::text, ('catalog.deactivated'::character varying)::text]))),
     CONSTRAINT platform_audit_events_change_set_object_bounded CHECK (((jsonb_typeof(change_set) = 'object'::text) AND (pg_column_size(change_set) <= 16384))),
     CONSTRAINT platform_audit_events_subject_id_positive CHECK ((subject_id > 0)),
     CONSTRAINT platform_audit_events_subject_key_normalized CHECK ((((subject_key)::text = btrim((subject_key)::text)) AND ((char_length((subject_key)::text) >= 1) AND (char_length((subject_key)::text) <= 255)))),
-    CONSTRAINT platform_audit_events_subject_type_allowed CHECK (((subject_type)::text = ANY ((ARRAY['Product'::character varying, 'ProductFeature'::character varying, 'Plan'::character varying, 'PlanProduct'::character varying, 'PlanFeatureEntitlement'::character varying, 'PlanPrice'::character varying])::text[])))
+    CONSTRAINT platform_audit_events_subject_type_allowed CHECK (((subject_type)::text = ANY (ARRAY[('Product'::character varying)::text, ('ProductFeature'::character varying)::text, ('Plan'::character varying)::text, ('PlanProduct'::character varying)::text, ('PlanFeatureEntitlement'::character varying)::text, ('PlanPrice'::character varying)::text])))
 );
 
 
@@ -1127,7 +1127,7 @@ CREATE TABLE public.product_features (
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT product_features_description_normalized CHECK (((description = btrim(description)) AND (char_length(description) <= 2000))),
     CONSTRAINT product_features_key_format CHECK ((((key)::text ~ '^[a-z][a-z0-9]*(_[a-z0-9]+)*$'::text) AND ((char_length((key)::text) >= 1) AND (char_length((key)::text) <= 63)))),
-    CONSTRAINT product_features_kind_allowed CHECK (((kind)::text = ANY ((ARRAY['flag'::character varying, 'limit'::character varying])::text[]))),
+    CONSTRAINT product_features_kind_allowed CHECK (((kind)::text = ANY (ARRAY[('flag'::character varying)::text, ('limit'::character varying)::text]))),
     CONSTRAINT product_features_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100))))
 );
 
@@ -1199,7 +1199,7 @@ CREATE TABLE public.product_memberships (
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT product_memberships_parent_membership_active CHECK (((organization_membership_status)::text = 'active'::text)),
-    CONSTRAINT product_memberships_status_allowed CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying])::text[])))
+    CONSTRAINT product_memberships_status_allowed CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('suspended'::character varying)::text])))
 );
 
 
@@ -1432,7 +1432,7 @@ CREATE TABLE public.users (
     CONSTRAINT users_email_address_normalized CHECK ((((email_address)::text = lower(btrim((email_address)::text))) AND ((char_length((email_address)::text) >= 3) AND (char_length((email_address)::text) <= 254)))),
     CONSTRAINT users_name_normalized CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) >= 1) AND (char_length((name)::text) <= 100)))),
     CONSTRAINT users_password_digest_present CHECK (((char_length((password_digest)::text) >= 1) AND (char_length((password_digest)::text) <= 255))),
-    CONSTRAINT users_system_role_allowed CHECK (((system_role)::text = ANY ((ARRAY['user'::character varying, 'platform_admin'::character varying])::text[])))
+    CONSTRAINT users_system_role_allowed CHECK (((system_role)::text = ANY (ARRAY[('user'::character varying)::text, ('platform_admin'::character varying)::text])))
 );
 
 
@@ -2001,7 +2001,7 @@ CREATE INDEX index_billing_checkout_attempts_on_membership ON public.billing_che
 -- Name: index_billing_checkout_attempts_on_one_pending_per_org; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_billing_checkout_attempts_on_one_pending_per_org ON public.billing_checkout_attempts USING btree (organization_id) WHERE ((status)::text = ANY ((ARRAY['creating'::character varying, 'ready'::character varying, 'creation_unknown'::character varying])::text[]));
+CREATE UNIQUE INDEX index_billing_checkout_attempts_on_one_pending_per_org ON public.billing_checkout_attempts USING btree (organization_id) WHERE ((status)::text = ANY (ARRAY[('creating'::character varying)::text, ('ready'::character varying)::text, ('creation_unknown'::character varying)::text]));
 
 
 --
@@ -2141,7 +2141,7 @@ CREATE INDEX index_billing_plan_changes_on_membership ON public.billing_plan_cha
 -- Name: index_billing_plan_changes_on_one_pending_per_subscription; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_billing_plan_changes_on_one_pending_per_subscription ON public.billing_plan_changes USING btree (billing_subscription_id) WHERE ((status)::text = ANY ((ARRAY['pending'::character varying, 'submitted'::character varying, 'creation_unknown'::character varying])::text[]));
+CREATE UNIQUE INDEX index_billing_plan_changes_on_one_pending_per_subscription ON public.billing_plan_changes USING btree (billing_subscription_id) WHERE ((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('submitted'::character varying)::text, ('creation_unknown'::character varying)::text]));
 
 
 --
@@ -3531,6 +3531,7 @@ ALTER TABLE ONLY public.product_membership_roles
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20260802090000'),
 ('20260716100100'),
 ('20260716100000'),
 ('20260716090000'),

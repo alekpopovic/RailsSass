@@ -87,6 +87,22 @@ class SessionsRequestTest < ActionDispatch::IntegrationTest
     assert_redirected_to active_sessions_path
   end
 
+  test "an oversized protected location is not stored and login falls back safely" do
+    user = create_test_user
+
+    get active_sessions_path, params: { oversized: "a" * 5.kilobytes }
+
+    assert_redirected_to new_session_path
+    assert_nil request.session[:return_to_after_authenticating]
+
+    post session_path, params: {
+      email_address: user.email_address,
+      password: TEST_PASSWORD
+    }
+
+    assert_redirected_to root_path
+  end
+
   test "login ignores a caller supplied external return location" do
     user = create_test_user
 
@@ -147,6 +163,23 @@ class SessionsRequestTest < ActionDispatch::IntegrationTest
     end
 
     assert_response :unprocessable_content
+  ensure
+    ActionController::Base.allow_forgery_protection = original_setting
+  end
+
+  test "logout rejects a request without a CSRF token when forgery protection is enabled" do
+    user = create_test_user
+    current_session = sign_in_as(user)
+    original_setting = ActionController::Base.allow_forgery_protection
+    ActionController::Base.allow_forgery_protection = true
+
+    assert_no_difference -> { Session.count } do
+      delete session_path
+    end
+
+    assert_response :unprocessable_content
+    assert Session.exists?(current_session.id)
+    assert cookies[Authentication::SESSION_COOKIE].present?
   ensure
     ActionController::Base.allow_forgery_protection = original_setting
   end

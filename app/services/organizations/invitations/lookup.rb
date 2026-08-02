@@ -9,7 +9,8 @@ class Organizations::Invitations::Lookup < Organizations::Invitations::Base
     authorized_identity = organization&.active? &&
       @user&.persisted? &&
       Current.user&.id == @user.id &&
-      @user.authentication_allowed?
+      @user.authentication_allowed? &&
+      AuthorizationContext.current.authenticated?
     raise ActiveRecord::RecordNotFound unless authorized_identity && @raw_token.present?
 
     Current.organization.organization_invitations

@@ -1,4 +1,37 @@
 class OrganizationInvitationPolicy < ApplicationPolicy
+  module InvitationContext
+    private
+      def authenticated_organization_context?
+        authenticated_context? &&
+          Current.user&.id == user&.id &&
+          organization&.persisted? &&
+          organization.active? &&
+          Current.organization&.id == organization.id &&
+          Organization.where(id: organization.id, status: "active").exists?
+      end
+
+      def management_context?
+        authenticated_organization_context? &&
+          membership&.persisted? &&
+          membership.active? &&
+          Current.membership&.id == membership.id &&
+          membership.organization_id == organization.id &&
+          membership.user_id == user.id &&
+          authoritative_membership_role.in?(%w[owner admin])
+      end
+
+      def authoritative_membership_role
+        return unless organization&.persisted? && membership&.persisted? && user&.persisted?
+
+        organization.organization_memberships.active.where(
+          id: membership.id,
+          user_id: user.id
+        ).pick(:role)
+      end
+  end
+
+  include InvitationContext
+
   def index?
     management_context?
   end
@@ -20,9 +53,7 @@ class OrganizationInvitationPolicy < ApplicationPolicy
   end
 
   def accept?
-    user&.authentication_allowed? &&
-      organization&.persisted? &&
-      organization.active? &&
+    authenticated_organization_context? &&
       record&.persisted? &&
       record.organization_id == organization.id &&
       record.pending? &&
@@ -31,40 +62,26 @@ class OrganizationInvitationPolicy < ApplicationPolicy
   end
 
   class Scope < ApplicationPolicy::Scope
+    include InvitationContext
+
     def resolve
       return scope.none unless management_context?
 
       tenant_scope = scope.where(organization_id: organization.id)
-      membership.owner? ? tenant_scope : tenant_scope.where(organization_role: %w[admin member])
-    end
+      return tenant_scope if authoritative_membership_role == "owner"
 
-    private
-      def management_context?
-        user&.authentication_allowed? &&
-          organization&.persisted? &&
-          organization.active? &&
-          membership&.persisted? &&
-          membership.active? &&
-          membership.organization_id == organization.id &&
-          membership.user_id == user.id &&
-          membership.role.in?(%w[owner admin])
-      end
+      tenant_scope.where(organization_role: %w[admin member])
+    end
   end
 
   private
     def management_context?
-      user&.authentication_allowed? &&
-        organization&.persisted? &&
-        organization.active? &&
-        membership&.persisted? &&
-        membership.active? &&
-        membership.organization_id == organization.id &&
-        membership.user_id == user.id &&
-        membership.role.in?(%w[owner admin]) &&
+      super &&
         record&.organization_id == organization.id
     end
 
     def manageable_role?(organization_role)
-      membership.owner? || (membership.admin? && organization_role.to_s.in?(%w[admin member]))
+      actor_role = authoritative_membership_role
+      actor_role == "owner" || (actor_role == "admin" && organization_role.to_s.in?(%w[admin member]))
     end
 end

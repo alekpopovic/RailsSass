@@ -36,7 +36,12 @@ module Platform
     private
       def lock_authorized_actor!
         actor = User.lock.find_by(id: @actor&.id)
-        return actor if actor&.platform_admin? && actor.authentication_allowed?
+        if actor&.platform_admin? &&
+            actor.authentication_allowed? &&
+            Current.user&.id == actor.id &&
+            AuthorizationContext.current.authenticated?
+          return actor
+        end
 
         raise Pundit::NotAuthorizedError, "provider price mapping is not allowed"
       end

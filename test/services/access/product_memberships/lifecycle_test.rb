@@ -55,7 +55,8 @@ class Access::ProductMemberships::LifecycleTest < ActiveSupport::TestCase
   test "add does not reactivate a suspended product membership" do
     product_membership = add_product_membership
     Access::ProductMemberships::Suspend.new(
-      product_membership_id: product_membership.id
+      product_membership_id: product_membership.id,
+      actor: @owner
     ).call
 
     assert_raises(ActiveRecord::RecordInvalid) { add_product_membership }
@@ -71,10 +72,12 @@ class Access::ProductMemberships::LifecycleTest < ActiveSupport::TestCase
     )
 
     suspended = Access::ProductMemberships::Suspend.new(
-      product_membership_id: product_membership.id
+      product_membership_id: product_membership.id,
+      actor: @owner
     ).call
     suspended_again = Access::ProductMemberships::Suspend.new(
-      product_membership_id: product_membership.id
+      product_membership_id: product_membership.id,
+      actor: @owner
     ).call
 
     assert_predicate suspended, :suspended?
@@ -82,10 +85,12 @@ class Access::ProductMemberships::LifecycleTest < ActiveSupport::TestCase
     assert ProductMembershipRole.exists?(assignment.id)
 
     reactivated = Access::ProductMemberships::Reactivate.new(
-      product_membership_id: product_membership.id
+      product_membership_id: product_membership.id,
+      actor: @owner
     ).call
     reactivated_again = Access::ProductMemberships::Reactivate.new(
-      product_membership_id: product_membership.id
+      product_membership_id: product_membership.id,
+      actor: @owner
     ).call
 
     assert_predicate reactivated, :active?
@@ -96,13 +101,15 @@ class Access::ProductMemberships::LifecycleTest < ActiveSupport::TestCase
   test "reactivate fails closed when the product is inactive" do
     product_membership = add_product_membership
     Access::ProductMemberships::Suspend.new(
-      product_membership_id: product_membership.id
+      product_membership_id: product_membership.id,
+      actor: @owner
     ).call
     @product.update!(active: false)
 
     assert_raises(ActiveRecord::RecordNotFound) do
       Access::ProductMemberships::Reactivate.new(
-        product_membership_id: product_membership.id
+        product_membership_id: product_membership.id,
+        actor: @owner
       ).call
     end
 
@@ -120,7 +127,8 @@ class Access::ProductMemberships::LifecycleTest < ActiveSupport::TestCase
     assert_difference -> { ProductMembership.count }, -1 do
       assert_difference -> { ProductMembershipRole.count }, -1 do
         removed = Access::ProductMemberships::Remove.new(
-          product_membership_id: product_membership.id
+          product_membership_id: product_membership.id,
+          actor: @owner
         ).call
       end
     end
@@ -129,7 +137,8 @@ class Access::ProductMemberships::LifecycleTest < ActiveSupport::TestCase
     assert_not ProductMembershipRole.exists?(assignment.id)
     assert_raises(ActiveRecord::RecordNotFound) do
       Access::ProductMemberships::Remove.new(
-        product_membership_id: product_membership.id
+        product_membership_id: product_membership.id,
+        actor: @owner
       ).call
     end
   end

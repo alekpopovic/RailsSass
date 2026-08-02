@@ -25,7 +25,8 @@ class Organizations::Invitations::Base
         authorized = Current.user&.id == @actor.id &&
           Current.membership&.id == actor_membership&.id &&
           actor_membership&.active? &&
-          actor_user&.authentication_allowed?
+          actor_user&.authentication_allowed? &&
+          AuthorizationContext.current.authenticated?
         raise_not_authorized! unless authorized
 
         yield actor_membership

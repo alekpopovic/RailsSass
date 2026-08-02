@@ -708,11 +708,17 @@ class Billing::Webhooks::ProcessorTest < ActiveSupport::TestCase
       user: additional_user,
       role: :member
     )
+    establish_tenant_context(
+      user: @membership.user,
+      organization: @organization,
+      membership: @membership
+    )
     seat_error = assert_no_difference -> { @organization.product_memberships.count } do
       assert_raises(ActiveRecord::RecordInvalid) do
         Access::ProductMemberships::Add.new(
           organization_membership_id: additional_membership.id,
-          product_id: analytics.id
+          product_id: analytics.id,
+          actor: @membership.user
         ).call
       end
     end

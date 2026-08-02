@@ -105,6 +105,22 @@ class Organizations::Invitations::LifecycleTest < ActiveSupport::TestCase
     end
   end
 
+  test "a revoked manager session cannot create an invitation" do
+    Session.where(id: Current.session.id).delete_all
+
+    assert_no_difference [
+      -> { @organization.organization_invitations.count },
+      -> { @organization.audit_events.count }
+    ] do
+      assert_raises(Pundit::NotAuthorizedError) do
+        create_invitation(
+          email_address: "revoked-manager-target@example.test",
+          organization_role: :member
+        )
+      end
+    end
+  end
+
   test "resend rotates the token while revoke invalidates the invitation" do
     recipient = create_test_user(email_address: "resend-recipient@example.test")
     original = create_invitation(
@@ -288,6 +304,37 @@ class Organizations::Invitations::LifecycleTest < ActiveSupport::TestCase
 
     assert_predicate delivery.invitation.reload, :expired?
     assert_not @organization.organization_memberships.exists?(user_id: recipient.id)
+  end
+
+  test "a revoked recipient session cannot look up or accept an invitation" do
+    recipient = create_test_user(email_address: "revoked-recipient@example.test")
+    delivery = create_invitation(
+      email_address: recipient.email_address,
+      organization_role: :member
+    )
+    establish_invitation_context(recipient)
+    Session.where(id: Current.session.id).delete_all
+
+    assert_raises(ActiveRecord::RecordNotFound) do
+      Organizations::Invitations::Lookup.new(
+        user: recipient,
+        raw_token: delivery.raw_token
+      ).call
+    end
+    assert_no_difference [
+      -> { @organization.organization_memberships.count },
+      -> { @organization.organization_access_locators.count },
+      -> { @organization.audit_events.count }
+    ] do
+      assert_raises(ActiveRecord::RecordNotFound) do
+        Organizations::Invitations::Accept.new(
+          user: recipient,
+          raw_token: delivery.raw_token
+        ).call
+      end
+    end
+
+    assert_predicate delivery.invitation.reload, :pending?
   end
 
   test "invitation identifiers are always resolved through the current organization" do

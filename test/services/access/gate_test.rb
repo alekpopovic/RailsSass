@@ -117,16 +117,15 @@ class Access::GateTest < ActiveSupport::TestCase
   end
 
   test "requires an active product membership before checking permissions" do
-    Access::ProductMemberships::Remove.new(
-      product_membership_id: @product_membership.id
-    ).call
+    @product_membership.destroy!
     missing = gate
 
     @product_membership = add_product_membership(@membership)
     assign_role(@product_membership, @role)
-    Access::ProductMemberships::Suspend.new(
-      product_membership_id: @product_membership.id
-    ).call
+    ProductMembership.where(id: @product_membership.id).update_all(
+      status: "suspended",
+      updated_at: Time.current
+    )
     @mapping.destroy!
     suspended = gate
 
@@ -305,17 +304,17 @@ class Access::GateTest < ActiveSupport::TestCase
     end
 
     def add_product_membership(membership)
-      Access::ProductMemberships::Add.new(
-        organization_membership_id: membership.id,
-        product_id: @product.id
-      ).call
+      create_test_product_membership(
+        organization_membership: membership,
+        product: @product
+      )
     end
 
     def assign_role(product_membership, product_role)
-      Access::ProductMemberships::AssignRole.new(
-        product_membership_id: product_membership.id,
-        product_role_id: product_role.id
-      ).call
+      create_test_product_membership_role(
+        product_membership: product_membership,
+        product_role: product_role
+      )
     end
 
     def switch_context(user:, membership:)

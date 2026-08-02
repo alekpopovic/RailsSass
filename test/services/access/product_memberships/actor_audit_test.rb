@@ -8,13 +8,6 @@ class Access::ProductMemberships::ActorAuditTest < ActiveSupport::TestCase
 
   setup do
     create_access_test_records
-    @plan = create_test_plan(free: true)
-    @plan_product = create_test_plan_product(plan: @plan, product: @product)
-    establish_tenant_context(
-      user: @owner,
-      organization: @organization,
-      membership: @owner_membership
-    )
   end
 
   teardown do
@@ -90,22 +83,40 @@ class Access::ProductMemberships::ActorAuditTest < ActiveSupport::TestCase
     assert_equal role.key, events.third.metadata.fetch("product_role_key")
   end
 
-  test "legacy calls without an actor preserve behavior without fabricating audit events" do
-    assert_no_difference -> { @organization.audit_events.count } do
-      product_membership = add_product_membership
-      role = create_access_test_role
-      assignment = assign_product_role(
-        product_membership: product_membership,
-        product_role: role
-      )
+  test "calls without an actor fail closed without mutating or fabricating audit events" do
+    assert_no_difference [
+      -> { @organization.product_memberships.count },
+      -> { @organization.audit_events.count }
+    ] do
+      assert_raises(Pundit::NotAuthorizedError) do
+        Access::ProductMemberships::Add.new(
+          organization_membership_id: @organization_membership.id,
+          product_id: @product.id
+        ).call
+      end
+    end
+  end
 
-      removed_assignment = Access::ProductMemberships::UnassignRole.new(
-        product_membership_id: product_membership.id,
-        product_role_id: role.id
-      ).call
+  test "an authorized actor must match the live Current user" do
+    administrator = create_test_user(email_address: "product-access-other-admin@example.test")
+    administrator_membership = create_test_membership(
+      organization: @organization,
+      user: administrator,
+      role: :admin
+    )
+    establish_tenant_context(
+      user: administrator,
+      organization: @organization,
+      membership: administrator_membership
+    )
 
-      assert_equal assignment.id, removed_assignment.id
-      assert_predicate removed_assignment, :destroyed?
+    assert_no_difference [
+      -> { @organization.product_memberships.count },
+      -> { @organization.audit_events.count }
+    ] do
+      assert_raises(Pundit::NotAuthorizedError) do
+        add_with_actor(@owner)
+      end
     end
   end
 

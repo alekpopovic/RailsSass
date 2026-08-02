@@ -29,4 +29,32 @@ class UserMailerTest < ActionMailer::TestCase
     assert_equal "/email_verification/edit", verification_uri.path
     assert_predicate Rack::Utils.parse_nested_query(verification_uri.query)["token"], :present?
   end
+
+  test "delivery instrumentation filters account tokens and recipient metadata" do
+    payloads = []
+    subscription = ActiveSupport::Notifications.subscribe("deliver.action_mailer") do |event|
+      payloads << event.payload
+    end
+
+    emails = [
+      UserMailer.password_reset(@user).deliver_now,
+      UserMailer.email_verification(@user).deliver_now
+    ]
+    tokens = emails.map do |email|
+      uri = URI.parse(URI.extract(email.text_part.body.to_s, %w[http https]).first)
+      Rack::Utils.parse_nested_query(uri.query).fetch("token")
+    end
+
+    assert_equal [ "[FILTERED]", "[FILTERED]" ], payloads.map { |payload| payload.fetch(:mail) }
+    assert_equal [ "UserMailer", "UserMailer" ], payloads.map { |payload| payload.fetch(:mailer) }
+    payloads.each do |payload|
+      assert_not payload.key?(:to)
+      assert_not payload.key?(:from)
+      assert_not payload.key?(:subject)
+    end
+    assert_no_match @user.email_address, payloads.inspect
+    tokens.each { |token| assert_no_match token, payloads.inspect }
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
 end

@@ -68,7 +68,8 @@ class Access::ProductMemberships::AssignRoleTest < ActiveSupport::TestCase
     end
 
     Access::ProductMemberships::Suspend.new(
-      product_membership_id: @product_membership.id
+      product_membership_id: @product_membership.id,
+      actor: @owner
     ).call
 
     assert_raises(ActiveRecord::RecordInvalid) do

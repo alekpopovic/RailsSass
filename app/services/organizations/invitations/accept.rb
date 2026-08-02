@@ -15,7 +15,8 @@ class Organizations::Invitations::Accept < Organizations::Invitations::Base
       authorized_identity = organization.active? &&
         Current.organization&.id == organization.id &&
         Current.user&.id == user&.id &&
-        user&.authentication_allowed?
+        user&.authentication_allowed? &&
+        AuthorizationContext.current.authenticated?
       next :invalid unless authorized_identity
 
       invitation = Current.organization.organization_invitations

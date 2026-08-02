@@ -94,8 +94,9 @@ The status policy uses this duration from the stable local
 
 Ordinary setup, boot, and tests do not require provider credentials. The tracked
 `.env.example` exposes empty `LEMON_SQUEEZY_API_KEY`,
-`LEMON_SQUEEZY_STORE_ID`, `LEMON_SQUEEZY_CHECKOUT_HOST`, and
-`LEMON_SQUEEZY_WEBHOOK_SECRET` placeholders plus the synthetic
+`LEMON_SQUEEZY_STORE_ID`, `LEMON_SQUEEZY_CHECKOUT_HOST`,
+`LEMON_SQUEEZY_WEBHOOK_SECRET`, and optional bounded previous-secret/expiry
+placeholders, plus the synthetic
 `LEMON_SQUEEZY_ENVIRONMENT=test` selector. Keep real values in the ignored
 `.env` for local manual work or in Rails credentials/deployment secret storage.
 The client resolves explicit constructor values first, then

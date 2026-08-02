@@ -181,7 +181,10 @@ checkout requires `LEMON_SQUEEZY_API_KEY`, `LEMON_SQUEEZY_STORE_ID`,
 `LEMON_SQUEEZY_ENVIRONMENT`, and the exact hostname-only
 `LEMON_SQUEEZY_CHECKOUT_HOST` in ignored environment configuration or encrypted
 credentials. Webhook ingress additionally requires
-`LEMON_SQUEEZY_WEBHOOK_SECRET`; configure Lemon to send test-mode
+`LEMON_SQUEEZY_WEBHOOK_SECRET`; an optional rotation uses the paired
+`LEMON_SQUEEZY_WEBHOOK_PREVIOUS_SECRET` and strict UTC
+`LEMON_SQUEEZY_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT` for at most seven days.
+Configure Lemon to send test-mode
 `subscription_created`, `subscription_updated`, `subscription_expired`,
 `subscription_payment_success`, `subscription_payment_failed`, and
 `subscription_payment_recovered` events to

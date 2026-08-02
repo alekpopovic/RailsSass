@@ -7,6 +7,15 @@ class Platform::PersistCatalogTest < ActiveSupport::TestCase
   setup do
     @actor = create_test_user(email_address: "catalog-persist-admin@example.test")
     @actor.update!(system_role: :platform_admin)
+    Current.session, = Session.issue_for!(
+      @actor,
+      ip_address: nil,
+      user_agent: "Platform catalog test"
+    )
+  end
+
+  teardown do
+    Current.reset
   end
 
   test "creates every supported catalog record with stable audit subject keys" do
@@ -165,6 +174,39 @@ class Platform::PersistCatalogTest < ActiveSupport::TestCase
       assert_not_predicate record, :persisted?
       assert_includes record.errors[:base], "platform administrator is required"
     end
+  end
+
+  test "rejects another platform administrator who is not the live Current user" do
+    other_administrator = create_test_user(
+      email_address: "catalog-other-admin@example.test"
+    )
+    other_administrator.update!(system_role: :platform_admin)
+    record = Product.new(key: unique_catalog_key("wrong_actor"), name: "Wrong Actor")
+
+    assert_no_difference -> { Platform::AuditEvent.count } do
+      Platform::PersistCatalog.new(
+        actor: other_administrator,
+        record: record,
+        attributes: {}
+      ).call
+    end
+
+    assert_not_predicate record, :persisted?
+    assert_includes record.errors[:base], "platform administrator is required"
+  end
+
+  test "rejects a platform administrator whose Current session was revoked" do
+    revoked_session = Current.session
+    Session.where(id: revoked_session.id).delete_all
+    record = Product.new(key: unique_catalog_key("revoked"), name: "Revoked Actor")
+
+    assert_no_difference -> { Platform::AuditEvent.count } do
+      Platform::PersistCatalog.new(actor: @actor, record: record, attributes: {}).call
+    end
+
+    assert_predicate revoked_session, :persisted?
+    assert_not_predicate record, :persisted?
+    assert_includes record.errors[:base], "platform administrator is required"
   end
 
   test "returns entitlement consistency errors and rolls back the audit" do

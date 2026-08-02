@@ -122,4 +122,87 @@ class PlanFeatureEntitlementTest < ActiveSupport::TestCase
     assert_not entitlement.valid?
     assert_includes entitlement.errors[:settings], "must be an object"
   end
+
+  test "settings accept bounded nested non-sensitive catalog configuration" do
+    feature = create_test_product_feature(product: @product, kind: :flag)
+    entitlement = PlanFeatureEntitlement.new(
+      plan_product: @plan_product,
+      product_feature: feature,
+      enabled: true,
+      settings: {
+        "display" => { "label" => "Synthetic feature" },
+        "rules" => [ { "threshold" => 10, "token_bucket_size" => 100 } ],
+        "operator_note" => "x" * 20_000
+      }
+    )
+
+    assert_predicate entitlement, :valid?
+  end
+
+  test "settings reject oversized and deeply nested configuration" do
+    feature = create_test_product_feature(product: @product, kind: :flag)
+    oversized = PlanFeatureEntitlement.new(
+      plan_product: @plan_product,
+      product_feature: feature,
+      enabled: true,
+      settings: { "label" => "x" * 65_536 }
+    )
+    deeply_nested = PlanFeatureEntitlement.new(
+      plan_product: @plan_product,
+      product_feature: feature,
+      enabled: true,
+      settings: 21.times.reduce({ "label" => "bounded" }) { |value, _index| { "nested" => value } }
+    )
+
+    assert_not oversized.valid?
+    assert_includes oversized.errors[:settings], "must be at most 64 KiB"
+    assert_not deeply_nested.valid?
+    assert_includes deeply_nested.errors[:settings], "must be at most 20 levels deep"
+  end
+
+  test "settings reject recursively nested sensitive fields" do
+    feature = create_test_product_feature(product: @product, kind: :flag)
+
+    sensitive_keys = [
+      "apiKey",
+      "access-token",
+      "customer_email",
+      "password_hash",
+      "private_key_encrypted",
+      "api.key",
+      "access/key",
+      "password value",
+      "private.key.encrypted"
+    ]
+    sensitive_keys.each do |sensitive_key|
+      entitlement = PlanFeatureEntitlement.new(
+        plan_product: @plan_product,
+        product_feature: feature,
+        enabled: true,
+        settings: { "rules" => [ { sensitive_key => "private-value" } ] }
+      )
+
+      assert_not entitlement.valid?, "expected #{sensitive_key} to be rejected"
+      assert_includes entitlement.errors[:settings], "contains a sensitive field"
+    end
+  end
+
+  test "settings use PostgreSQL JSONB storage size rather than JSON text size alone" do
+    feature = create_test_product_feature(product: @product, kind: :flag)
+    settings = 4_800.times.to_h { |index| [ "k#{index}", "x" ] }
+    serialized_settings = JSON.generate(settings)
+    entitlement = PlanFeatureEntitlement.new(
+      plan_product: @plan_product,
+      product_feature: feature,
+      enabled: true,
+      settings: settings
+    )
+
+    assert_operator serialized_settings.bytesize, :<, PlanFeatureEntitlement::SETTINGS_MAX_BYTES
+    assert_operator entitlement.send(:jsonb_storage_bytes, serialized_settings),
+      :>,
+      PlanFeatureEntitlement::SETTINGS_MAX_BYTES
+    assert_not entitlement.valid?
+    assert_includes entitlement.errors[:settings], "must be at most 64 KiB"
+  end
 end

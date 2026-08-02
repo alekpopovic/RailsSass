@@ -2,10 +2,12 @@ require "test_helper"
 require "timeout"
 require_relative "support"
 require_relative "../../../support/catalog_test_helper"
+require_relative "../../../support/audit_event_test_helper"
 
 class Access::ProductMemberships::SeatLimitConcurrencyTest < ActiveSupport::TestCase
   include AccessProductMembershipsTestSupport
   include CatalogTestHelper
+  include AuditEventTestHelper
 
   self.use_transactional_tests = false
 
@@ -41,10 +43,16 @@ class Access::ProductMemberships::SeatLimitConcurrencyTest < ActiveSupport::Test
       product_feature: @seat_limit_feature,
       limit_value: 1
     )
+    @owner_session, = Session.issue_for!(
+      @owner,
+      ip_address: nil,
+      user_agent: "Product seat limit concurrency test"
+    )
   end
 
   teardown do
     Current.reset
+    clear_test_audit_events!
     remove_test_records
   ensure
     Current.reset
@@ -92,12 +100,15 @@ class Access::ProductMemberships::SeatLimitConcurrencyTest < ActiveSupport::Test
       threads = organization_membership_ids.map do |organization_membership_id|
         Thread.new do
           ActiveRecord::Base.connection_pool.with_connection do
+            Current.session = Session.includes(:user).find(@owner_session.id)
             Current.organization = Organization.find(@organization.id)
+            Current.membership = Current.organization.organization_memberships.find(@owner_membership.id)
             ready << true
             start.pop
             results << Access::ProductMemberships::Add.new(
               organization_membership_id: organization_membership_id,
-              product_id: @product.id
+              product_id: @product.id,
+              actor: Current.user
             ).call
           rescue => error
             results << error
@@ -142,10 +153,10 @@ class Access::ProductMemberships::SeatLimitConcurrencyTest < ActiveSupport::Test
       return unless @organization
 
       Organization.transaction do
-        AuditEvent.where(organization_id: @organization.id).delete_all
         OrganizationMembership.where(organization_id: @organization.id).delete_all
         Organization.where(id: @organization.id).delete_all
       end
+      Session.where(id: @owner_session&.id).delete_all
       User.where(id: [ @owner&.id, @member&.id ].compact).delete_all
     end
 end

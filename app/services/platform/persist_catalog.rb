@@ -146,7 +146,10 @@ module Platform
 
       def lock_authorized_actor
         authoritative_actor = User.lock.find_by(id: actor.id)
-        if authoritative_actor&.platform_admin? && authoritative_actor.authentication_allowed?
+        if authoritative_actor&.platform_admin? &&
+            authoritative_actor.authentication_allowed? &&
+            Current.user&.id == authoritative_actor.id &&
+            AuthorizationContext.current.authenticated?
           return authoritative_actor
         end
 

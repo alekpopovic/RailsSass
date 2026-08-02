@@ -29,22 +29,35 @@ class Access::ProductMemberships::TenantIsolationTest < ActiveSupport::TestCase
     assert_raises(ActiveRecord::RecordNotFound) do
       Access::ProductMemberships::Add.new(
         organization_membership_id: foreign_organization_membership.id,
-        product_id: @product.id
+        product_id: @product.id,
+        actor: @owner
       ).call
     end
 
-    Current.organization = foreign_organization
+    establish_tenant_context(
+      user: foreign_owner,
+      organization: foreign_organization,
+      membership: foreign_owner_membership
+    )
     foreign_product_membership = Access::ProductMemberships::Add.new(
       organization_membership_id: foreign_organization_membership.id,
-      product_id: @product.id
+      product_id: @product.id,
+      actor: foreign_owner
     ).call
-    Current.organization = @organization
+    establish_tenant_context(
+      user: @owner,
+      organization: @organization,
+      membership: @owner_membership
+    )
 
     %w[Remove Suspend Reactivate].each do |operation_name|
       operation = Access::ProductMemberships.const_get(operation_name)
 
       assert_raises(ActiveRecord::RecordNotFound) do
-        operation.new(product_membership_id: foreign_product_membership.id).call
+        operation.new(
+          product_membership_id: foreign_product_membership.id,
+          actor: @owner
+        ).call
       end
     end
 
@@ -52,7 +65,8 @@ class Access::ProductMemberships::TenantIsolationTest < ActiveSupport::TestCase
     assert_raises(ActiveRecord::RecordNotFound) do
       Access::ProductMemberships::AssignRole.new(
         product_membership_id: foreign_product_membership.id,
-        product_role_id: system_role.id
+        product_role_id: system_role.id,
+        actor: @owner
       ).call
     end
 

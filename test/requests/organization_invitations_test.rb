@@ -550,6 +550,35 @@ class OrganizationInvitationsRequestTest < ActionDispatch::IntegrationTest
     ActionController::Base.allow_forgery_protection = original_setting
   end
 
+  test "invitation create and revoke reject missing CSRF tokens" do
+    invitation = create_pending_invitation(email_address: "csrf-revoke@example.test").fetch(:invitation)
+    sign_in_as(@owner)
+    original_setting = ActionController::Base.allow_forgery_protection
+    ActionController::Base.allow_forgery_protection = true
+
+    assert_no_difference -> { OrganizationInvitation.count } do
+      assert_no_emails do
+        post organization_invitations_path(organization_slug: @organization.slug), params: {
+          organization_invitation: {
+            email_address: "csrf-create@example.test",
+            organization_role: "member"
+          }
+        }
+      end
+    end
+    assert_response :unprocessable_content
+
+    patch revoke_organization_invitation_path(
+      organization_slug: @organization.slug,
+      id: invitation.id
+    )
+
+    assert_response :unprocessable_content
+    assert_predicate invitation.reload, :pending?
+  ensure
+    ActionController::Base.allow_forgery_protection = original_setting
+  end
+
   private
     def create_pending_invitation(email_address:, organization_role: :member)
       create_invitation_row(

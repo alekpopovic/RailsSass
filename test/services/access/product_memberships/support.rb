@@ -19,7 +19,12 @@ module AccessProductMembershipsTestSupport
         role: :member
       )
       @product = create_access_test_product(key: "analytics_#{suffix}")
-      Current.organization = @organization
+      create_access_test_product_entitlement
+      establish_tenant_context(
+        user: @owner,
+        organization: @organization,
+        membership: @owner_membership
+      )
     end
 
     def create_access_test_product(key:, active: true)
@@ -49,18 +54,35 @@ module AccessProductMembershipsTestSupport
 
     def add_product_membership(
       organization_membership: @organization_membership,
-      product: @product
+      product: @product,
+      actor: @owner
     )
       Access::ProductMemberships::Add.new(
         organization_membership_id: organization_membership.id,
-        product_id: product.id
+        product_id: product.id,
+        actor: actor
       ).call
     end
 
-    def assign_product_role(product_membership:, product_role:)
+    def assign_product_role(product_membership:, product_role:, actor: @owner)
       Access::ProductMemberships::AssignRole.new(
         product_membership_id: product_membership.id,
-        product_role_id: product_role.id
+        product_role_id: product_role.id,
+        actor: actor
       ).call
+    end
+
+    def create_access_test_product_entitlement
+      @plan = Plan.find_by(active: true, free: true)
+      @owns_access_test_plan = @plan.nil?
+      @plan ||= Plan.create!(
+        key: "product_access_free_#{SecureRandom.hex(6)}",
+        name: "Product Access Free",
+        description: "Free plan for product membership service tests.",
+        active: true,
+        free: true,
+        position: 0
+      )
+      @plan_product = PlanProduct.create!(plan: @plan, product: @product)
     end
 end

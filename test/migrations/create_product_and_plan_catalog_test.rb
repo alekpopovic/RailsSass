@@ -26,7 +26,7 @@ class CreateProductAndPlanCatalogTest < ActiveSupport::TestCase
       %w[
         plan_feature_entitlements_kind_allowed
         plan_feature_entitlements_typed_value
-        plan_feature_entitlements_settings_object
+        plan_feature_entitlements_settings_object_bounded
       ]
     )
     assert_constraint_names(
@@ -219,6 +219,26 @@ class CreateProductAndPlanCatalogTest < ActiveSupport::TestCase
     end
 
     assert_kind_of PG::CheckViolation, error.cause
+  end
+
+  test "database bounds entitlement settings size" do
+    product = create_test_product
+    plan_product = create_test_plan_product(plan: create_test_plan, product: product)
+    feature = create_test_product_feature(product: product, kind: :flag)
+    constraint = PlanFeatureEntitlement.connection
+      .check_constraints(:plan_feature_entitlements)
+      .index_by(&:name)
+      .fetch("plan_feature_entitlements_settings_object_bounded")
+
+    assert_match(/jsonb_typeof\(settings\).*object/, constraint.expression)
+    assert_match(/pg_column_size\(settings\).*65536/, constraint.expression)
+    assert_database_error(ActiveRecord::StatementInvalid, PG::CheckViolation) do
+      PlanFeatureEntitlement.insert_all!([ raw_entitlement_attributes(
+        plan_product: plan_product,
+        product_feature: feature,
+        settings: { "label" => "x" * 70_000 }
+      ) ])
+    end
   end
 
   test "database rejects an incomplete Lemon mapping" do

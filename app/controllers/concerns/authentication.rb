@@ -4,6 +4,7 @@ module Authentication
   extend ActiveSupport::Concern
 
   SESSION_COOKIE = :session_token
+  MAXIMUM_DESTINATION_BYTES = 2 * 1024
 
   included do
     before_action :require_authentication
@@ -67,6 +68,7 @@ module Authentication
 
     def safe_internal_path(candidate)
       return unless candidate.is_a?(String)
+      return if candidate.bytesize > MAXIMUM_DESTINATION_BYTES
       return unless candidate.start_with?("/") && !candidate.start_with?("//")
 
       decoded_candidate = URI::DEFAULT_PARSER.unescape(candidate)
@@ -79,16 +81,11 @@ module Authentication
       nil
     end
 
-    def start_new_session_for(user)
+    def start_new_session_with(session_record, raw_token)
       resume_session
-      Current.session&.destroy!
+      Current.session&.destroy! unless Current.session == session_record
       Current.session = nil
       reset_session
-      session_record, raw_token = Session.issue_for!(
-        user,
-        ip_address: request.remote_ip,
-        user_agent: request.user_agent
-      )
 
       Current.session = session_record
       cookies.encrypted[SESSION_COOKIE] = {

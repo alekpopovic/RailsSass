@@ -101,7 +101,8 @@ class ProductMembershipPolicyTest < ActiveSupport::TestCase
     assert active_policy.destroy?
 
     suspended_membership = Access::ProductMemberships::Suspend.new(
-      product_membership_id: @product_membership.id
+      product_membership_id: @product_membership.id,
+      actor: @owner
     ).call
     suspended_policy = policy_for(@context, suspended_membership)
 
@@ -183,7 +184,8 @@ class ProductMembershipPolicyTest < ActiveSupport::TestCase
     assert active_policy.destroy?
 
     suspended_product_membership = Access::ProductMemberships::Suspend.new(
-      product_membership_id: @product_membership.id
+      product_membership_id: @product_membership.id,
+      actor: @owner
     ).call
 
     assert_not policy_for(@context, suspended_product_membership).reactivate?

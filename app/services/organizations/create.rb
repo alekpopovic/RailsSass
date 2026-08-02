@@ -56,7 +56,8 @@ class Organizations::Create
     end
 
     def authorize_user!(user)
-      authorized = user&.authentication_allowed?
+      authorized = user&.authentication_allowed? &&
+        AuthorizationContext.current.authenticated?
 
       raise Pundit::NotAuthorizedError, "verified authentication is required" unless authorized
     end

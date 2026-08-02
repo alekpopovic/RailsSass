@@ -35,6 +35,18 @@ module RailsSass
     config.time_zone = "Europe/Belgrade"
     config.active_record.default_timezone = :utc
 
+    # Browser responses use a conservative header baseline in every environment
+    # so staging and request tests exercise the same policy that production
+    # serves. Endpoint-specific responses may tighten Referrer-Policy and cache
+    # behavior further when they carry a one-time token or signed provider URL.
+    config.action_dispatch.default_headers.merge!(
+      "X-Frame-Options" => "DENY",
+      "X-Content-Type-Options" => "nosniff",
+      "X-Permitted-Cross-Domain-Policies" => "none",
+      "Referrer-Policy" => "strict-origin-when-cross-origin",
+      "Permissions-Policy" => "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
+    )
+
     # Runtime entitlement checks use only the local subscription projection.
     # Invalid policy configuration fails boot instead of silently over-granting.
     past_due_grace_days = Integer(ENV.fetch("ENTITLEMENTS_PAST_DUE_GRACE_DAYS", "15"), 10)

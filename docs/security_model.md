@@ -1,7 +1,7 @@
 # Security Model
 
-Status: Proposed
-Last updated: 2026-07-16
+Status: Implemented for the MVP application; production acceptance still requires the operational evidence in section 19
+Last updated: 2026-08-02
 
 ## 1. Purpose
 
@@ -147,6 +147,11 @@ authorization control.
   on logout, password reset, account disablement, and other security-sensitive
   changes. Runtime authorization revalidates the live unexpired session row and
   current verified/enabled user state instead of trusting cached model objects.
+  A successful password check is followed by a short user-row transaction that
+  verifies the authenticated email/password-digest snapshot is unchanged and
+  issues the new session under the same lock used by password reset. Reset-first
+  therefore denies an in-flight old-password login, while login-first creates a
+  session that the following reset revokes.
 - Never accept `system_role` from public signup or account-update parameters.
   Promote the first platform administrator only with the explicit email-based
   Rake task, which normalizes and locks the account and rejects missing,
@@ -156,26 +161,42 @@ authorization control.
   organizations and rejects a disable operation if it would leave any
   organization without another enabled active owner.
 - Cookies are `HttpOnly`, `Secure` in production, and an appropriate `SameSite`
-  setting. All production traffic uses HTTPS.
+  setting. Both the Rails cookie store and the digest-backed authentication
+  cookie are explicitly `HttpOnly`, `SameSite=Lax`, and production-`Secure`.
+  Login issues a new 256-bit opaque token under the user-row lock, revokes the
+  prior browser session, and calls `reset_session` before installing the new
+  authentication cookie. All production traffic uses HTTPS.
 - Password reset uses a purpose-scoped Rails signed token that expires after 15
   minutes and is bound to password state; email verification uses a separate
   signed token that expires after 24 hours and is bound to the normalized email
   and verification state. A successful state change invalidates either token,
-  making it single-use. Invitation tokens remain random, expiring, single-use,
-  digest-only values bound to the authenticated normalized email.
+  making it single-use. Reset and verification commands lock the user and
+  revalidate the token and account state after the lock, so concurrent reuse
+  has exactly one effect. Invitation tokens remain random, expiring,
+  single-use, digest-only values bound to the authenticated normalized email.
 - Filter reset, verification, and invitation token keys in both query and form
   parameters. A token-bearing `GET` only renders confirmation; a
-  CSRF-protected `PATCH` performs the state change. Invitation confirmation
-  responses use `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+  CSRF-protected `PATCH` performs the state change. Reset, verification, and
+  invitation token responses use `Cache-Control: no-store` and
+  `Referrer-Policy: no-referrer`.
+  Reject raw account and invitation tokens larger than 2 KiB before signed-token
+  decoding, digest calculation, or database lookup.
   An unauthenticated invitation request does not persist its raw-token URL as a
   post-login destination; the user signs in or registers and reopens the email
   link. Tokens never appear in route path segments or logs.
 - Validate every post-login destination as an internal application location;
   reject protocol-relative, absolute external, and malformed destinations and
+  reject values larger than 2 KiB before writing them to the cookie store, then
   fall back to a fixed internal path.
-- Rate-limit registration, login, reset request/update, verification
-  delivery/confirmation, invitation acceptance, checkout creation, and webhook
-  ingress at the proxy and/or application with separate thresholds.
+- Application rate limits use the shared cache and currently enforce: login 10
+  per 3 minutes per effective remote IP; registration 5 per 10 minutes per IP;
+  reset request 5 per 15 minutes per IP and reset update 10 per 15 minutes per
+  IP; verification request 5 per 15 minutes per IP and confirmation 10 per 15
+  minutes per IP; invitation acceptance 10 per 15 minutes per user and
+  organization; and checkout creation 5 per 10 minutes per user and
+  organization. Invitation create/resend, portal creation, and plan-change
+  commands have separate lower-frequency authenticated limits. Section 14
+  defines the webhook ingress threshold and edge requirements.
 - MFA/SSO are out of MVP, so owner/billing and platform-admin accounts carry
   residual phishing risk. This is documented and revisited before enterprise
   onboarding; platform-admin accounts should not be used for ordinary tenant
@@ -201,12 +222,14 @@ The normative decision flow is in
 - Do not use owner/admin organization role as a product permission shortcut;
   billing organization membership is categorically ineligible for product-data
   access.
-- Product-RBAC persistence commands remain transactional and are not their own
-  authorization boundary. The customer controller first applies
+- Product-RBAC persistence commands are transactional defense-in-depth
+  authorization boundaries. The customer controller first applies
   `ProductMembershipPolicy`, resolves the target through
   `Current.organization`, and passes the actor into the command. The command
-  then revalidates live owner/admin authority and entitlement under the
-  organization lock before changing or auditing an assignment.
+  rejects a missing actor, requires the actor to match the live `Current` user,
+  session, and membership, then revalidates owner/admin authority and
+  entitlement under the organization lock before changing and auditing an
+  assignment.
 - Permit global system roles across tenants, but permit a nullable
   organization-scoped role only for a product membership from that same
   organization. Enforce this conditional rule in PostgreSQL as well as the
@@ -259,8 +282,14 @@ The normative decision flow is in
   entitlement requires its plan, product, and feature to be active. Inactive
   parents retain existing relationships for catalog and billing history but
   cannot receive new ones.
-  The UI does not expose entitlement settings, and the generic `settings`
-  parameter is log-filtered.
+  Platform commands bind the submitted administrator to the live `Current`
+  user and unexpired server session after locking the authoritative user row;
+  a detached or revoked administrator object cannot authorize a write. The UI
+  does not expose entitlement settings, and the generic `settings` parameter is
+  log-filtered. Settings are JSON objects capped at 64 KiB and depth 20,
+  recursively reject sensitive key names after separator normalization, and
+  validate their actual PostgreSQL JSONB storage size with a bound query before
+  the matching database object/size constraint is reached.
 
 ## 9. Billing boundary controls
 
@@ -295,7 +324,12 @@ verified webhook projector mutates subscription authority.
   index to permit at most one pending attempt per organization. UI visibility is
   never the authorization boundary.
 - Verify HMAC against exact raw bytes before parsing; compare constant-time.
-- Support previous signing key only during a bounded, observable rotation.
+- Support one previous signing key only when it differs from the current key
+  and has a strict UTC absolute expiry in the next seven days. Production fails
+  boot on partial, stale, malformed, duplicate, or excessive overlap
+  configuration. Verification computes every eligible HMAC comparison before
+  choosing the matched slot; valid previous-key use emits only a bounded marker
+  and request ID, never key, body, or signature material.
 - Persist only after verification and acknowledge only after durable receipt.
 - Deduplicate with a database unique fingerprint and project under a row lock.
 - Create a purpose- and expiry-scoped `MessageVerifier` token containing only
@@ -351,18 +385,29 @@ verified webhook projector mutates subscription authority.
 - Keep Rails CSRF enabled everywhere except the exact signed webhook action.
 - Use strong parameters and explicit command objects for sensitive transitions.
 - Rely on escaped Rails templates; any sanitizer has an allowlist and tests.
-- Introduce an enforced Content Security Policy before production. Start with
-  report-only in staging, remove inline script/style dependencies where needed,
-  then enforce. Tailwind output is static.
-- Set secure headers including frame restrictions, content type options,
-  referrer policy, and permissions policy appropriate to actual features.
-- Configure `force_ssl`, `assume_ssl` behind the trusted proxy, HSTS, allowed
-  hosts, canonical mailer URL, and trusted proxy forwarding.
+- Enforce CSP with `default-src 'self'`, `base-uri 'none'`,
+  `frame-ancestors 'none'`, `object-src 'none'`, self-only connect/font/form/
+  manifest/style/worker sources, self/data images, and a fresh random nonce for
+  Rails importmap scripts. `unsafe-inline` is not allowed and Tailwind output is
+  static.
+- Every browser response uses `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, no cross-domain policy, a restrictive
+  referrer policy, and a Permissions Policy that disables unused camera,
+  geolocation, microphone, payment, and USB capabilities.
+- Production requires one canonical hostname-only `APP_HOST`, permits exactly
+  that application host, uses it for HTTPS mail links, and permits arbitrary
+  host only for the minimally revealing `/up` load-balancer probe.
+- Production enables `force_ssl` and `assume_ssl` behind the trusted TLS
+  terminator plus one-year HSTS with subdomains; preload remains disabled until
+  domain ownership and subdomain HTTPS coverage are operationally verified.
 - Preserve Rails query parameterization; allowlist dynamic ordering/column
   selection.
 - Return generic production errors with request IDs; do not expose stack traces,
   schema, provider bodies, or configuration.
-- Apply bounded request-body and form-field limits to expensive endpoints.
+- Apply bounded request-body and form-field limits to expensive endpoints. The
+  webhook reads at most 256 KiB plus one byte before rejecting; authentication
+  and invitation tokens and post-login redirect values are independently capped
+  at 2 KiB before expensive or persistent processing.
 
 ## 11. Secrets and configuration
 
@@ -439,14 +484,21 @@ does not accept email addresses, passwords, raw/signed tokens, secrets, API
 keys, card data, signed URLs, or complete provider payloads. The billing
 lifecycle outbox stores only relational IDs, a bounded kind/state, timestamps,
 and redacted reason codes. Each recipient gets a separate message and the
-encoded mail body is filtered from Action Mailer instrumentation.
+encoded mail body and recipient metadata are filtered centrally from Action
+Mailer delivery instrumentation for every application mailer, including reset,
+verification, invitation, and lifecycle messages.
 
 ## 14. Availability and abuse controls
 
 - Run Solid Queue in a separate production worker process and monitor heartbeat,
   queue age, failures, and retries.
 - Rate-limit authentication, invitations, checkout, portal URL generation, and
-  webhook ingress without using IP alone as tenant identity.
+  webhook ingress without using IP alone as tenant identity where an
+  authenticated tenant identity exists. Webhook ingress allows 300 requests per
+  minute per effective remote IP from the shared Solid Cache and returns `429`
+  plus `Retry-After: 60` before reading the body or running HMAC verification.
+  The trusted proxy must overwrite forwarding headers, and the edge retains a
+  complementary provider-aware/global capacity limit.
 - Bound provider timeouts and retries so a provider outage cannot exhaust web
   threads. Checkout fails pending/closed; existing authorization continues from
   local state and time bounds.
@@ -550,6 +602,26 @@ reprocess only verified events. Direct subscription edits are prohibited.
 - MFA, SSO, SCIM, dedicated support impersonation, PostgreSQL row-level security,
   WAF-specific configuration, and formal external penetration testing are
   deferred. Tenant isolation and server authorization are not deferred.
+- Unauthenticated login, registration, reset, and verification delivery limits
+  use the effective remote IP. A distributed attacker can spread requests
+  across source addresses, while a per-account bucket would itself permit
+  targeted account denial. Generic responses, strong tokens/password hashing,
+  shared application limits, monitoring, and the required edge/WAF policy are
+  the MVP compensating controls.
+- Registration, reset, and verification delivery do different internal work for
+  eligible and ineligible addresses, so statistical timing enumeration is not
+  claimed to be impossible. Responses and messages are identical and throttled;
+  queueing dummy email work would retain unnecessary PII and is deferred unless
+  production measurements show a practical signal.
+- `assume_ssl` is safe only while the application container is unreachable
+  except through the trusted TLS terminator that overwrites forwarding headers.
+  Direct container exposure is a production no-go, not a supported topology.
+- CSP is enforced but has no application violation-report collection endpoint;
+  browser/APM staging observation is the MVP monitoring control. HSTS preload is
+  intentionally disabled until every production subdomain is verified HTTPS.
+- JSON depth and sensitive-key semantics are application/model controls; trusted
+  direct SQL can bypass them. PostgreSQL still enforces non-null object type and
+  size, and production application roles must not have an ad hoc SQL write path.
 - Organization slugs expose a tenant-readable identifier to members and may be
   guessable; membership-scoped resolution prevents this from granting access.
 - Product/catalog management is restricted to the internal platform-admin

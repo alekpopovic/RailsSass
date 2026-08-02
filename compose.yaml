@@ -62,6 +62,7 @@ services:
       PORT: 3000
       SMTP_ADDRESS: mailcatcher
       SMTP_PORT: 1025
+      SYSTEM_TEST_CHROME_NO_SANDBOX: "1"
       TEST_WORKERS: "${TEST_WORKERS:-1}"
     init: true
     ports:
