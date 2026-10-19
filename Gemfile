@@ -24,7 +24,7 @@ gem "csv"
 # Authorization policies [https://github.com/varvet/pundit]
 gem "pundit", "~> 2.5"
 # HTTP client for the future Lemon Squeezy adapter [https://lostisland.github.io/faraday/]
-gem "faraday", "~> 2.0"
+gem "faraday", "~> 2.15"
 
 # Use Active Model has_secure_password [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
 gem "bcrypt", "~> 3.1.7"
